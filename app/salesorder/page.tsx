@@ -1,7 +1,7 @@
 // app/salesorder/page.tsx
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef , useEffect} from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -119,6 +119,21 @@ export default function Page() {
       subtotal: 0
     }
   ])
+
+  // State untuk project
+  const [projects, setProjects] = useState<{id: number, name: string}[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+
+  // Ambil daftar project
+  useEffect(() => {
+    // Contoh sementara dengan data mock
+    const mockProjects = [
+      {id: 1, name: 'Project Alpha'},
+      {id: 2, name: 'Project Beta'},
+      {id: 3, name: 'Project Gamma'},
+    ];
+    setProjects(mockProjects);
+  }, []);
 
   // State untuk taxes
   const [taxRates] = useState([
@@ -450,8 +465,8 @@ export default function Page() {
     }))
 
     // Handle SO submission
-    console.log('Submitting SO:', { ...newSO, items: validItems })
-    alert(`Sales Order Created Successfully with ${validItems.length} items!`)
+    console.log('Submitting SO:', { ...newSO, project_id: selectedProjectId, items: validItems })
+    alert(`Sales Order Created Successfully for Project ID: ${selectedProjectId || 'None'} with ${validItems.length} items!`)
   }
 
   const getStatusColor = (status: string) => {
@@ -835,6 +850,22 @@ export default function Page() {
                     />
                   </div>
                   <div className="space-y-2">
+                    <Label htmlFor="projectSelect">Project</Label>
+                    <select
+                      id="projectSelect"
+                      value={selectedProjectId || ''}
+                      onChange={(e) => setSelectedProjectId(e.target.value ? parseInt(e.target.value) : null)}
+                      className="w-full border rounded-md px-3 py-2"
+                    >
+                      <option value="">Pilih Project</option>
+                      {projects.map(project => (
+                        <option key={project.id} value={project.id}>
+                          {project.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
                     <Label htmlFor="billingAddress">Billing Address</Label>
                     <Input
                       id="billingAddress"
@@ -901,18 +932,7 @@ export default function Page() {
                     )}
                   </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="shippingCost" className="font-semibold">
-                      Shipping/Freight Costs
-                    </Label>
-                    <Input
-                      id="shippingCost"
-                      type="number"
-                      value={newSO.shippingCost || ''}
-                      onChange={(e) => setNewSO(prev => ({ ...prev, shippingCost: parseInt(e.target.value) || 0 }))}
-                      placeholder="Enter shipping cost"
-                    />
-                  </div>
+                  
                 </div>
 
                 {/* Product Items Section - MULTIPLE FORMS DALAM 1 CARD */}
