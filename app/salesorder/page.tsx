@@ -1,7 +1,7 @@
 // app/salesorder/page.tsx
 'use client'
 
-import { useState, useRef , useEffect} from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
-import { Search, Plus, FileText, Eye, Upload, Trash2, ChevronDown, ChevronUp, Download, MapPin, Building, Phone, Mail, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Search, Plus, FileText, Eye, Upload, Trash2, ChevronDown, ChevronUp, Download, MapPin, Building, Phone, Mail, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
 import {
   Dialog,
   DialogHeader,
@@ -18,281 +18,297 @@ import {
 import {
   CustomDialogContent
 } from "@/components/custom-dialog"
+import { toast } from 'sonner'
 
-// Type definitions
+// Type definitions matching backend
 interface SalesOrder {
-  id: string
-  soNumber: string
-  date: string
-  customerName: string
-  customerPhone: string
-  customerEmail: string
-  customerCompany: string
-  billingAddress: string
-  shippingAddress: string
-  salesRep: string
-  salesRepEmail: string
-  salesOrderDoc: string
-  totalAmount: number
-  status: 'draft' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled'
-  items: OrderItem[]
-  taxes: Tax[]
+  so_code: string
+  created_at: string
+  customer_name: string
+  customer_phone: string
+  customer_email: string
+  customer_company?: string
+  billing_address?: string
+  shipping_address?: string
+  sales_rep?: string
+  sales_rep_email?: string
+  sales_order_doc?: string
+  total_amount: number
+  tax_amount: number
+  status: 'submitted' | 'processing' | 'shipped' | 'delivered' | 'completed' | 'cancelled'
+  notes?: string
+  items: SalesOrderItem[]
+  taxes: SalesOrderTax[]
   attachments: Attachment[]
-  notes: string
 }
 
-interface OrderItem {
-  id: string
-  productName: string
-  sku: string
+interface SalesOrderItem {
+  so_item_code: string
+  product_name: string
+  product_code: string
   quantity: number
-  unitPrice: number
+  unit_price: number
   subtotal: number
 }
 
-interface Tax {
-  id: string
-  name: string
-  rate: number
-  amount: number
+interface SalesOrderTax {
+  so_tax_code: string
+  tax_name: string
+  tax_rate: number
+  tax_amount: number
 }
 
 interface Attachment {
   id: string
   name: string
-  type: 'sales_order' | 'other'
-  uploadDate: string
-  size: string
+  type: string
+  upload_date: string
+  size: number
 }
 
-interface Document {
-  id: string
+interface Project {
+  id: number
   name: string
-  file: File
-  type: 'sales_order' | 'other'
 }
 
-export default function Page() {
+interface TaxType {
+  id: number
+  tax_code: string
+  name: string
+  description?: string
+}
+
+interface CreateSalesOrderRequest {
+  customer_name: string
+  customer_phone: string
+  customer_email?: string
+  customer_company?: string
+  billing_address?: string
+  shipping_address?: string
+  sales_rep?: string
+  sales_rep_email?: string
+  sales_order_doc?: string
+  project_id?: number
+  total_amount: number
+  tax_amount: number
+  notes?: string
+  items: {
+    product_name: string
+    product_code: string
+    quantity: number
+    unit_price: number
+    subtotal: number
+  }[]
+  taxes: {
+    tax_code: string
+    tax_name: string
+    tax_rate: number
+    tax_amount: number
+  }[]
+}
+
+interface SalesOrderResponse {
+  success: boolean
+  data: SalesOrder[]
+  pagination?: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+  }
+}
+
+export default function SalesOrderPage() {
   // Refs untuk file input
   const salesOrderFileRef = useRef<HTMLInputElement>(null)
   const otherFilesRef = useRef<HTMLInputElement>(null)
   
   // State untuk toggle form
-  const [showCreateForm, setShowCreateForm] = useState(true)
+  const [showCreateForm, setShowCreateForm] = useState(false)
   
   // State untuk modal detail
   const [selectedSO, setSelectedSO] = useState<SalesOrder | null>(null)
   const [showDetailModal, setShowDetailModal] = useState(false)
 
+  // State untuk data dari backend
+  const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([])
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+
   // State untuk pagination dan filter
   const [currentPage, setCurrentPage] = useState(1)
-  const [itemsPerPage, setItemsPerPage] = useState(5)
+  const [itemsPerPage, setItemsPerPage] = useState(10)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
-  const [dateFilter, setDateFilter] = useState<string>('all')
 
   // State untuk form SO baru
-  const [newSO, setNewSO] = useState({
-    customerName: '',
-    customerPhone: '',
-    customerEmail: '',
-    billingAddress: '',
-    shippingAddress: '',
-    salesRep: '',
-    salesOrderDoc: '',
-    totalAmount: 0,
-    taxIncluded: false,
-    shippingCost: 0,
-    items: [] as OrderItem[],
-    taxes: [] as Tax[],
-    documents: [] as Document[],
+  const [newSO, setNewSO] = useState<CreateSalesOrderRequest>({
+    customer_name: '',
+    customer_phone: '',
+    customer_email: '',
+    customer_company: '',
+    billing_address: '',
+    shipping_address: '',
+    sales_rep: '',
+    sales_rep_email: '',
+    sales_order_doc: '',
+    project_id: undefined,
+    total_amount: 0,
+    tax_amount: 0,
+    notes: '',
+    items: [],
+    taxes: []
   })
 
   // State untuk multiple item forms
-  const [itemForms, setItemForms] = useState<OrderItem[]>([
+  const [itemForms, setItemForms] = useState([
     {
       id: '1',
-      productName: '',
-      sku: '',
+      product_name: '',
+      product_code: '',
       quantity: 1,
-      unitPrice: 0,
+      unit_price: 0,
       subtotal: 0
     }
   ])
 
   // State untuk project
-  const [projects, setProjects] = useState<{id: number, name: string}[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  const [projects, setProjects] = useState<Project[]>([])
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null)
 
-  // Ambil daftar project
-  useEffect(() => {
-    // Contoh sementara dengan data mock
-    const mockProjects = [
-      {id: 1, name: 'Project Alpha'},
-      {id: 2, name: 'Project Beta'},
-      {id: 3, name: 'Project Gamma'},
-    ];
-    setProjects(mockProjects);
-  }, []);
+  // State untuk tax types
+  const [taxTypes, setTaxTypes] = useState<TaxType[]>([])
+  const [loadingTaxTypes, setLoadingTaxTypes] = useState(false)
 
-  // State untuk taxes
-  const [taxRates] = useState([
-    { id: '1', name: 'PPN', rate: 0, amount: 0 },
-    { id: '2', name: 'PPH', rate: 0, amount: 0 },
-    { id: '3', name: 'Sales Tax', rate: 0, amount: 0 }
-  ])
+  // State untuk tax input mode (rate/amount)
+  const [taxInputMode, setTaxInputMode] = useState<{[key: string]: 'rate' | 'amount'}>({})
 
-  // Data sample SO sebelumnya dengan data lengkap
-  const previousSO: SalesOrder[] = [
-    {
-      id: '1',
-      soNumber: 'SO-2024-001',
-      date: '2024-01-15',
-      customerName: 'PT. Customer Maju',
-      customerPhone: '+62 21 1234 5678',
-      customerEmail: 'contact@customermaju.com',
-      customerCompany: 'PT. Customer Maju Indonesia',
-      billingAddress: 'Jl. Sudirman No. 123, Jakarta Selatan 12190, Indonesia',
-      shippingAddress: 'Jl. Sudirman No. 123, Jakarta Selatan 12190, Indonesia',
-      salesRep: 'Budi Santoso',
-      salesRepEmail: 'budi.santoso@company.com',
-      salesOrderDoc: 'SO-CLIENT-001',
-      totalAmount: 2870000,
-      status: 'delivered',
-      items: [
-        { id: '1', productName: 'Laptop Dell XPS 13', sku: 'LP-DLL-XPS-13', quantity: 2, unitPrice: 1200000, subtotal: 2400000 },
-        { id: '2', productName: 'Wireless Mouse', sku: 'ACC-MSE-WRL-01', quantity: 2, unitPrice: 150000, subtotal: 300000 }
-      ],
-      taxes: [
-        { id: '1', name: 'VAT', rate: 10, amount: 270000 },
-        { id: '2', name: 'Sales Tax', rate: 5, amount: 135000 }
-      ],
-      attachments: [
-        { id: '1', name: 'sales_order_client.pdf', type: 'sales_order', uploadDate: '2024-01-14', size: '2.4 MB' },
-        { id: '2', name: 'quotation_approved.pdf', type: 'other', uploadDate: '2024-01-14', size: '1.8 MB' },
-        { id: '3', name: 'payment_terms.docx', type: 'other', uploadDate: '2024-01-14', size: '0.8 MB' },
-        { id: '4', name: 'technical_specifications.pdf', type: 'other', uploadDate: '2024-01-13', size: '3.2 MB' }
-      ],
-      notes: 'Priority shipping requested. Customer will provide shipping label.'
-    },
-    {
-      id: '2',
-      soNumber: 'SO-2024-002',
-      date: '2024-01-16',
-      customerName: 'CV. Berkah Jaya',
-      customerPhone: '+62 22 8765 4321',
-      customerEmail: 'info@berkahjaya.com',
-      customerCompany: 'CV. Berkah Jaya',
-      billingAddress: 'Jl. Merdeka No. 45, Bandung 40115, Indonesia',
-      shippingAddress: 'Gudang Utama, Jl. Industri No. 78, Bandung 40235, Indonesia',
-      salesRep: 'Sari Dewi',
-      salesRepEmail: 'sari.dewi@company.com',
-      salesOrderDoc: 'SO-CLIENT-002',
-      totalAmount: 1925000,
-      status: 'confirmed',
-      items: [
-        { id: '1', productName: 'Monitor 24" Samsung', sku: 'MON-24-SAM-FHD', quantity: 5, unitPrice: 350000, subtotal: 1750000 }
-      ],
-      taxes: [
-        { id: '1', name: 'VAT', rate: 10, amount: 175000 }
-      ],
-      attachments: [
-        { id: '1', name: 'purchase_order_002.pdf', type: 'sales_order', uploadDate: '2024-01-15', size: '1.5 MB' },
-        { id: '2', name: 'technical_spec.pdf', type: 'other', uploadDate: '2024-01-15', size: '2.1 MB' }
-      ],
-      notes: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nunc sit amet mollis nunc. Cras est ligula, efficitur id condimentum eu, laoreet nec odio. Etiam pellentesque ex vel nibh ultrices, sit amet luctus dolor commodo. Praesent aliquam neque quis augue convallis consequat. Fusce id finibus justo, vitae euismod nibh. Vestibulum convallis urna fringilla arcu efficitur, at ornare urna tempus. Phasellus tempus eleifend nibh, venenatis auctor odio rhoncus ut. Etiam porta bibendum hendrerit. Aliquam semper leo vitae mauris rutrum, eu porta odio efficitur. Etiam ac scelerisque tortor. Mauris laoreet, lorem vel tristique malesuada, ligula ligula varius est, quis efficitur quam lorem vel metus. Ut fermentum fermentum massa. Suspendisse potenti.'
-    },
-    {
-      id: '3',
-      soNumber: 'SO-2024-003',
-      date: '2024-01-17',
-      customerName: 'PT. Global Teknologi',
-      customerPhone: '+62 31 9876 5432',
-      customerEmail: 'sales@globalteknologi.com',
-      customerCompany: 'PT. Global Teknologi Indonesia',
-      billingAddress: 'Jl. Teknologi No. 88, Surabaya 60111, Indonesia',
-      shippingAddress: 'Jl. Teknologi No. 88, Surabaya 60111, Indonesia',
-      salesRep: 'Ahmad Wijaya',
-      salesRepEmail: 'ahmad.wijaya@company.com',
-      salesOrderDoc: 'SO-CLIENT-003',
-      totalAmount: 4500000,
-      status: 'shipped',
-      items: [
-        { id: '1', productName: 'Server Rack Cabinet', sku: 'SRV-RACK-42U', quantity: 1, unitPrice: 3500000, subtotal: 3500000 },
-        { id: '2', productName: 'Network Switch 48 Port', sku: 'NET-SW-48P', quantity: 2, unitPrice: 500000, subtotal: 1000000 }
-      ],
-      taxes: [
-        { id: '1', name: 'VAT', rate: 11, amount: 495000 }
-      ],
-      attachments: [
-        { id: '1', name: 'purchase_order_003.pdf', type: 'sales_order', uploadDate: '2024-01-16', size: '1.2 MB' }
-      ],
-      notes: 'Installation service included.'
-    },
-    {
-      id: '4',
-      soNumber: 'SO-2024-004',
-      date: '2024-01-18',
-      customerName: 'CV. Mandiri Sejahtera',
-      customerPhone: '+62 361 2345 6789',
-      customerEmail: 'order@mandirisejahtera.com',
-      customerCompany: 'CV. Mandiri Sejahtera',
-      billingAddress: 'Jl. Raya Denpasar No. 123, Bali 80222, Indonesia',
-      shippingAddress: 'Jl. Raya Denpasar No. 123, Bali 80222, Indonesia',
-      salesRep: 'Putu Sari',
-      salesRepEmail: 'putu.sari@company.com',
-      salesOrderDoc: 'SO-CLIENT-004',
-      totalAmount: 1250000,
-      status: 'draft',
-      items: [
-        { id: '1', productName: 'Office Chair Executive', sku: 'FUR-CHR-EXEC', quantity: 5, unitPrice: 250000, subtotal: 1250000 }
-      ],
-      taxes: [
-        { id: '1', name: 'VAT', rate: 11, amount: 137500 }
-      ],
-      attachments: [],
-      notes: 'Waiting for client confirmation.'
-    },
-    {
-      id: '5',
-      soNumber: 'SO-2024-005',
-      date: '2024-01-19',
-      customerName: 'PT. Bangun Nusantara',
-      customerPhone: '+62 251 3456 7890',
-      customerEmail: 'procurement@bangunnusantara.com',
-      customerCompany: 'PT. Bangun Nusantara',
-      billingAddress: 'Jl. Konstruksi No. 45, Bogor 16152, Indonesia',
-      shippingAddress: 'Site Office, Jl. Proyek No. 12, Bogor 16153, Indonesia',
-      salesRep: 'Rina Hartati',
-      salesRepEmail: 'rina.hartati@company.com',
-      salesOrderDoc: 'SO-CLIENT-005',
-      totalAmount: 8750000,
-      status: 'cancelled',
-      items: [
-        { id: '1', productName: 'Construction Materials Package', sku: 'CON-MAT-PKG1', quantity: 1, unitPrice: 8750000, subtotal: 8750000 }
-      ],
-      taxes: [
-        { id: '1', name: 'VAT', rate: 11, amount: 962500 }
-      ],
-      attachments: [
-        { id: '1', name: 'cancellation_notice.pdf', type: 'other', uploadDate: '2024-01-18', size: '0.5 MB' }
-      ],
-      notes: 'Order cancelled due to budget constraints.'
+  // State untuk file names
+  const [salesOrderFileName, setSalesOrderFileName] = useState('')
+  const [otherFileNames, setOtherFileNames] = useState<string[]>([])
+
+  // Fetch sales orders dari backend
+  const fetchSalesOrders = async () => {
+    try {
+      setLoading(true)
+      const token = localStorage.getItem('token')
+      
+      if (!token) {
+        toast.error('Please login first')
+        window.location.href = '/login'
+        return
+      }
+      
+      let url = `/api/sales-orders?page=${currentPage}&limit=${itemsPerPage}`
+      
+      if (statusFilter !== 'all') {
+        url += `&status=${statusFilter}`
+      }
+      
+      if (searchTerm) {
+        url += `&search=${encodeURIComponent(searchTerm)}`
+      }
+
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (response.status === 401) {
+        localStorage.removeItem('token')
+        toast.error('Session expired, please login again')
+        window.location.href = '/login'
+        return
+      }
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch sales orders')
+      }
+
+      const data: SalesOrderResponse = await response.json()
+      
+      if (data.success) {
+        setSalesOrders(data.data)
+        toast.success(`✅ Loaded ${data.data.length} sales orders`)
+      } else {
+        throw new Error('Failed to load sales orders')
+      }
+    } catch (error) {
+      console.error('Error fetching sales orders:', error)
+      toast.error("❌ Failed to load sales orders")
+    } finally {
+      setLoading(false)
     }
-  ]
+  }
 
-  // Filter logic
-  const filteredSO = previousSO.filter(so => {
+  // Fetch projects dari backend
+  const fetchProjects = async () => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch('/api/projects', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success) {
+          setProjects(data.data)
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching projects:', error)
+    }
+  }
+
+  // Fetch tax types
+  const fetchTaxTypes = async () => {
+    try {
+      setLoadingTaxTypes(true)
+      const token = localStorage.getItem('token')
+      const response = await fetch('/api/tax-types', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success) {
+          setTaxTypes(data.data)
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching tax types:', error)
+      toast.error('❌ Failed to load tax types')
+    } finally {
+      setLoadingTaxTypes(false)
+    }
+  }
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchSalesOrders()
+    fetchProjects()
+    fetchTaxTypes()
+  }, [currentPage, itemsPerPage, statusFilter, searchTerm])
+
+  // Filter logic untuk client-side filtering tambahan
+  const filteredSO = salesOrders.filter(so => {
     const matchesSearch = 
-      so.soNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      so.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      so.customerPhone.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      so.customerEmail.toLowerCase().includes(searchTerm.toLowerCase())
+      so.so_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      so.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      so.customer_phone.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      so.customer_email.toLowerCase().includes(searchTerm.toLowerCase())
     
     const matchesStatus = statusFilter === 'all' || so.status === statusFilter
-    const matchesDate = dateFilter === 'all' || so.date === dateFilter
     
-    return matchesSearch && matchesStatus && matchesDate
+    return matchesSearch && matchesStatus
   })
 
   // Pagination logic
@@ -316,17 +332,18 @@ export default function Page() {
     }
   }
 
-  // Calculate tax rate based on amount and total
-  const calculateTaxRate = (amount: number, total: number) => {
-    if (total === 0 || amount === 0) return 0
-    return (amount / total) * 100
-  }
-
   // Update item form field
-  const updateItemForm = (id: string, field: keyof OrderItem, value: string | number) => {
+  const updateItemForm = (id: string, field: keyof typeof itemForms[0], value: string | number) => {
     setItemForms(prev => prev.map(form => {
       if (form.id === id) {
-        return { ...form, [field]: value }
+        const updatedForm = { ...form, [field]: value }
+        
+        // Auto-calculate subtotal if quantity or unit_price changes
+        if (field === 'quantity' || field === 'unit_price') {
+          updatedForm.subtotal = Number(updatedForm.quantity) * Number(updatedForm.unit_price)
+        }
+        
+        return updatedForm
       }
       return form
     }))
@@ -337,158 +354,335 @@ export default function Page() {
     const newId = (itemForms.length + 1).toString()
     setItemForms(prev => [...prev, {
       id: newId,
-      productName: '',
-      sku: '',
+      product_name: '',
+      product_code: '',
       quantity: 1,
-      unitPrice: 0,
+      unit_price: 0,
       subtotal: 0
     }])
+    toast.success('➕ Added new item form')
   }
 
   // Remove item form
   const removeItemForm = (id: string) => {
     if (itemForms.length > 1) {
       setItemForms(prev => prev.filter(form => form.id !== id))
+      toast.info('🗑️ Item form removed')
+    } else {
+      toast.error('❌ At least one item is required')
     }
   }
 
-  // Update tax amount
-  const updateTaxAmount = (taxId: string, amount: number) => {
-    const rate = calculateTaxRate(amount, newSO.totalAmount)
-    const updatedTaxes = newSO.taxes.map(tax => 
-      tax.id === taxId ? { ...tax, amount, rate: Math.round(rate * 100) / 100 } : tax
-    )
-    setNewSO(prev => ({ ...prev, taxes: updatedTaxes }))
+  // Toggle tax input mode
+  const toggleTaxInputMode = (taxCode: string) => {
+    setTaxInputMode(prev => ({
+      ...prev,
+      [taxCode]: prev[taxCode] === 'rate' ? 'amount' : 'rate'
+    }))
+    toast.info(`📊 Switched to ${taxInputMode[taxCode] === 'rate' ? 'Amount' : 'Rate'} input`)
+  }
+
+  // Update tax value
+  const updateTaxValue = (taxCode: string, value: number) => {
+    const mode = taxInputMode[taxCode] || 'amount'
+    
+    setNewSO(prev => {
+      const updatedTaxes = prev.taxes.map(tax => {
+        if (tax.tax_code === taxCode) {
+          if (mode === 'rate') {
+            // Input rate → calculate amount
+            const tax_amount = (value * prev.total_amount) / 100
+            return { ...tax, tax_rate: value, tax_amount }
+          } else {
+            // Input amount → calculate rate
+            const tax_rate = prev.total_amount > 0 ? (value / prev.total_amount) * 100 : 0
+            return { ...tax, tax_amount: value, tax_rate }
+          }
+        }
+        return tax
+      })
+      return { ...prev, taxes: updatedTaxes }
+    })
   }
 
   // Update total amount
   const updateTotalAmount = (amount: number) => {
     setNewSO(prev => {
+      // Update taxes when total amount changes
       const updatedTaxes = prev.taxes.map(tax => {
-        const newRate = calculateTaxRate(tax.amount, amount)
-        return { ...tax, rate: Math.round(newRate * 100) / 100 }
+        if (taxInputMode[tax.tax_code] === 'rate') {
+          // Recalculate amount based on rate
+          const tax_amount = (tax.tax_rate * amount) / 100
+          return { ...tax, tax_amount }
+        }
+        // If input mode is amount, keep the amount but recalculate rate
+        const tax_rate = amount > 0 ? (tax.tax_amount / amount) * 100 : 0
+        return { ...tax, tax_rate }
       })
-      return { ...prev, totalAmount: amount, taxes: updatedTaxes }
+      
+      return { ...prev, total_amount: amount, taxes: updatedTaxes }
     })
   }
 
   // Handlers
-  const handleTaxToggle = (checked: boolean) => {
-    setNewSO(prev => ({ ...prev, taxIncluded: checked }))
-  }
-
-  const toggleTax = (taxId: string) => {
-    if (newSO.taxes.find(tax => tax.id === taxId)) {
-      setNewSO(prev => ({
-        ...prev,
-        taxes: prev.taxes.filter(tax => tax.id !== taxId)
-      }))
-    } else {
-      const tax = taxRates.find(t => t.id === taxId)
-      if (tax) {
-        setNewSO(prev => ({
-          ...prev,
-          taxes: [...prev.taxes, { ...tax, amount: 0, rate: 0 }]
-        }))
-      }
-    }
-  }
-
-  const handleSalesOrderUpload = () => {
-    salesOrderFileRef.current?.click()
-  }
-
-  const handleSalesOrderFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      const document: Document = {
-        id: Date.now().toString(),
-        name: file.name,
-        file: file,
-        type: 'sales_order'
-      }
-      setNewSO(prev => ({ 
-        ...prev, 
-        documents: [...prev.documents.filter(d => d.type !== 'sales_order'), document] 
-      }))
-    }
-  }
-
-  const handleOtherDocumentsUpload = () => {
-    otherFilesRef.current?.click()
-  }
-
-  const handleOtherFilesChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (files) {
-      const newDocuments = Array.from(files).map(file => ({
-        id: Date.now().toString() + Math.random(),
-        name: file.name,
-        file: file,
-        type: 'other' as const
-      }))
-      setNewSO(prev => ({ 
-        ...prev, 
-        documents: [...prev.documents, ...newDocuments] 
-      }))
-    }
-  }
-
-  const removeDocument = (docId: string) => {
-    setNewSO(prev => ({
-      ...prev,
-      documents: prev.documents.filter(doc => doc.id !== docId)
-    }))
-  }
-
-  const submitSO = () => {
-    // Validasi customer data
-    if (!newSO.customerName || !newSO.customerPhone || !newSO.totalAmount) {
-      alert('Please fill all required fields: Customer Name, Customer Phone, and Total Amount')
+  const toggleTax = (taxCode: string) => {
+    const taxType = taxTypes.find(t => t.tax_code === taxCode)
+    if (!taxType) {
+      toast.error('❌ Tax type not found')
       return
     }
 
-    // Validasi items
+    if (newSO.taxes.find(tax => tax.tax_code === taxCode)) {
+      setNewSO(prev => ({
+        ...prev,
+        taxes: prev.taxes.filter(tax => tax.tax_code !== taxCode)
+      }))
+      // Remove from input mode
+      setTaxInputMode(prev => {
+        const newMode = { ...prev }
+        delete newMode[taxCode]
+        return newMode
+      })
+      toast.info(`🗑️ ${taxType.name} tax removed`)
+    } else {
+      setNewSO(prev => ({
+        ...prev,
+        taxes: [...prev.taxes, { 
+          tax_code: taxCode,
+          tax_name: taxType.name,
+          tax_rate: 0, 
+          tax_amount: 0 
+        }]
+      }))
+      // Default to amount input mode
+      setTaxInputMode(prev => ({
+        ...prev,
+        [taxCode]: 'amount'
+      }))
+      toast.success(`✅ ${taxType.name} tax added`)
+    }
+  }
+
+  const handleFileUpload = (type: 'sales_order' | 'other') => {
+    if (type === 'sales_order') {
+      salesOrderFileRef.current?.click()
+    } else {
+      otherFilesRef.current?.click()
+    }
+  }
+
+  // Handle file input change
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'sales_order' | 'other') => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+
+    if (type === 'sales_order') {
+      setSalesOrderFileName(files[0].name)
+      toast.success(`📄 Sales Order Document: ${files[0].name}`)
+    } else {
+      const names = Array.from(files).map(file => file.name)
+      setOtherFileNames(names)
+      toast.success(`📁 ${names.length} Other Documents: ${names.join(', ')}`)
+    }
+  }
+
+  // Clear file inputs
+  const clearFileInputs = () => {
+    setSalesOrderFileName('')
+    setOtherFileNames([])
+    if (salesOrderFileRef.current) salesOrderFileRef.current.value = ''
+    if (otherFilesRef.current) otherFilesRef.current.value = ''
+  }
+
+  // Form validation
+  const validateForm = () => {
+    const errors: string[] = []
+
+    // Required fields
+    if (!newSO.customer_name.trim()) errors.push('❌ Customer name is required')
+    if (!newSO.customer_phone.trim()) errors.push('❌ Customer phone is required')
+    if (!newSO.total_amount || newSO.total_amount <= 0) errors.push('❌ Total amount must be greater than 0')
+
+    // Validate items
     const validItems = itemForms.filter(form => 
-      form.productName && form.sku && form.quantity > 0 && form.unitPrice > 0 && form.subtotal > 0
+      form.product_name && form.product_code && form.quantity > 0 && form.unit_price > 0
     )
     
     if (validItems.length === 0) {
-      alert('Please fill at least one item form completely')
+      errors.push('❌ At least one valid item is required')
+    }
+
+    // Validate taxes
+    newSO.taxes.forEach(tax => {
+      if (taxInputMode[tax.tax_code] === 'rate' && (tax.tax_rate <= 0 || tax.tax_rate > 100)) {
+        errors.push(`❌ Tax rate for ${tax.tax_name} must be between 0 and 100`)
+      }
+      if (taxInputMode[tax.tax_code] === 'amount' && tax.tax_amount < 0) {
+        errors.push(`❌ Tax amount for ${tax.tax_name} cannot be negative`)
+      }
+    })
+
+    return errors
+  }
+
+  const submitSO = async () => {
+    // Validate form
+    const errors = validateForm()
+    if (errors.length > 0) {
+      errors.forEach(error => toast.error(error))
       return
     }
 
-    // Simpan items ke state
-    setNewSO(prev => ({
-      ...prev,
-      items: validItems
+    // Prepare items data
+    const itemsData = itemForms.filter(form => 
+      form.product_name && form.product_code && form.quantity > 0 && form.unit_price > 0
+    ).map(form => ({
+      product_name: form.product_name,
+      product_code: form.product_code,
+      quantity: form.quantity,
+      unit_price: form.unit_price,
+      subtotal: form.subtotal
     }))
 
-    // Handle SO submission
-    console.log('Submitting SO:', { ...newSO, project_id: selectedProjectId, items: validItems })
-    alert(`Sales Order Created Successfully for Project ID: ${selectedProjectId || 'None'} with ${validItems.length} items!`)
+    try {
+      setSubmitting(true)
+      const token = localStorage.getItem('token')
+      
+      if (!token) {
+        toast.error('❌ Please login first')
+        window.location.href = '/login'
+        return
+      }
+
+      // PREPARE FORM DATA
+      const formData = new FormData()
+      
+      // Append SO data sebagai JSON string
+      const requestData: CreateSalesOrderRequest = {
+        ...newSO,
+        project_id: selectedProjectId || undefined,
+        items: itemsData,
+        tax_amount: newSO.taxes.reduce((sum, tax) => sum + tax.tax_amount, 0)
+      }
+      
+      formData.append('data', JSON.stringify(requestData))
+
+      // APPEND FILES JIKA ADA
+      if (salesOrderFileRef.current?.files?.[0]) {
+        formData.append('sales_order_doc', salesOrderFileRef.current.files[0])
+      }
+      
+      if (otherFilesRef.current?.files) {
+        for (let file of otherFilesRef.current.files) {
+          formData.append('other_docs', file)
+        }
+      }
+
+      // KIRIM SEBAGAI FORM DATA
+      const response = await fetch('/api/sales-orders', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      })
+
+      const result = await response.json()
+
+      if (response.ok && result.success) {
+        toast.success(`🎉 Sales Order ${result.so_code} created successfully!${result.files_uploaded ? ` with ${result.files_uploaded} files` : ''}`)
+        
+        // Reset form
+        setNewSO({
+          customer_name: '',
+          customer_phone: '',
+          customer_email: '',
+          customer_company: '',
+          billing_address: '',
+          shipping_address: '',
+          sales_rep: '',
+          sales_rep_email: '',
+          sales_order_doc: '',
+          project_id: undefined,
+          total_amount: 0,
+          tax_amount: 0,
+          notes: '',
+          items: [],
+          taxes: []
+        })
+        setItemForms([{
+          id: '1',
+          product_name: '',
+          product_code: '',
+          quantity: 1,
+          unit_price: 0,
+          subtotal: 0
+        }])
+        setSelectedProjectId(null)
+        setShowCreateForm(false)
+        setTaxInputMode({})
+        
+        // Clear file inputs
+        clearFileInputs()
+        
+        // Refresh sales orders list
+        fetchSalesOrders()
+      } else {
+        throw new Error(result.error || 'Failed to create sales order')
+      }
+    } catch (error) {
+      console.error('Create SO error:', error)
+      toast.error("❌ Failed to create sales order")
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const getStatusColor = (status: string) => {
     const colors = {
-      draft: 'bg-gray-100 text-gray-800',
-      confirmed: 'bg-blue-100 text-blue-800',
-      shipped: 'bg-yellow-100 text-yellow-800',
+      submitted: 'bg-blue-100 text-blue-800',
+      processing: 'bg-yellow-100 text-yellow-800',
+      shipped: 'bg-purple-100 text-purple-800',
       delivered: 'bg-green-100 text-green-800',
+      completed: 'bg-green-100 text-green-800',
       cancelled: 'bg-red-100 text-red-800'
     }
-    return colors[status as keyof typeof colors] || colors.draft
+    return colors[status as keyof typeof colors] || colors.submitted
   }
 
-  const viewDetail = (so: SalesOrder) => {
-    setSelectedSO(so)
-    setShowDetailModal(true)
+  const viewDetail = async (soCode: string) => {
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(`/api/sales-orders/${soCode}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success) {
+          setSelectedSO(data.data)
+          setShowDetailModal(true)
+          toast.success('📋 Order details loaded')
+        }
+      } else {
+        throw new Error('Failed to fetch order details')
+      }
+    } catch (error) {
+      console.error('Error fetching order details:', error)
+      toast.error("❌ Failed to load order details")
+    }
   }
 
-  const downloadAttachment = (attachment: Attachment) => {
-    // Simulasi download
-    console.log('Downloading:', attachment.name)
-    alert(`Downloading ${attachment.name}`)
+  const downloadAttachment = async (attachment: Attachment) => {
+    try {
+      window.open(`/api/attachments/${attachment.id}`, '_blank')
+      toast.success(`📥 Downloading ${attachment.name}`)
+    } catch (error) {
+      toast.error("❌ Failed to download file")
+    }
   }
 
   // Komponen Pagination
@@ -574,16 +768,15 @@ export default function Page() {
   }
 
   return (
-    <div className="min-h-screen min-w-fit  ">
-      <div className="max-w-full mx-auto space-y-6 ">
-
+    <div className="min-h-screen min-w-fit">
+      <div className="max-w-full mx-auto space-y-6">
         {/* Previous Sales Orders - Full Width Table */}
         <Card className="mb-6">
           <CardHeader>
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
-                Previous Sales Orders
+                Sales Orders
               </CardTitle>
               
               {/* Search and Filters */}
@@ -612,32 +805,12 @@ export default function Page() {
                   className="border rounded px-3 py-2 text-sm"
                 >
                   <option value="all">All Status</option>
-                  <option value="draft">Draft</option>
-                  <option value="confirmed">Confirmed</option>
+                  <option value="submitted">Submitted</option>
+                  <option value="processing">Processing</option>
                   <option value="shipped">Shipped</option>
                   <option value="delivered">Delivered</option>
+                  <option value="completed">Completed</option>
                   <option value="cancelled">Cancelled</option>
-                </select>
-                
-                {/* Date Filter */}
-                <select
-                  value={dateFilter}
-                  onChange={(e) => {
-                    setDateFilter(e.target.value)
-                    setCurrentPage(1)
-                  }}
-                  className="border rounded px-3 py-2 text-sm"
-                >
-                  <option value="all">All Dates</option>
-                  {Array.from(new Set(previousSO.map(so => so.date))).map(date => (
-                    <option key={date} value={date}>
-                      {new Date(date).toLocaleDateString('en-US', { 
-                        year: 'numeric', 
-                        month: 'short', 
-                        day: 'numeric' 
-                      })}
-                    </option>
-                  ))}
                 </select>
 
                 {/* Reset Filters */}
@@ -647,7 +820,6 @@ export default function Page() {
                   onClick={() => {
                     setSearchTerm('')
                     setStatusFilter('all')
-                    setDateFilter('all')
                     setCurrentPage(1)
                   }}
                   className="whitespace-nowrap"
@@ -658,8 +830,16 @@ export default function Page() {
             </div>
           </CardHeader>
           <CardContent>
+            {/* Loading State */}
+            {loading && (
+              <div className="flex justify-center items-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+                <span className="ml-2">Loading sales orders...</span>
+              </div>
+            )}
+
             {/* Active Filters Info */}
-            {(searchTerm || statusFilter !== 'all' || dateFilter !== 'all') && (
+            {(searchTerm || statusFilter !== 'all') && (
               <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
                 <div className="flex items-center gap-2 text-sm">
                   <span className="font-medium text-blue-800">Active filters:</span>
@@ -670,7 +850,7 @@ export default function Page() {
                         onClick={() => setSearchTerm('')} 
                         className="ml-1 hover:text-red-500 transition-colors"
                       >
-                        
+                        ×
                       </button>
                     </Badge>
                   )}
@@ -685,89 +865,76 @@ export default function Page() {
                       </button>
                     </Badge>
                   )}
-                  {dateFilter !== 'all' && (
-                    <Badge variant="secondary" className="flex items-center gap-1 bg-blue-100 text-blue-800">
-                      Date: {new Date(dateFilter).toLocaleDateString()}
-                      <button 
-                        onClick={() => setDateFilter('all')} 
-                        className="ml-1 hover:text-red-500 transition-colors"
-                      >
-                        
-                      </button>
-                    </Badge>
-                  )}
                 </div>
               </div>
             )}
 
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>SO Number</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Customer Phone</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Total Amount</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {currentItems.length > 0 ? (
-                    currentItems.map((so) => (
-                      <TableRow key={so.id} className="hover:bg-gray-50">
-                        <TableCell className="font-medium">{so.soNumber}</TableCell>
-                        <TableCell>{so.date}</TableCell>
-                        <TableCell>{so.customerName}</TableCell>
-                        <TableCell>{so.customerPhone}</TableCell>
-                        <TableCell>
-                          <Badge className={getStatusColor(so.status)}>
-                            {so.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="font-semibold">
-                          Rp {so.totalAmount.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button 
-                            variant="ghost" 
-                            size="sm"
-                            onClick={() => viewDetail(so)}
-                          >
-                            <Eye className="h-4 w-4 mr-1" />
-                            View
-                          </Button>
+            {!loading && (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>SO Number</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Customer Phone</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Total Amount</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {currentItems.length > 0 ? (
+                      currentItems.map((so) => (
+                        <TableRow key={so.so_code} className="hover:bg-gray-50">
+                          <TableCell className="font-medium">{so.so_code}</TableCell>
+                          <TableCell>{new Date(so.created_at).toLocaleDateString()}</TableCell>
+                          <TableCell>{so.customer_name}</TableCell>
+                          <TableCell>{so.customer_phone}</TableCell>
+                          <TableCell>
+                            <Badge className={getStatusColor(so.status)}>
+                              {so.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-semibold">
+                            Rp {so.total_amount.toLocaleString()}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button 
+                              variant="ghost" 
+                              size="sm"
+                              onClick={() => viewDetail(so.so_code)}
+                            >
+                              <Eye className="h-4 w-4 mr-1" />
+                              View
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={7} className="text-center py-8 text-gray-500">
+                          <div className="flex flex-col items-center gap-2">
+                            <FileText className="h-12 w-12 text-gray-300" />
+                            <p>No sales orders found.</p>
+                            <Button 
+                              variant="outline" 
+                              size="sm"
+                              onClick={() => setShowCreateForm(true)}
+                            >
+                              Create First Sales Order
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8 text-gray-500">
-                        <div className="flex flex-col items-center gap-2">
-                          <FileText className="h-12 w-12 text-gray-300" />
-                          <p>No sales orders found matching your filters.</p>
-                          <Button 
-                            variant="outline" 
-                            size="sm"
-                            onClick={() => {
-                              setSearchTerm('')
-                              setStatusFilter('all')
-                              setDateFilter('all')
-                            }}
-                          >
-                            Clear Filters
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
 
             {/* Pagination */}
-            {filteredSO.length > 0 && <Pagination />}
+            {!loading && filteredSO.length > 0 && <Pagination />}
           </CardContent>
         </Card>
 
@@ -797,8 +964,8 @@ export default function Page() {
                     <Label htmlFor="customerName">Customer Name *</Label>
                     <Input
                       id="customerName"
-                      value={newSO.customerName}
-                      onChange={(e) => setNewSO(prev => ({ ...prev, customerName: e.target.value }))}
+                      value={newSO.customer_name}
+                      onChange={(e) => setNewSO(prev => ({ ...prev, customer_name: e.target.value }))}
                       placeholder="Enter customer name"
                     />
                   </div>
@@ -806,8 +973,8 @@ export default function Page() {
                     <Label htmlFor="customerPhone">Customer Phone *</Label>
                     <Input
                       id="customerPhone"
-                      value={newSO.customerPhone}
-                      onChange={(e) => setNewSO(prev => ({ ...prev, customerPhone: e.target.value }))}
+                      value={newSO.customer_phone}
+                      onChange={(e) => setNewSO(prev => ({ ...prev, customer_phone: e.target.value }))}
                       placeholder="Enter customer phone"
                     />
                   </div>
@@ -816,8 +983,8 @@ export default function Page() {
                     <Input
                       id="customerEmail"
                       type="email"
-                      value={newSO.customerEmail}
-                      onChange={(e) => setNewSO(prev => ({ ...prev, customerEmail: e.target.value }))}
+                      value={newSO.customer_email}
+                      onChange={(e) => setNewSO(prev => ({ ...prev, customer_email: e.target.value }))}
                       placeholder="customer@example.com"
                     />
                   </div>
@@ -825,8 +992,8 @@ export default function Page() {
                     <Label htmlFor="salesRep">Sales Representative</Label>
                     <Input
                       id="salesRep"
-                      value={newSO.salesRep}
-                      onChange={(e) => setNewSO(prev => ({ ...prev, salesRep: e.target.value }))}
+                      value={newSO.sales_rep}
+                      onChange={(e) => setNewSO(prev => ({ ...prev, sales_rep: e.target.value }))}
                       placeholder="Sales person name"
                     />
                   </div>
@@ -835,17 +1002,17 @@ export default function Page() {
                     <Input
                       id="totalAmount"
                       type="number"
-                      value={newSO.totalAmount || ''}
+                      value={newSO.total_amount || ''}
                       onChange={(e) => updateTotalAmount(parseInt(e.target.value) || 0)}
                       placeholder="Enter total amount"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="salesOrderDoc"> No SO (From Client)</Label>
+                    <Label htmlFor="salesOrderDoc">No SO (From Client)</Label>
                     <Input
                       id="salesOrderDoc"
-                      value={newSO.salesOrderDoc}
-                      onChange={(e) => setNewSO(prev => ({ ...prev, salesOrderDoc: e.target.value }))}
+                      value={newSO.sales_order_doc}
+                      onChange={(e) => setNewSO(prev => ({ ...prev, sales_order_doc: e.target.value }))}
                       placeholder="No SO document"
                     />
                   </div>
@@ -869,8 +1036,8 @@ export default function Page() {
                     <Label htmlFor="billingAddress">Billing Address</Label>
                     <Input
                       id="billingAddress"
-                      value={newSO.billingAddress}
-                      onChange={(e) => setNewSO(prev => ({ ...prev, billingAddress: e.target.value }))}
+                      value={newSO.billing_address}
+                      onChange={(e) => setNewSO(prev => ({ ...prev, billing_address: e.target.value }))}
                       placeholder="Billing address"
                     />
                   </div>
@@ -878,64 +1045,71 @@ export default function Page() {
                     <Label htmlFor="shippingAddress">Shipping Address</Label>
                     <Input
                       id="shippingAddress"
-                      value={newSO.shippingAddress}
-                      onChange={(e) => setNewSO(prev => ({ ...prev, shippingAddress: e.target.value }))}
+                      value={newSO.shipping_address}
+                      onChange={(e) => setNewSO(prev => ({ ...prev, shipping_address: e.target.value }))}
                       placeholder="Shipping address"
                     />
                   </div>
                 </div>
 
                 {/* Tax Section */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="tax-included" className="font-semibold">
-                        Tax Included
-                      </Label>
-                      <Switch
-                        id="tax-included"
-                        checked={newSO.taxIncluded}
-                        onCheckedChange={handleTaxToggle}
-                      />
-                    </div>
-
-                    {newSO.taxIncluded && (
-                      <div className="space-y-3">
-                        {taxRates.map((tax) => (
-                          <div key={tax.id} className="flex items-center justify-between p-3 border rounded-lg">
-                            <div className="flex items-center gap-3 flex-1">
-                              <Switch
-                                checked={!!newSO.taxes.find(t => t.id === tax.id)}
-                                onCheckedChange={() => toggleTax(tax.id)}
-                              />
-                              <div className="flex-1">
-                                <div className="font-medium">{tax.name}</div>
-                                {newSO.taxes.find(t => t.id === tax.id) && (
-                                  <div className="text-sm text-gray-500">
-                                    {newSO.taxes.find(t => t.id === tax.id)?.rate.toFixed(2)}%
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                            <div className="w-32">
-                              <Input
-                                type="number"
-                                value={newSO.taxes.find(t => t.id === tax.id)?.amount || ''}
-                                onChange={(e) => updateTaxAmount(tax.id, parseInt(e.target.value) || 0)}
-                                placeholder="Amount"
-                                disabled={!newSO.taxes.find(t => t.id === tax.id)}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                {loadingTaxTypes ? (
+                  <div className="flex justify-center py-4">
+                    <Loader2 className="h-6 w-6 animate-spin" />
+                    <span className="ml-2">Loading tax types...</span>
                   </div>
+                ) : (
+                  taxTypes.map((tax) => (
+                    <div key={tax.tax_code} className="flex items-center justify-between p-3 border rounded-lg">
+                      <div className="flex items-center gap-3 flex-1">
+                        <Switch
+                          checked={!!newSO.taxes.find(t => t.tax_code === tax.tax_code)}
+                          onCheckedChange={() => toggleTax(tax.tax_code)}
+                        />
+                        <div className="flex-1">
+                          <div className="font-medium">{tax.name}</div>
+                          {tax.description && (
+                            <div className="text-sm text-gray-500">{tax.description}</div>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => toggleTaxInputMode(tax.tax_code)}
+                          className="text-xs"
+                        >
+                          {taxInputMode[tax.tax_code] === 'rate' ? 'Rate' : 'Amount'}
+                        </Button>
+                        
+                        <div className="w-32">
+                          {taxInputMode[tax.tax_code] === 'rate' ? (
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={newSO.taxes.find(t => t.tax_code === tax.tax_code)?.tax_rate || ''}
+                              onChange={(e) => updateTaxValue(tax.tax_code, parseFloat(e.target.value) || 0)}
+                              placeholder="Rate %"
+                              disabled={!newSO.taxes.find(t => t.tax_code === tax.tax_code)}
+                            />
+                          ) : (
+                            <Input
+                              type="number"
+                              value={newSO.taxes.find(t => t.tax_code === tax.tax_code)?.tax_amount || ''}
+                              onChange={(e) => updateTaxValue(tax.tax_code, parseInt(e.target.value) || 0)}
+                              placeholder="Amount"
+                              disabled={!newSO.taxes.find(t => t.tax_code === tax.tax_code)}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
 
-                  
-                </div>
-
-                {/* Product Items Section - MULTIPLE FORMS DALAM 1 CARD */}
+                {/* Product Items Section */}
                 <Card>
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
@@ -947,74 +1121,72 @@ export default function Page() {
                     </div>
                   </CardHeader>
                   <CardContent>
-                  {/* // Dalam Product Items Section - dengan nomor form */}
-                 {/* // Dalam Product Items Section - nomor di garis card */}
-                  <div className="space-y-4">
-                    {itemForms.map((form, index) => (
-                      <div key={form.id} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 p-4 border rounded-lg relative">
-                        {/* Nomor Form di garis card kiri atas */}
-                        <div className="absolute -top-2 -left-2">
-                          <div className="w-6 h-6 bg-cyan-700 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-sm">
-                            {index + 1}
+                    <div className="space-y-4">
+                      {itemForms.map((form, index) => (
+                        <div key={form.id} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 p-4 border rounded-lg relative">
+                          <div className="absolute -top-2 -left-2">
+                            <div className="w-6 h-6 bg-cyan-700 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-sm">
+                              {index + 1}
+                            </div>
+                          </div>
+                          
+                          {itemForms.length > 1 && (
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="absolute top-2 right-2"
+                              onClick={() => removeItemForm(form.id)}
+                            >
+                              <Trash2 className="h-4 w-4 text-red-500" />
+                            </Button>
+                          )}
+                          <div className="space-y-1">
+                            <Label className="text-sm">Product Name</Label>
+                            <Input
+                              value={form.product_name}
+                              onChange={(e) => updateItemForm(form.id, 'product_name', e.target.value)}
+                              placeholder="Enter product name"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-sm">SKU</Label>
+                            <Input
+                              value={form.product_code}
+                              onChange={(e) => updateItemForm(form.id, 'product_code', e.target.value)}
+                              placeholder="Enter SKU"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-sm">Quantity</Label>
+                            <Input
+                              type="number"
+                              value={form.quantity || ''}
+                              onChange={(e) => updateItemForm(form.id, 'quantity', parseInt(e.target.value) || 0)}
+                              placeholder="Enter quantity"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-sm">Unit Price</Label>
+                            <Input
+                              type="number"
+                              value={form.unit_price || ''}
+                              onChange={(e) => updateItemForm(form.id, 'unit_price', parseInt(e.target.value) || 0)}
+                              placeholder="Enter unit price"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-sm">Subtotal</Label>
+                            <Input
+                              type="number"
+                              value={form.subtotal || ''}
+                              onChange={(e) => updateItemForm(form.id, 'subtotal', parseInt(e.target.value) || 0)}
+                              placeholder="Enter subtotal"
+                              readOnly
+                            />
                           </div>
                         </div>
-                        
-                        {itemForms.length > 1 && (
-                          <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className="absolute top-2 right-2"
-                            onClick={() => removeItemForm(form.id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-red-500" />
-                          </Button>
-                        )}
-                        <div className="space-y-1">
-                          <Label className="text-sm">Product Name</Label>
-                          <Input
-                            value={form.productName}
-                            onChange={(e) => updateItemForm(form.id, 'productName', e.target.value)}
-                            placeholder="Enter product name"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-sm">SKU</Label>
-                          <Input
-                            value={form.sku}
-                            onChange={(e) => updateItemForm(form.id, 'sku', e.target.value)}
-                            placeholder="Enter SKU"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-sm">Quantity</Label>
-                          <Input
-                            type="number"
-                            value={form.quantity || ''}
-                            onChange={(e) => updateItemForm(form.id, 'quantity', parseInt(e.target.value) || 0)}
-                            placeholder="Enter quantity"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-sm">Unit Price</Label>
-                          <Input
-                            type="number"
-                            value={form.unitPrice || ''}
-                            onChange={(e) => updateItemForm(form.id, 'unitPrice', parseInt(e.target.value) || 0)}
-                            placeholder="Enter unit price"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-sm">Subtotal</Label>
-                          <Input
-                            type="number"
-                            value={form.subtotal || ''}
-                            onChange={(e) => updateItemForm(form.id, 'subtotal', parseInt(e.target.value) || 0)}
-                            placeholder="Enter subtotal"
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
                   </CardContent>
                 </Card>
 
@@ -1028,32 +1200,32 @@ export default function Page() {
                         <Upload className="h-8 w-8 text-gray-400" />
                         <Button 
                           variant="outline" 
-                          onClick={handleSalesOrderUpload}
+                          onClick={() => handleFileUpload('sales_order')}
                           className="cursor-pointer"
                         >
                           <Upload className="h-4 w-4 mr-2" />
                           Upload Sales Order Document
                         </Button>
+                        
+                        {/* FILE INDICATOR */}
+                        {salesOrderFileName && (
+                          <div className="text-center">
+                            <Badge variant="secondary" className="bg-green-100 text-green-800">
+                              <FileText className="h-3 w-3 mr-1" />
+                              {salesOrderFileName}
+                            </Badge>
+                          </div>
+                        )}
+                        
                         <input
                           ref={salesOrderFileRef}
                           type="file"
                           className="hidden"
-                          onChange={handleSalesOrderFileChange}
+                          onChange={(e) => handleFileInputChange(e, 'sales_order')}
                           accept=".pdf,.doc,.docx,.xls,.xlsx"
                         />
                         <p className="text-xs text-gray-500 text-center">Only 1 file allowed</p>
                       </div>
-                      {newSO.documents.filter(d => d.type === 'sales_order').map(doc => (
-                        <div key={doc.id} className="flex items-center justify-between mt-3 p-2 bg-gray-50 rounded">
-                          <div className="flex items-center gap-2">
-                            <FileText className="h-4 w-4 text-gray-500" />
-                            <span className="text-sm">{doc.name}</span>
-                          </div>
-                          <Button variant="ghost" size="sm" onClick={() => removeDocument(doc.id)}>
-                            <Trash2 className="h-4 w-4 text-red-500" />
-                          </Button>
-                        </div>
-                      ))}
                     </div>
                   </div>
 
@@ -1065,43 +1237,55 @@ export default function Page() {
                         <Upload className="h-8 w-8 text-gray-400" />
                         <Button 
                           variant="outline" 
-                          onClick={handleOtherDocumentsUpload}
+                          onClick={() => handleFileUpload('other')}
                           className="cursor-pointer"
                         >
                           <Upload className="h-4 w-4 mr-2" />
                           Upload Other Documents
                         </Button>
+                        
+                        {/* FILE INDICATOR */}
+                        {otherFileNames.length > 0 && (
+                          <div className="text-center space-y-1">
+                            {otherFileNames.map((fileName, index) => (
+                              <Badge key={index} variant="secondary" className="bg-blue-100 text-blue-800 mr-1 mb-1">
+                                <FileText className="h-3 w-3 mr-1" />
+                                {fileName}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                        
                         <input
                           ref={otherFilesRef}
                           type="file"
                           className="hidden"
-                          onChange={handleOtherFilesChange}
+                          onChange={(e) => handleFileInputChange(e, 'other')}
                           accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
                           multiple
                         />
                         <p className="text-xs text-gray-500 text-center">Multiple files allowed</p>
-                      </div>
-                      <div className="mt-3 space-y-2">
-                        {newSO.documents.filter(d => d.type === 'other').map(doc => (
-                          <div key={doc.id} className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                            <div className="flex items-center gap-2">
-                              <FileText className="h-4 w-4 text-gray-500" />
-                              <span className="text-sm">{doc.name}</span>
-                            </div>
-                            <Button variant="ghost" size="sm" onClick={() => removeDocument(doc.id)}>
-                              <Trash2 className="h-4 w-4 text-red-500" />
-                            </Button>
-                          </div>
-                        ))}
                       </div>
                     </div>
                   </div>
                 </div>
 
                 {/* Submit Button */}
-                <div className="w-full ">
-                  <Button onClick={submitSO} size="lg" className="w-full">
-                    Create Sales Order
+                <div className="w-full">
+                  <Button 
+                    onClick={submitSO} 
+                    size="lg" 
+                    className="w-full"
+                    disabled={submitting}
+                  >
+                    {submitting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Creating Sales Order...
+                      </>
+                    ) : (
+                      'Create Sales Order'
+                    )}
                   </Button>
                 </div>
               </div>
@@ -1109,229 +1293,206 @@ export default function Page() {
           )}
         </Card>
 
-        {/* Detail Modal - LEBIH BESAR DAN DETAIL */}
-       {/* // Detail Modal - proportional items & auto width */}
-      <Dialog open={showDetailModal} onOpenChange={setShowDetailModal}>
-        <CustomDialogContent className="w-[90vw] max-w-6xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader className="pb-4">  
-          
-          <div className=" md:grid-cols-2 lg:grid-cols-4 gap-4 p-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border">
-            <DialogTitle className="flex items-center gap-2 text-2xl">
-              <FileText className="h-6 w-6" />
-                      Sales Order Details - {selectedSO?.soNumber}  #{selectedSO?.status}
-                      
-                        {/* <Badge className={getStatusColor(selectedSO?.status)}>
-                              {selectedSO?.status}
-                            </Badge> */}
-              {/* <Badge ></Badge> */}
-            </DialogTitle>
-          </div>
-        </DialogHeader>
-        {selectedSO && (
-          <div className="space-y-6 min-w-0">
-            {/* Header Info */}
-
-            {/* Customer Information & Address */}
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-              <Card className="min-w-0">
-                <CardHeader className="pb-4">
-                  <CardTitle className="flex items-center gap-2 text-lg">
-                    <Building className="h-5 w-5" />
-                    Customer Information
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4 min-w-0">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0">
-                    <div className="min-w-0">
-                      <Label className="font-semibold text-sm">Customer Name</Label>
-                      <p className="text-gray-900 truncate">{selectedSO.customerName}</p>
-                    </div>
-                    <div className="min-w-0">
-                      <Label className="font-semibold text-sm">Customer Phone</Label>
-                      <p className="text-gray-900 truncate">{selectedSO.customerPhone}</p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0">
-                    <div className="min-w-0">
-                      <Label className="font-semibold text-sm">Company</Label>
-                      <p className="text-gray-900 truncate">{selectedSO.customerCompany}</p>
-                    </div>
-                    <div className="min-w-0">
-                      <Label className="font-semibold text-sm">Sales Order Doc</Label>
-                      <p className="text-gray-900 truncate">{selectedSO.salesOrderDoc}</p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0">
-                    <div className="min-w-0">
-                      <Label className="font-semibold text-sm flex items-center gap-2">
-                        <Mail className="h-4 w-4" />
-                        Email
-                      </Label>
-                      <p className="text-gray-900 truncate">{selectedSO.customerEmail}</p>
-                    </div>
-                    <div className="min-w-0">
-                      <Label className="font-semibold text-sm flex items-center gap-2">
-                        <Phone className="h-4 w-4" />
-                        Phone
-                      </Label>
-                      <p className="text-gray-900 truncate">{selectedSO.customerPhone}</p>
-                    </div>
-                  </div>
-                  <div className="md:grid-cols-2 gap-4 min-w-0">
-                    <div className="min-w-0">
-                      <Label className="font-semibold text-sm flex items-center gap-2">
-                        {/* <StickyNote className="h-4 w-4" /> */}
-                        Notes
-                      </Label>
-                      <p className="text-gray-900 truncate">{selectedSO.notes}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="min-w-0">
-                <CardHeader className="pb-4">
-                  <CardTitle className="flex items-center gap-2 text-lg">
-                    <MapPin className="h-5 w-5" />
-                    Address Information
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4 min-w-0">
-                  <div className="min-w-0">
-                    <Label className="font-semibold text-sm">Billing Address</Label>
-                    <p className="text-gray-900 text-sm leading-relaxed break-words">{selectedSO.billingAddress}</p>
-                  </div>
-                  <div className="min-w-0">
-                    <Label className="font-semibold text-sm">Shipping Address</Label>
-                    <p className="text-gray-900 text-sm leading-relaxed break-words">{selectedSO.shippingAddress}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Items (3/4) and Summary (1/4) */}
-            <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 min-w-0">
-              {/* Items */}
-              <div className="xl:col-span-3 min-w-0">
-                <Card className="min-w-0">
-                  <CardHeader className="pb-4">
-                    <CardTitle>Order Items</CardTitle>
-                  </CardHeader>
-                  <CardContent className="min-w-0 overflow-x-auto">
-                    <div className="min-w-[800px]">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-[300px]">Product</TableHead>
-                            <TableHead className="w-[150px]">SKU</TableHead>
-                            <TableHead className="w-[100px]">Qty</TableHead>
-                            <TableHead className="w-[150px]">Unit Price</TableHead>
-                            <TableHead className="w-[150px] text-right">Subtotal</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {selectedSO.items.map((item) => (
-                            <TableRow key={item.id}>
-                              <TableCell className="font-medium truncate max-w-[280px]">{item.productName}</TableCell>
-                              <TableCell className="text-gray-600 truncate">{item.sku}</TableCell>
-                              <TableCell>{item.quantity}</TableCell>
-                              <TableCell>Rp {item.unitPrice.toLocaleString()}</TableCell>
-                              <TableCell className="text-right font-semibold">Rp {item.subtotal.toLocaleString()}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                      
-                    </div>
-                  </CardContent>
-                </Card>
+        {/* Detail Modal */}
+        <Dialog open={showDetailModal} onOpenChange={setShowDetailModal}>
+          <CustomDialogContent className="w-[90vw] max-w-6xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader className="pb-4">  
+              <div className="md:grid-cols-2 lg:grid-cols-4 gap-4 p-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border">
+                <DialogTitle className="flex items-center gap-2 text-2xl">
+                  <FileText className="h-6 w-6" />
+                  Sales Order Details - {selectedSO?.so_code}
+                </DialogTitle>
               </div>
-
-              {/* Summary */}
-              <div className="space-y-6 min-w-0 xl:col-span-1">
-                <Card className="min-w-0">
-                  <CardHeader className="pb-4">
-                    <CardTitle>Tax Summary</CardTitle>
-                  </CardHeader>
-                  <CardContent className="min-w-0">
-                    <div className="space-y-3 min-w-0">
-                      {selectedSO.taxes.map((tax) => (
-                        <div key={tax.id} className="flex justify-between items-center py-2 border-b min-w-0">
-                          <div className="min-w-0">
-                            <span className="font-medium truncate">{tax.name}</span>
-                            <span className="text-sm text-gray-500 ml-2">({tax.rate}%)</span>
-                          </div>
-                          <span className="font-semibold whitespace-nowrap">Rp {tax.amount.toLocaleString()}</span>
-                        </div>
-                      ))}
-                      <div className="border-t pt-3 min-w-0">
-                        <div className="flex justify-between items-center font-bold text-lg min-w-0">
-                          <span>Grand Total</span>
-                          <span className="text-blue-600 whitespace-nowrap">Rp {selectedSO.totalAmount.toLocaleString()}</span>
-                        </div>
-        {/* 
-                {selectedSO.notes && (
+            </DialogHeader>
+            {selectedSO && (
+              <div className="space-y-6 min-w-0">
+                {/* Customer Information & Address */}
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                   <Card className="min-w-0">
                     <CardHeader className="pb-4">
-                      <CardTitle>Notes</CardTitle>
+                      <CardTitle className="flex items-center gap-2 text-lg">
+                        <Building className="h-5 w-5" />
+                        Customer Information
+                      </CardTitle>
                     </CardHeader>
-                    <CardContent className="min-w-0">
-                      <p className="text-sm text-gray-700 leading-relaxed break-words">{selectedSO.notes}</p>
-                    </CardContent>
-                  </Card>
-                )} */}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
-
-            {/* Attachments */}
-            <Card className="min-w-0">
-              <CardHeader className="pb-4">
-                <CardTitle className="flex items-center gap-2">
-                  <FileText className="h-5 w-5" />
-                  Attachments ({selectedSO.attachments.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="min-w-0">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 min-w-0">
-                  {selectedSO.attachments.map((attachment) => (
-                    <div key={attachment.id} className="flex items-center justify-between p-4 border rounded-lg hover:shadow-md transition-shadow min-w-0">
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <FileText className="h-8 w-8 text-blue-500 flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm truncate">{attachment.name}</p>
-                          <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
-                            <span className={attachment.type === 'sales_order' ? 'text-blue-600' : 'text-gray-600'}>
-                              {attachment.type === 'sales_order' ? 'Sales Order' : 'Other'}
-                            </span>
-                            <span>•</span>
-                            <span>{attachment.uploadDate}</span>
-                            <span>•</span>
-                            <span>{attachment.size}</span>
-                          </div>
+                    <CardContent className="space-y-4 min-w-0">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0">
+                        <div className="min-w-0">
+                          <Label className="font-semibold text-sm">Customer Name</Label>
+                          <p className="text-gray-900 truncate">{selectedSO.customer_name}</p>
+                        </div>
+                        <div className="min-w-0">
+                          <Label className="font-semibold text-sm">Customer Phone</Label>
+                          <p className="text-gray-900 truncate">{selectedSO.customer_phone}</p>
                         </div>
                       </div>
-                      <Button 
-                        variant="ghost" 
-                        size="lg"
-                        onClick={() => downloadAttachment(attachment)}
-                        className="ml-2 flex-shrink-0"
-                      >
-                        <Download className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-        </CustomDialogContent>
-      </Dialog>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0">
+                        {/* <div className="min-w-0">
+                          <Label className="font-semibold text-sm">Company</Label>
+                          <p className="text-gray-900 truncate">{selectedSO.customer_company || '-'}</p>
+                        </div> */}
+                        <div className="min-w-0">
+                          <Label className="font-semibold text-sm">Sales Order Doc</Label>
+                          <p className="text-gray-900 truncate">{selectedSO.sales_order_doc || '-'}</p>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0">
+                        <div className="min-w-0">
+                          <Label className="font-semibold text-sm flex items-center gap-2">
+                            <Mail className="h-4 w-4" />
+                            Email
+                          </Label>
+                          <p className="text-gray-900 truncate">{selectedSO.customer_email}</p>
+                        </div>
+                        <div className="min-w-0">
+                          <Label className="font-semibold text-sm flex items-center gap-2">
+                            <Phone className="h-4 w-4" />
+                            Phone
+                          </Label>
+                          <p className="text-gray-900 truncate">{selectedSO.customer_phone}</p>
+                        </div>
+                      </div>
+                      {selectedSO.notes && (
+                        <div className="min-w-0">
+                          <Label className="font-semibold text-sm">Notes</Label>
+                          <p className="text-gray-900 text-sm leading-relaxed break-words">{selectedSO.notes}</p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
 
+                  <Card className="min-w-0">
+                    <CardHeader className="pb-4">
+                      <CardTitle className="flex items-center gap-2 text-lg">
+                        <MapPin className="h-5 w-5" />
+                        Address Information
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4 min-w-0">
+                      <div className="min-w-0">
+                        <Label className="font-semibold text-sm">Billing Address</Label>
+                        <p className="text-gray-900 text-sm leading-relaxed break-words">{selectedSO.billing_address || '-'}</p>
+                      </div>
+                      <div className="min-w-0">
+                        <Label className="font-semibold text-sm">Shipping Address</Label>
+                        <p className="text-gray-900 text-sm leading-relaxed break-words">{selectedSO.shipping_address || '-'}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Items and Summary */}
+                <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 min-w-0">
+                  {/* Items */}
+                  <div className="xl:col-span-3 min-w-0">
+                    <Card className="min-w-0">
+                      <CardHeader className="pb-4">
+                        <CardTitle>Order Items</CardTitle>
+                      </CardHeader>
+                      <CardContent className="min-w-0 overflow-x-auto">
+                        <div className="min-w-[800px]">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="w-[300px]">Product</TableHead>
+                                <TableHead className="w-[150px]">SKU</TableHead>
+                                <TableHead className="w-[100px]">Qty</TableHead>
+                                <TableHead className="w-[150px]">Unit Price</TableHead>
+                                <TableHead className="w-[150px] text-right">Subtotal</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {selectedSO.items.map((item) => (
+                                <TableRow key={item.so_item_code}>
+                                  <TableCell className="font-medium truncate max-w-[280px]">{item.product_name}</TableCell>
+                                  <TableCell className="text-gray-600 truncate">{item.product_code}</TableCell>
+                                  <TableCell>{item.quantity}</TableCell>
+                                  <TableCell>Rp {item.unit_price.toLocaleString()}</TableCell>
+                                  <TableCell className="text-right font-semibold">Rp {item.subtotal.toLocaleString()}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Summary */}
+                  <div className="space-y-6 min-w-0 xl:col-span-1">
+                    <Card className="min-w-0">
+                      <CardHeader className="pb-4">
+                        <CardTitle>Tax Summary</CardTitle>
+                      </CardHeader>
+                      <CardContent className="min-w-0">
+                        <div className="space-y-3 min-w-0">
+                          {selectedSO.taxes.map((tax) => (
+                            <div key={tax.so_tax_code} className="flex justify-between items-center py-2 border-b min-w-0">
+                              <div className="min-w-0">
+                                <span className="font-medium truncate">{tax.tax_name}</span>
+                                <span className="text-sm text-gray-500 ml-2">({tax.tax_rate}%)</span>
+                              </div>
+                              <span className="font-semibold whitespace-nowrap">Rp {tax.tax_amount.toLocaleString()}</span>
+                            </div>
+                          ))}
+                          <div className="border-t pt-3 min-w-0">
+                            <div className="flex justify-between items-center font-bold text-lg min-w-0">
+                              <span>Grand Total</span>
+                              <span className="text-blue-600 whitespace-nowrap">Rp {selectedSO.total_amount.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+
+                {/* Attachments */}
+                {selectedSO.attachments && selectedSO.attachments.length > 0 && (
+                  <Card className="min-w-0">
+                    <CardHeader className="pb-4">
+                      <CardTitle className="flex items-center gap-2">
+                        <FileText className="h-5 w-5" />
+                        Attachments ({selectedSO.attachments.length})
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="min-w-0">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 min-w-0">
+                        {selectedSO.attachments.map((attachment) => (
+                          <div key={attachment.id} className="flex items-center justify-between p-4 border rounded-lg hover:shadow-md transition-shadow min-w-0">
+                            <div className="flex items-center gap-3 flex-1 min-w-0">
+                              <FileText className="h-8 w-8 text-blue-500 flex-shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-sm truncate">{attachment.name}</p>
+                                <div className="flex items-center gap-2 text-xs text-gray-500 flex-wrap">
+                                  <span className="text-blue-600">
+                                    {attachment.type}
+                                  </span>
+                                  <span>•</span>
+                                  <span>{new Date(attachment.upload_date).toLocaleDateString()}</span>
+                                  <span>•</span>
+                                  <span>{(attachment.size / 1024 / 1024).toFixed(2)} MB</span>
+                                </div>
+                              </div>
+                            </div>
+                            <Button 
+                              variant="ghost" 
+                              size="lg"
+                              onClick={() => downloadAttachment(attachment)}
+                              className="ml-2 flex-shrink-0"
+                            >
+                              <Download className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            )}
+          </CustomDialogContent>
+        </Dialog>
       </div>
     </div>
   )

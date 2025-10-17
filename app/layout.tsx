@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import AppSidebar from "@/components/AppSidebar";
 import { SidebarProvider } from "@/components/SidebarContext";
+import { Toaster } from 'sonner'; // ✅ IMPORT TOASTER
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -19,7 +20,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.className} min-h-screen bg-white`}>
         {isLoginPage ? (
-          // Halaman login - TANPA sidebar
+          // Halaman login - TANPO sidebar
           <div className="min-h-screen">
             {children}
           </div>
@@ -39,6 +40,16 @@ export default function RootLayout({
             </div>
           </SidebarProvider>
         )}
+        
+        {/* ✅ TOASTER COMPONENT - PASTI KELUAR */}
+        <Toaster 
+          position="top-right"
+          richColors
+          closeButton
+          duration={4000}
+          expand={true}
+          visibleToasts={5}
+        />
       </body>
     </html>
   );

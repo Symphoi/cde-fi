@@ -1,6 +1,6 @@
 'use client'
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/app/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -13,23 +13,102 @@ import {
 import { Input } from "@/components/ui/input"
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useState } from 'react'
+
+// Test account credentials
+const TEST_ACCOUNTS = {
+  admin: { email: 'admin@company.com', password: 'password123' },
+  finance: { email: 'budi.finance@company.com', password: 'password123' },
+  staff: { email: 'ahmad.sales@company.com', password: 'password123' }
+}
 
 export function LoginForm({
   className,
   ...props
 }: React.ComponentProps<"div">) {
   const router = useRouter()
+  const [isLoading, setIsLoading] = useState(false)
+  const [formData, setFormData] = useState({
+    email: '',
+    password: ''
+  })
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    // Navigasi ke dashboard saat form di-submit
-    router.push('/dashboard')
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { id, value } = e.target
+    setFormData(prev => ({
+      ...prev,
+      [id]: value
+    }))
   }
 
-  const handleTestAccount = (role: string) => {
-    console.log(`Login as ${role}`)
-    // Auto isi form atau langsung navigasi
-    router.push('/dashboard')
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsLoading(true)
+
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData)
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        // Save token to localStorage
+        localStorage.setItem('token', data.token)
+        localStorage.setItem('user', JSON.stringify(data.user))
+        
+        // Redirect to dashboard
+        router.push('/dashboard')
+      } else {
+        alert(data.error || 'Login failed')
+      }
+    } catch (error) {
+      console.error('Login error:', error)
+      alert('Login failed. Please try again.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleTestAccount = async (role: 'admin' | 'finance' | 'staff') => {
+    setIsLoading(true)
+    
+    const testAccount = TEST_ACCOUNTS[role]
+    
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(testAccount)
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        // Save token to localStorage
+        localStorage.setItem('token', data.token)
+        localStorage.setItem('user', JSON.stringify(data.user))
+        
+        // Show success message
+        alert(`Successfully logged in as ${data.user.name} (${data.user.roles[0]?.role_name})`)
+        
+        // Redirect to dashboard
+        router.push('/dashboard')
+      } else {
+        alert(data.error || 'Login failed')
+      }
+    } catch (error) {
+      console.error('Login error:', error)
+      alert('Login failed. Please try again.')
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -51,6 +130,10 @@ export function LoginForm({
                   id="email"
                   type="email"
                   placeholder="m@example.com"
+                  value={formData.email}
+                  onChange={handleInputChange}
+                  required
+                  disabled={isLoading}
                 />
               </Field>
               
@@ -58,11 +141,24 @@ export function LoginForm({
                 <div className="flex items-center">
                   <FieldLabel htmlFor="password">Password</FieldLabel>
                 </div>
-                <Input id="password" type="password" />
+                <Input 
+                  id="password" 
+                  type="password" 
+                  value={formData.password}
+                  onChange={handleInputChange}
+                  required
+                  disabled={isLoading}
+                />
               </Field>
               
               <Field>
-                <Button type="submit" className="w-full">Login</Button>
+                <Button 
+                  type="submit" 
+                  className="w-full"
+                  disabled={isLoading}
+                >
+                  {isLoading ? 'Logging in...' : 'Login'}
+                </Button>
               </Field>
               
               <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">
@@ -74,22 +170,25 @@ export function LoginForm({
                   variant="outline" 
                   type="button"
                   onClick={() => handleTestAccount('staff')}
+                  disabled={isLoading}
                 >
-                  Staff
+                  {isLoading ? '...' : 'Staff'}
                 </Button>
                 <Button 
                   variant="outline" 
                   type="button"
                   onClick={() => handleTestAccount('finance')}
+                  disabled={isLoading}
                 >
-                  Finance
+                  {isLoading ? '...' : 'Finance'}
                 </Button>
                 <Button 
                   variant="outline" 
                   type="button"
                   onClick={() => handleTestAccount('admin')}
+                  disabled={isLoading}
                 >
-                  Admin
+                  {isLoading ? '...' : 'Admin'}
                 </Button>
               </Field>
 

@@ -1,4 +1,3 @@
-// app/delivery-tracking/page.tsx
 "use client"
 
 import { useEffect, useRef, useState } from 'react'
@@ -8,8 +7,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { Search, Truck, Package, Upload, CheckCircle, Eye, Copy, Download } from 'lucide-react'
-import { Document, Page, Text, View, Image, StyleSheet, pdf } from '@react-pdf/renderer'
+import { Search, Truck, Package, Upload, CheckCircle, Eye, Copy, Download, RefreshCw, AlertCircle } from 'lucide-react'
+import { toast } from 'sonner'
 
 /* -------------------- Types -------------------- */
 type POStatus = 'ready to ship' | 'shipping' | 'completed'
@@ -62,26 +61,406 @@ interface DeliveryOrder {
   createdAt: string
 }
 
-/* -------------------- PDF STYLES (react-pdf) -------------------- */
-const pdfStyles = StyleSheet.create({
-  page: { padding: 24, fontFamily: 'Helvetica', fontSize: 10, color: '#111827' },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  logo: { width: 80, height: 40 },
-  title: { fontSize: 16, fontWeight: '700' },
-  section: { marginTop: 8, marginBottom: 6 },
-  small: { fontSize: 9 },
-  table: { display: 'table', width: 'auto', marginTop: 6 },
-  tableRow: { flexDirection: 'row' },
-  th: { fontSize: 9, fontWeight: '700', padding: 4, backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#e5e7eb' },
-  td: { fontSize: 9, padding: 4, borderWidth: 1, borderColor: '#e5e7eb' },
-  right: { textAlign: 'right' },
-  footer: { position: 'absolute', fontSize: 8, bottom: 20, left: 24, right: 24, textAlign: 'center', color: '#6b7280' },
-})
+/* -------------------- API Service -------------------- */
+class DeliveryOrderService {
+  private static getAuthHeaders() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
+  }
+
+  private static getAuthHeadersFormData() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+    return {
+      'Authorization': `Bearer ${token}`,
+    };
+  }
+
+  private static async handleResponse(response: Response) {
+    const text = await response.text();
+    
+    let data;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (error) {
+      console.error('Invalid JSON response:', text);
+      throw new Error(`Invalid response from server: ${text.substring(0, 100)}`);
+    }
+    
+    if (!response.ok) {
+      throw new Error(data.error || `HTTP error! status: ${response.status}`);
+    }
+    
+    return data;
+  }
+
+  // Get ready POs for delivery
+  static async getReadyPOs(filters: {
+    search?: string;
+    page?: string;
+    limit?: string;
+  } = {}) {
+    try {
+      const params = new URLSearchParams();
+      params.append('action', 'ready-pos');
+      if (filters.search) params.append('search', filters.search);
+      params.append('page', filters.page || '1');
+      params.append('limit', filters.limit || '8');
+
+      const response = await fetch(`/api/deliver-to-client?${params}`, {
+        headers: this.getAuthHeaders()
+      });
+
+      return await this.handleResponse(response);
+    } catch (error) {
+      console.error('Service error in getReadyPOs:', error);
+      throw error;
+    }
+  }
+
+  // Get all delivery orders
+  static async getDeliveryOrders(filters: {
+    status?: string;
+    search?: string;
+    page?: string;
+    limit?: string;
+  } = {}) {
+    try {
+      const params = new URLSearchParams();
+      if (filters.status && filters.status !== 'all') params.append('status', filters.status);
+      if (filters.search) params.append('search', filters.search);
+      params.append('page', filters.page || '1');
+      params.append('limit', filters.limit || '10');
+
+      const response = await fetch(`/api/deliver-to-client?${params}`, {
+        headers: this.getAuthHeaders()
+      });
+
+      return await this.handleResponse(response);
+    } catch (error) {
+      console.error('Service error in getDeliveryOrders:', error);
+      throw error;
+    }
+  }
+
+  // Create delivery order
+  static async createDeliveryOrder(data: {
+    so_code: string;
+    purchase_order_codes: string[];
+    courier: string;
+    tracking_number: string;
+    shipping_date: string;
+    shipping_cost?: number;
+    notes?: string;
+  }, shippingProofFile?: File) {
+    try {
+      const formData = new FormData();
+      formData.append('data', JSON.stringify(data));
+      
+      if (shippingProofFile) {
+        formData.append('shipping_proof', shippingProofFile);
+      }
+
+      const response = await fetch('/api/deliver-to-client', {
+        method: 'POST',
+        headers: this.getAuthHeadersFormData(),
+        body: formData
+      });
+
+      return await this.handleResponse(response);
+    } catch (error) {
+      console.error('Service error in createDeliveryOrder:', error);
+      throw error;
+    }
+  }
+
+  // Mark delivery order as delivered
+  static async markAsDelivered(data: {
+    do_code: string;
+    received_date: string;
+    received_by: string;
+    confirmation_method?: string;
+    notes?: string;
+  }, podFile: File) {
+    try {
+      const formData = new FormData();
+      formData.append('data', JSON.stringify(data));
+      formData.append('proof_of_delivery', podFile);
+
+      const response = await fetch('/api/deliver-to-client', {
+        method: 'PATCH',
+        headers: this.getAuthHeadersFormData(),
+        body: formData
+      });
+
+      return await this.handleResponse(response);
+    } catch (error) {
+      console.error('Service error in markAsDelivered:', error);
+      throw error;
+    }
+  }
+
+  // Export delivery order
+  static async exportDeliveryOrder(do_code: string, format: string = 'pdf') {
+    try {
+      const response = await fetch('/api/deliver-to-client', {
+        method: 'PUT',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({ do_code, format })
+      });
+
+      return await this.handleResponse(response);
+    } catch (error) {
+      console.error('Service error in exportDeliveryOrder:', error);
+      throw error;
+    }
+  }
+}
+
+/* -------------------- PDF Export Function -------------------- */
+const generatePDF = (doData: any) => {
+  // Create a new window for PDF
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    toast.error('Cannot open print window. Please allow popups for this site.');
+    return;
+  }
+
+  const { delivery_order, purchase_orders, export_info } = doData;
+
+  const totalAmount = purchase_orders.reduce((sum: number, po: any) => {
+    const poTotal = parseInt(po.item_total?.toString() || '0', 10) || 0;
+    return sum + poTotal;
+  }, 0) + (parseInt(delivery_order.shipping_cost?.toString() || '0', 10) || 0);
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Delivery Order - ${delivery_order.do_code}</title>
+      <style>
+        body { 
+          font-family: Arial, sans-serif; 
+          margin: 40px; 
+          color: #333;
+        }
+        .header { 
+          text-align: center; 
+          margin-bottom: 30px;
+          border-bottom: 2px solid #333;
+          padding-bottom: 20px;
+        }
+        .company-name {
+          font-size: 24px;
+          font-weight: bold;
+          margin-bottom: 10px;
+        }
+        .document-title {
+          font-size: 20px;
+          color: #666;
+        }
+        .section { 
+          margin-bottom: 25px; 
+        }
+        .section-title {
+          background-color: #f5f5f5;
+          padding: 8px 12px;
+          font-weight: bold;
+          border-left: 4px solid #007acc;
+          margin-bottom: 15px;
+        }
+        .info-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 20px;
+          margin-bottom: 15px;
+        }
+        .info-item {
+          margin-bottom: 8px;
+        }
+        .info-label {
+          font-weight: bold;
+          color: #666;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          margin: 20px 0;
+        }
+        th, td {
+          border: 1px solid #ddd;
+          padding: 12px;
+          text-align: left;
+        }
+        th {
+          background-color: #f8f9fa;
+          font-weight: bold;
+        }
+        .total-row {
+          background-color: #f8f9fa;
+          font-weight: bold;
+        }
+        .footer {
+          margin-top: 40px;
+          text-align: center;
+          color: #666;
+          font-size: 12px;
+          border-top: 1px solid #ddd;
+          padding-top: 20px;
+        }
+        .signature-section {
+          margin-top: 40px;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 40px;
+        }
+        .signature-line {
+          border-top: 1px solid #333;
+          margin-top: 60px;
+          padding-top: 10px;
+          text-align: center;
+        }
+        @media print {
+          body { margin: 20px; }
+          .no-print { display: none; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <div class="company-name">YOUR COMPANY NAME</div>
+        <div class="document-title">DELIVERY ORDER</div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Delivery Information</div>
+        <div class="info-grid">
+          <div>
+            <div class="info-item"><span class="info-label">DO Number:</span> ${delivery_order.do_code}</div>
+            <div class="info-item"><span class="info-label">SO Reference:</span> ${delivery_order.so_code}</div>
+            <div class="info-item"><span class="info-label">Customer:</span> ${delivery_order.customer_name}</div>
+            <div class="info-item"><span class="info-label">Customer Phone:</span> ${delivery_order.customer_phone || 'N/A'}</div>
+          </div>
+          <div>
+            <div class="info-item"><span class="info-label">Shipping Date:</span> ${new Date(delivery_order.shipping_date).toLocaleDateString()}</div>
+            <div class="info-item"><span class="info-label">Courier:</span> ${delivery_order.courier || 'N/A'}</div>
+            <div class="info-item"><span class="info-label">Tracking Number:</span> ${delivery_order.tracking_number || 'N/A'}</div>
+            <div class="info-item"><span class="info-label">Status:</span> ${delivery_order.status.toUpperCase()}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Purchase Orders</div>
+        <table>
+          <thead>
+            <tr>
+              <th>PO Number</th>
+              <th>Supplier</th>
+              <th>Product Name</th>
+              <th>SKU</th>
+              <th>Quantity</th>
+              <th>Price</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${purchase_orders.map((po: any) => `
+              <tr>
+                <td>${po.po_code}</td>
+                <td>${po.supplier_name}</td>
+                <td>${po.product_name}</td>
+                <td>${po.product_code}</td>
+                <td>${po.quantity}</td>
+                <td>Rp ${parseInt(po.purchase_price).toLocaleString('id-ID')}</td>
+                <td>Rp ${parseInt(po.item_total).toLocaleString('id-ID')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Summary</div>
+        <div class="info-grid">
+          <div>
+            <div class="info-item"><span class="info-label">Total Items:</span> ${purchase_orders.length}</div>
+            <div class="info-item"><span class="info-label">Shipping Cost:</span> Rp ${parseInt(delivery_order.shipping_cost || '0').toLocaleString('id-ID')}</div>
+          </div>
+          <div>
+            <div class="info-item"><span class="info-label">Subtotal:</span> Rp ${(totalAmount - parseInt(delivery_order.shipping_cost || '0')).toLocaleString('id-ID')}</div>
+            <div class="info-item total-row"><span class="info-label">Grand Total:</span> Rp ${totalAmount.toLocaleString('id-ID')}</div>
+          </div>
+        </div>
+      </div>
+
+      ${delivery_order.status === 'delivered' ? `
+      <div class="section">
+        <div class="section-title">Delivery Confirmation</div>
+        <div class="info-grid">
+          <div>
+            <div class="info-item"><span class="info-label">Received Date:</span> ${new Date(delivery_order.received_date).toLocaleDateString()}</div>
+            <div class="info-item"><span class="info-label">Received By:</span> ${delivery_order.received_by}</div>
+          </div>
+          <div>
+            <div class="info-item"><span class="info-label">Confirmation Method:</span> ${delivery_order.confirmation_method || 'N/A'}</div>
+            <div class="info-item"><span class="info-label">Delivery Proof:</span> ${delivery_order.proof_of_delivery ? 'Attached' : 'Not Available'}</div>
+          </div>
+        </div>
+      </div>
+      ` : ''}
+
+      <div class="signature-section">
+        <div>
+          <div>Prepared by:</div>
+          <div class="signature-line">${export_info.exported_by}</div>
+        </div>
+        <div>
+          <div>Received by:</div>
+          <div class="signature-line">${delivery_order.received_by || '________________'}</div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div>Generated on: ${new Date(export_info.export_date).toLocaleString()}</div>
+        <div>Document ID: ${delivery_order.do_code}</div>
+      </div>
+
+      <div class="no-print" style="margin-top: 20px; text-align: center;">
+        <button onclick="window.print()" style="padding: 10px 20px; background: #007acc; color: white; border: none; border-radius: 5px; cursor: pointer;">
+          Print PDF
+        </button>
+        <button onclick="window.close()" style="padding: 10px 20px; background: #666; color: white; border: none; border-radius: 5px; cursor: pointer; margin-left: 10px;">
+          Close
+        </button>
+      </div>
+    </body>
+    </html>
+  `;
+
+  printWindow.document.write(htmlContent);
+  printWindow.document.close();
+
+  // Auto print after a short delay
+  setTimeout(() => {
+    printWindow.print();
+  }, 500);
+};
 
 /* -------------------- Component -------------------- */
 export default function DeliveryTrackingPage() {
   // mode
   const [mode, setMode] = useState<'create' | 'process' | 'view'>('create')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // search / pagination
   const [searchTerm, setSearchTerm] = useState('')
@@ -93,174 +472,198 @@ export default function DeliveryTrackingPage() {
   const createShippingProofRef = useRef<HTMLInputElement | null>(null)
   const podProofRef = useRef<HTMLInputElement | null>(null)
 
-  const seedPOs: PurchaseOrder[] = [
-    {
-      id: 'po-1',
-      poNumber: 'PO-2024-001-01',
-      date: '2024-01-20',
-      supplier: 'PT. Supplier Elektronik',
-      soReference: 'SO-2024-001',
-      customerName: 'PT. Customer Utama',
-      items: [
-        { id: 'i1', productName: 'Laptop Dell XPS 13', sku: 'LP-DLL-XPS-13', quantity: 50, purchasePrice: 11500000 },
-        { id: 'i2', productName: 'Laptop Stand', sku: 'ACC-STD-01', quantity: 50, purchasePrice: 150000 }
-      ],
-      status: 'ready to ship',
-      totalAmount: 65000000,
-      shippingProof: null,
-      receiptProof: null
-    },
-    {
-      id: 'po-2',
-      poNumber: 'PO-2024-001-02',
-      date: '2024-01-21',
-      supplier: 'PT. Supplier Elektronik',
-      soReference: 'SO-2024-001',
-      customerName: 'PT. Customer Utama',
-      items: [
-        { id: 'i3', productName: 'Wireless Mouse Logitech', sku: 'ACC-MSE-LOG-01', quantity: 25, purchasePrice: 200000 },
-        { id: 'i4', productName: 'Keyboard Mechanical', sku: 'ACC-KBD-MCH-01', quantity: 25, purchasePrice: 350000 }
-      ],
-      status: 'ready to ship',
-      totalAmount: 13750000,
-      shippingProof: null,
-      receiptProof: null
-    },
-    {
-      id: 'po-3',
-      poNumber: 'PO-2024-002-01',
-      date: '2024-01-22',
-      supplier: 'CV. Komputer Mandiri',
-      soReference: 'SO-2024-002',
-      customerName: 'CV. Berkah Abadi',
-      items: [
-        { id: 'i5', productName: 'Monitor 24" Samsung', sku: 'MON-24-SAM-FHD', quantity: 40, purchasePrice: 3200000 },
-        { id: 'i6', productName: 'Monitor 27" LG', sku: 'MON-27-LG-4K', quantity: 20, purchasePrice: 4500000 }
-      ],
-      status: 'completed',
-      totalAmount: 218000000,
-      trackingNumber: 'TIKI987654321',
-      courier: 'TIKI',
-      shippingDate: '2024-01-26',
-      shippingCost: 35000,
-      receivedDate: '2024-01-28',
-      confirmationMethod: 'whatsapp',
-      clientNotes: 'Barang diterima dengan baik dan sesuai pesanan. Packaging aman dan tidak ada kerusakan.',
-      shippingProof: null,
-      receiptProof: null
-    },
-    {
-      id: 'po-4',
-      poNumber: 'PO-2024-003-01',
-      date: '2024-01-23',
-      supplier: 'PT. Tech Solutions',
-      soReference: 'SO-2024-003',
-      customerName: 'PT. Digital Innovation',
-      items: [
-        { id: 'i7', productName: 'SSD 1TB Samsung', sku: 'SSD-1TB-SAM', quantity: 100, purchasePrice: 1200000 },
-        { id: 'i8', productName: 'RAM 16GB DDR4', sku: 'RAM-16G-DDR4', quantity: 80, purchasePrice: 600000 }
-      ],
-      status: 'ready to ship',
-      totalAmount: 168000000,
-      shippingProof: null,
-      receiptProof: null
-    },
-    {
-      id: 'po-5',
-      poNumber: 'PO-2024-004-01',
-      date: '2024-01-24',
-      supplier: 'CV. Elektro Nusantara',
-      soReference: 'SO-2024-004',
-      customerName: 'PT. Retail Indonesia',
-      items: [
-        { id: 'i9', productName: 'Tablet iPad Air', sku: 'TAB-IPD-AIR', quantity: 30, purchasePrice: 8500000 },
-        { id: 'i10', productName: 'Apple Pencil', sku: 'ACC-APL-PEN', quantity: 30, purchasePrice: 1500000 }
-      ],
-      status: 'completed',
-      totalAmount: 300000000,
-      trackingNumber: 'JNT555666777',
-      courier: 'J&T',
-      shippingDate: '2024-01-28',
-      shippingCost: 45000,
-      shippingProof: null,
-      receiptProof: null
-    }
-  ]
-
-  const [poData, setPoData] = useState<PurchaseOrder[]>(seedPOs)
-
-  /* -------------------- Seed DO data (examples) -------------------- */
-  const seedDOs: DeliveryOrder[] = [
-    {
-      id: 'do-1',
-      doNumber: 'DO-20241001-101',
-      soReference: 'SO-2024-001',
-      poIds: ['po-1', 'po-2'],
-      courier: 'JNE',
-      trackingNumber: 'JNE1234567890',
-      shippingDate: '2024-02-01',
-      shippingCost: 50000,
-      shippingProof: null,
-      status: 'shipping',
-      proofOfDelivery: null,
-      createdAt: new Date().toISOString()
-    },
-    {
-      id: 'do-2',
-      doNumber: 'DO-20241002-102',
-      soReference: 'SO-2024-002',
-      poIds: ['po-3'],
-      courier: 'TIKI',
-      trackingNumber: 'TIKI987654321',
-      shippingDate: '2024-01-26',
-      shippingCost: 35000,
-      shippingProof: null,
-      status: 'delivered',
-      proofOfDelivery: null,
-      receivedDate: '2024-01-28',
-      receivedBy: 'Admin',
-      createdAt: new Date().toISOString()
-    }
-  ]
-
-  const [doData, setDoData] = useState<DeliveryOrder[]>(seedDOs)
-
-  // ensure PO statuses reflect DO seeds (for demo)
-  useEffect(() => {
-    setPoData(prev =>
-      prev.map(p =>
-        seedDOs.some(d => d.poIds.includes(p.id))
-          ? { ...p, status: doData.find(d => d.poIds.includes(p.id))?.status === 'shipping' ? 'shipping' : 'completed' }
-          : p
-      )
-    )
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // Data states
+  const [poData, setPoData] = useState<PurchaseOrder[]>([])
+  const [doData, setDoData] = useState<DeliveryOrder[]>([])
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: 8,
+    total: 0,
+    totalPages: 0
+  })
 
   // CREATE DO state
   const [selectedPOIds, setSelectedPOIds] = useState<string[]>([])
-  const [createDOForm, setCreateDOForm] = useState({ courier: '', trackingNumber: '', shippingDate: '', shippingCost: '' })
+  const [createDOForm, setCreateDOForm] = useState({ 
+    courier: '', 
+    trackingNumber: '', 
+    shippingDate: '', 
+    shippingCost: '',
+    so_code: ''
+  })
   const [createShippingProof, setCreateShippingProof] = useState<File | null>(null)
 
   // PROCESS DO state
   const [selectedDOId, setSelectedDOId] = useState<string | null>(null)
-  const [podForm, setPodForm] = useState({ receivedDate: '', receivedBy: '', confirmationMethod: '' })
+  const [podForm, setPodForm] = useState({ 
+    receivedDate: '', 
+    receivedBy: '', 
+    confirmationMethod: '',
+    do_code: ''
+  })
   const [podFile, setPodFile] = useState<File | null>(null)
+
+  /* -------------------- Data Fetching -------------------- */
+  const fetchReadyPOs = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const response = await DeliveryOrderService.getReadyPOs({
+        search: searchTerm,
+        page: String(currentPage),
+        limit: String(itemsPerPage)
+      })
+
+      if (response.success) {
+        // Transform API response to match frontend format
+        const transformedPOs: PurchaseOrder[] = response.data.map((po: any) => ({
+          id: po.po_code,
+          poNumber: po.po_code,
+          date: po.date,
+          supplier: po.supplier_name,
+          soReference: po.so_code,
+          customerName: po.customer_name,
+          items: po.items ? po.items.map((item: any) => ({
+            id: item.po_item_code,
+            productName: item.product_name,
+            sku: item.product_code,
+            quantity: item.quantity,
+            purchasePrice: item.purchase_price
+          })) : [],
+          status: 'ready to ship',
+          // Konversi totalAmount ke number
+          totalAmount: parseInt(po.total_amount?.toString() || '0', 10) || 0
+        }))
+
+        setPoData(transformedPOs)
+        setPagination(response.pagination || {
+          page: currentPage,
+          limit: itemsPerPage,
+          total: response.data.length,
+          totalPages: Math.ceil(response.data.length / itemsPerPage)
+        })
+      } else {
+        throw new Error(response.error || 'Failed to fetch data from API')
+      }
+    } catch (err: any) {
+      console.error('❌ Error fetching ready POs:', err)
+      const errorMessage = err.message || 'Gagal memuat data PO';
+      setError(errorMessage)
+      toast.error(errorMessage)
+      
+      // Set empty data on error
+      setPoData([])
+      setPagination({
+        page: 1,
+        limit: itemsPerPage,
+        total: 0,
+        totalPages: 0
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const fetchDeliveryOrders = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const statusMap: Record<string, DOStatus> = {
+        'shipping': 'shipping',
+        'delivered': 'delivered'
+      }
+
+      const statusFilterForAPI = statusFilter === 'all' ? undefined : 
+                               statusFilter === 'ready to ship' ? 'shipping' : statusFilter
+
+      const response = await DeliveryOrderService.getDeliveryOrders({
+        status: statusFilterForAPI,
+        search: searchTerm,
+        page: String(currentPage),
+        limit: String(itemsPerPage)
+      })
+
+      if (response.success) {
+        // Transform API response to match frontend format
+        const transformedDOs: DeliveryOrder[] = response.data.map((doItem: any) => {
+          // FIX: Parse purchase_order_codes sebagai JSON string dari backend
+          let poIds: string[] = [];
+          try {
+            if (doItem.purchase_order_codes) {
+              poIds = JSON.parse(doItem.purchase_order_codes);
+            }
+          } catch (error) {
+            console.warn('Failed to parse purchase_order_codes:', doItem.purchase_order_codes);
+            // Fallback: jika parsing gagal, treat sebagai array dengan satu item
+            poIds = doItem.purchase_order_codes ? [doItem.purchase_order_codes] : [];
+          }
+
+          return {
+            id: doItem.do_code,
+            doNumber: doItem.do_code,
+            soReference: doItem.so_code,
+            poIds: poIds,
+            courier: doItem.courier,
+            trackingNumber: doItem.tracking_number,
+            shippingDate: doItem.shipping_date,
+            // Konversi shippingCost ke number
+            shippingCost: parseInt(doItem.shipping_cost?.toString() || '0', 10) || 0,
+            status: statusMap[doItem.status] || 'shipping',
+            receivedDate: doItem.received_date,
+            receivedBy: doItem.received_by,
+            confirmationMethod: doItem.confirmation_method,
+            createdAt: doItem.created_at
+          }
+        })
+
+        setDoData(transformedDOs)
+        setPagination(response.pagination || {
+          page: currentPage,
+          limit: itemsPerPage,
+          total: response.data.length,
+          totalPages: Math.ceil(response.data.length / itemsPerPage)
+        })
+      } else {
+        throw new Error(response.error || 'Failed to fetch data from API')
+      }
+    } catch (err: any) {
+      console.error('❌ Error fetching delivery orders:', err)
+      const errorMessage = err.message || 'Gagal memuat data DO';
+      setError(errorMessage)
+      toast.error(errorMessage)
+      
+      // Set empty data on error
+      setDoData([])
+      setPagination({
+        page: 1,
+        limit: itemsPerPage,
+        total: 0,
+        totalPages: 0
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Load data based on mode
+  useEffect(() => {
+    if (mode === 'create') {
+      fetchReadyPOs()
+    } else {
+      fetchDeliveryOrders()
+    }
+  }, [mode, searchTerm, statusFilter, currentPage])
 
   /* -------------------- Derived & Helpers -------------------- */
   const term = searchTerm.trim().toLowerCase()
   const poFiltered = poData.filter(po => {
-    const matchesSearch = !term || po.poNumber.toLowerCase().includes(term) || po.customerName.toLowerCase().includes(term) || po.soReference.toLowerCase().includes(term)
+    const matchesSearch = !term || 
+      po.poNumber.toLowerCase().includes(term) || 
+      po.customerName.toLowerCase().includes(term) || 
+      po.soReference.toLowerCase().includes(term)
     const matchesStatus = statusFilter === 'all' || po.status === statusFilter
     return matchesSearch && matchesStatus
   })
-
-  const totalPages = Math.max(1, Math.ceil(poFiltered.length / itemsPerPage))
-  useEffect(() => { if (currentPage > totalPages) setCurrentPage(1) }, [poFiltered.length, totalPages])
-
-  const indexOfLastItem = currentPage * itemsPerPage
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage
-  const currentItems = poFiltered.slice(indexOfFirstItem, indexOfLastItem)
 
   const readyToShipCount = poData.filter(p => p.status === 'ready to ship').length
   const shippingPOCount = poData.filter(p => p.status === 'shipping').length
@@ -270,13 +673,16 @@ export default function DeliveryTrackingPage() {
   const deliveredDOs = doData.filter(d => d.status === 'delivered')
 
   /* -------------------- Selection helpers -------------------- */
-  const toggleSelectPO = (id: string) => setSelectedPOIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
+  const toggleSelectPO = (id: string) => setSelectedPOIds(prev => 
+    prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+  )
+
   const selectAllPage = (checked: boolean) => {
     if (checked) {
-      const pageReadyIds = currentItems.filter(ci => ci.status === 'ready to ship').map(ci => ci.id)
+      const pageReadyIds = poFiltered.filter(ci => ci.status === 'ready to ship').map(ci => ci.id)
       setSelectedPOIds(prev => Array.from(new Set([...prev, ...pageReadyIds])))
     } else {
-      setSelectedPOIds(prev => prev.filter(id => !currentItems.some(ci => ci.id === id)))
+      setSelectedPOIds(prev => prev.filter(id => !poFiltered.some(ci => ci.id === id)))
     }
   }
 
@@ -286,6 +692,14 @@ export default function DeliveryTrackingPage() {
     if (selected.some(s => s.status !== 'ready to ship')) return false
     const soSet = new Set(selected.map(s => s.soReference))
     return soSet.size === 1
+  }
+
+  const getSelectedPOsTotal = () => {
+    return poData.filter(p => selectedPOIds.includes(p.id)).reduce((sum, po) => {
+      // Konversi totalAmount ke integer sebelum menjumlahkan
+      const amount = parseInt(po.totalAmount.toString(), 10) || 0;
+      return sum + amount;
+    }, 0)
   }
 
   /* -------------------- File handlers -------------------- */
@@ -300,249 +714,182 @@ export default function DeliveryTrackingPage() {
   }
 
   /* -------------------- Create DO -------------------- */
-  const handleCreateDO = () => {
+  const handleCreateDO = async () => {
     if (!isValidSelectionForDO()) {
-      alert('Pilih minimal 1 PO Ready to Ship dan pastikan semua PO berasal dari 1 SO yang sama.')
+      toast.error('Pilih minimal 1 PO Ready to Ship dan pastikan semua PO berasal dari 1 SO yang sama.')
       return
     }
     if (!createDOForm.courier || !createDOForm.trackingNumber || !createDOForm.shippingDate) {
-      alert('Isi courier, tracking number, dan shipping date.')
+      toast.error('Isi courier, tracking number, dan shipping date.')
       return
     }
 
     const selectedPOs = poData.filter(p => selectedPOIds.includes(p.id))
-    const soRef = selectedPOs[0].soReference
+    const soRef = selectedPOs[0]?.soReference
 
-    const newDo: DeliveryOrder = {
-      id: `do-${Date.now()}`,
-      doNumber: `DO-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${Math.floor(Math.random()*900+100)}`,
-      soReference: soRef,
-      poIds: selectedPOIds.slice(),
-      courier: createDOForm.courier,
-      trackingNumber: createDOForm.trackingNumber,
-      shippingDate: createDOForm.shippingDate,
-      shippingCost: createDOForm.shippingCost ? Number(createDOForm.shippingCost) : undefined,
-      shippingProof: createShippingProof ?? null,
-      status: 'shipping',
-      createdAt: new Date().toISOString()
+    if (!soRef) {
+      toast.error('Tidak dapat menemukan SO reference')
+      return
     }
 
-    // add DO
-    setDoData(prev => [newDo, ...prev])
+    try {
+      setLoading(true)
+      
+      const result = await DeliveryOrderService.createDeliveryOrder({
+        so_code: soRef,
+        purchase_order_codes: selectedPOIds,
+        courier: createDOForm.courier,
+        tracking_number: createDOForm.trackingNumber,
+        shipping_date: createDOForm.shippingDate,
+        // Konversi shippingCost ke number
+        shipping_cost: createDOForm.shippingCost ? parseInt(createDOForm.shippingCost, 10) || 0 : 0,
+        notes: 'Delivery order created via frontend'
+      }, createShippingProof || undefined)
 
-    // update PO -> shipping & attach shipping fields
-    setPoData(prev => prev.map(po => selectedPOIds.includes(po.id) ? {
-      ...po,
-      status: 'shipping',
-      courier: createDOForm.courier,
-      trackingNumber: createDOForm.trackingNumber,
-      shippingDate: createDOForm.shippingDate,
-      shippingCost: createDOForm.shippingCost ? Number(createDOForm.shippingCost) : undefined,
-      shippingProof: createShippingProof
-    } : po))
-
-    // clear
-    setSelectedPOIds([])
-    setCreateDOForm({ courier: '', trackingNumber: '', shippingDate: '', shippingCost: '' })
-    setCreateShippingProof(null)
-
-    setMode('process')
+      if (result.success) {
+        toast.success(`Delivery Order ${result.do_code} berhasil dibuat!`)
+        
+        // Clear form
+        setSelectedPOIds([])
+        setCreateDOForm({ 
+          courier: '', 
+          trackingNumber: '', 
+          shippingDate: '', 
+          shippingCost: '', 
+          so_code: '' 
+        })
+        setCreateShippingProof(null)
+        if (createShippingProofRef.current) {
+          createShippingProofRef.current.value = ''
+        }
+        
+        // Refresh data
+        await fetchReadyPOs()
+        setMode('process')
+      } else {
+        throw new Error(result.error || 'Failed to create delivery order')
+      }
+    } catch (error: any) {
+      console.error('❌ Error creating DO:', error)
+      toast.error(error.message || 'Gagal membuat Delivery Order')
+    } finally {
+      setLoading(false)
+    }
   }
 
   /* -------------------- Process DO (POD) -------------------- */
-  const handleStartProcessDO = (doId: string) => {
-    setSelectedDOId(prev => prev === doId ? null : doId)
+  const handleStartProcessDO = (doItem: DeliveryOrder) => {
+    setSelectedDOId(prev => prev === doItem.id ? null : doItem.id)
+    setPodForm({
+      receivedDate: new Date().toISOString().split('T')[0], // Set today as default
+      receivedBy: '',
+      confirmationMethod: '',
+      do_code: doItem.doNumber
+    })
     setPodFile(null)
-    setPodForm({ receivedDate: '', receivedBy: '', confirmationMethod: '' })
   }
 
-  const handleSubmitPOD = () => {
-    if (!selectedDOId) return alert('Pilih DO untuk diproses.')
-    if (!podFile || !podForm.receivedDate || !podForm.receivedBy) return alert('Upload proof & isi received date & received by.')
+  const handleSubmitPOD = async () => {
+    if (!selectedDOId || !podForm.do_code) {
+      toast.error('Pilih DO untuk diproses.')
+      return
+    }
+    if (!podFile || !podForm.receivedDate || !podForm.receivedBy) {
+      toast.error('Upload proof & isi received date & received by.')
+      return
+    }
 
-    // mark DO delivered
-    setDoData(prev => prev.map(d => d.id === selectedDOId ? { ...d, status: 'delivered', proofOfDelivery: podFile, receivedDate: podForm.receivedDate, receivedBy: podForm.receivedBy, confirmationMethod: podForm.confirmationMethod || undefined } : d))
-
-    // update related POs -> completed
-    const doItem = doData.find(d => d.id === selectedDOId)
-    const poIds = doItem?.poIds ?? []
-    setPoData(prev => prev.map(po => poIds.includes(po.id) ? {
-      ...po,
-      status: 'completed',
-      receivedDate: podForm.receivedDate,
-      confirmationMethod: podForm.confirmationMethod || undefined,
-      clientNotes: po.clientNotes ?? `Received by ${podForm.receivedBy}`,
-      receiptProof: podFile
-    } : po))
-
-    setSelectedDOId(null)
-    setPodFile(null)
-    setPodForm({ receivedDate: '', receivedBy: '', confirmationMethod: '' })
-    alert('DO processed: marked delivered and related PO set to completed.')
-  }
-
-  /* -------------------- Export PDF (react-pdf) helpers -------------------- */
-
-  // DO Report Document component (react-pdf)
-  const DOReportDoc = ({ doItem, relatedPOs }: { doItem: DeliveryOrder, relatedPOs: PurchaseOrder[] }) => (
-    <Document>
-      <Page size="A4" style={pdfStyles.page}>
-        <View style={pdfStyles.headerRow}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Image src="/images/logo/logo.png" style={pdfStyles.logo} />
-            <View>
-              <Text style={pdfStyles.title}>Delivery Order Report</Text>
-              <Text style={pdfStyles.small}>{doItem.doNumber} • {doItem.soReference}</Text>
-            </View>
-          </View>
-          <View style={{ textAlign: 'right' }}>
-            <Text style={pdfStyles.small}>Date: {new Date(doItem.createdAt).toLocaleDateString('id-ID')}</Text>
-            <Text style={pdfStyles.small}>Status: {doItem.status}</Text>
-          </View>
-        </View>
-
-        <View style={pdfStyles.section}>
-          <Text style={{ fontSize: 11, fontWeight: '700' }}>Shipment Info</Text>
-          <Text style={pdfStyles.small}>Courier: {doItem.courier ?? '-'}</Text>
-          <Text style={pdfStyles.small}>Tracking: {doItem.trackingNumber ?? '-'}</Text>
-          <Text style={pdfStyles.small}>Shipping Date: {doItem.shippingDate ?? '-'}</Text>
-          <Text style={pdfStyles.small}>Shipping Cost: {doItem.shippingCost ? `Rp ${doItem.shippingCost.toLocaleString('id-ID')}` : '-'}</Text>
-        </View>
-
-        <View style={pdfStyles.section}>
-          <Text style={{ fontSize: 11, fontWeight: '700', marginBottom: 4 }}>Related POs</Text>
-          <View style={pdfStyles.table}>
-            <View style={pdfStyles.tableRow}>
-              <Text style={[pdfStyles.th, { width: '25%' }]}>PO Number</Text>
-              <Text style={[pdfStyles.th, { width: '35%' }]}>Customer</Text>
-              <Text style={[pdfStyles.th, { width: '20%', textAlign: 'right' }]}>Total</Text>
-              <Text style={[pdfStyles.th, { width: '20%', textAlign: 'center' }]}>Status</Text>
-            </View>
-            {relatedPOs.map((p, idx) => (
-              <View key={p.id} style={pdfStyles.tableRow}>
-                <Text style={[pdfStyles.td, { width: '25%' }]}>{p.poNumber}</Text>
-                <Text style={[pdfStyles.td, { width: '35%' }]}>{p.customerName}</Text>
-                <Text style={[pdfStyles.td, { width: '20%', textAlign: 'right' }]}>{`Rp ${p.totalAmount.toLocaleString('id-ID')}`}</Text>
-                <Text style={[pdfStyles.td, { width: '20%', textAlign: 'center' }]}>{p.status}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        <Text style={pdfStyles.footer}>Generated by system • {new Date().toLocaleDateString('id-ID')}</Text>
-      </Page>
-    </Document>
-  )
-
-  // Invoice Document component (react-pdf) - flatten items from POs into invoice rows
-  const InvoiceDoc = ({ doItem, relatedPOs }: { doItem: DeliveryOrder, relatedPOs: PurchaseOrder[] }) => {
-    const allItems = relatedPOs.flatMap(po => po.items.map(it => ({ ...it, poNumber: po.poNumber })))
-    const subtotal = allItems.reduce((s, it) => s + (it.quantity * it.purchasePrice), 0)
-    const shipping = doItem.shippingCost || 0
-    const total = subtotal + shipping
-
-    return (
-      <Document>
-        <Page size="A4" style={pdfStyles.page}>
-          <View style={pdfStyles.headerRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Image src="/images/logo/logo.png" style={pdfStyles.logo} />
-              <View>
-                <Text style={pdfStyles.title}>PT Placeholder Logistics</Text>
-                <Text style={pdfStyles.small}>Jl. Contoh No.123 • Jakarta</Text>
-              </View>
-            </View>
-            <View style={{ textAlign: 'right' }}>
-              <Text style={{ fontSize: 12, fontWeight: '700' }}>INVOICE</Text>
-              <Text style={pdfStyles.small}>No: INV-{doItem.doNumber}</Text>
-              <Text style={pdfStyles.small}>Date: {new Date().toLocaleDateString('id-ID')}</Text>
-            </View>
-          </View>
-
-          <View style={pdfStyles.section}>
-            <Text style={{ fontSize: 11, fontWeight: '700' }}>Bill To:</Text>
-            <Text style={pdfStyles.small}>{relatedPOs[0]?.customerName ?? '-'}</Text>
-            <Text style={pdfStyles.small}>SO: {relatedPOs.map(p => p.soReference).join(', ') || '-'}</Text>
-            <Text style={pdfStyles.small}>PO(s): {relatedPOs.map(p => p.poNumber).join(', ') || '-'}</Text>
-          </View>
-
-          <View style={pdfStyles.section}>
-            <View style={pdfStyles.table}>
-              <View style={pdfStyles.tableRow}>
-                <Text style={[pdfStyles.th, { width: '6%' }]}>No</Text>
-                <Text style={[pdfStyles.th, { width: '44%' }]}>Description</Text>
-                <Text style={[pdfStyles.th, { width: '16%', textAlign: 'center' }]}>SKU</Text>
-                <Text style={[pdfStyles.th, { width: '8%', textAlign: 'center' }]}>Qty</Text>
-                <Text style={[pdfStyles.th, { width: '14%', textAlign: 'right' }]}>Unit</Text>
-                <Text style={[pdfStyles.th, { width: '12%', textAlign: 'right' }]}>Total</Text>
-              </View>
-
-              {allItems.map((it, idx) => (
-                <View key={idx} style={pdfStyles.tableRow}>
-                  <Text style={[pdfStyles.td, { width: '6%', textAlign: 'center' }]}>{idx + 1}</Text>
-                  <Text style={[pdfStyles.td, { width: '44%' }]}>{it.productName}</Text>
-                  <Text style={[pdfStyles.td, { width: '16%', textAlign: 'center' }]}>{it.sku}</Text>
-                  <Text style={[pdfStyles.td, { width: '8%', textAlign: 'center' }]}>{it.quantity}</Text>
-                  <Text style={[pdfStyles.td, { width: '14%', textAlign: 'right' }]}>{`Rp ${it.purchasePrice.toLocaleString('id-ID')}`}</Text>
-                  <Text style={[pdfStyles.td, { width: '12%', textAlign: 'right' }]}>{`Rp ${(it.quantity * it.purchasePrice).toLocaleString('id-ID')}`}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-
-          <View style={{ marginTop: 8, alignItems: 'flex-end' }}>
-            <Text style={pdfStyles.small}>Subtotal: Rp {subtotal.toLocaleString('id-ID')}</Text>
-            <Text style={pdfStyles.small}>Shipping: Rp {shipping.toLocaleString('id-ID')}</Text>
-            <Text style={{ fontSize: 12, fontWeight: '700', marginTop: 4 }}>Total: Rp {total.toLocaleString('id-ID')}</Text>
-          </View>
-
-          <Text style={pdfStyles.footer}>Invoice generated by system • {new Date().toLocaleDateString('id-ID')}</Text>
-        </Page>
-      </Document>
-    )
-  }
-
-  // helper to create blob and trigger download from react-pdf Document
-  const downloadPdfDocument = async (docElement: JSX.Element, filename: string) => {
     try {
-      const asPdf = pdf(docElement)
-      const blob = await asPdf.toBlob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (err) {
-      console.error('PDF generation error', err)
-      alert('Gagal generate PDF. Check console.')
+      setLoading(true)
+      
+      const result = await DeliveryOrderService.markAsDelivered({
+        do_code: podForm.do_code,
+        received_date: podForm.receivedDate,
+        received_by: podForm.receivedBy,
+        confirmation_method: podForm.confirmationMethod || undefined,
+        notes: `Received by ${podForm.receivedBy}`
+      }, podFile)
+
+      if (result.success) {
+        toast.success('DO berhasil diproses dan ditandai sebagai delivered!')
+        
+        // Clear form
+        setSelectedDOId(null)
+        setPodFile(null)
+        setPodForm({ receivedDate: '', receivedBy: '', confirmationMethod: '', do_code: '' })
+        if (podProofRef.current) {
+          podProofRef.current.value = ''
+        }
+        
+        // Refresh data
+        await fetchDeliveryOrders()
+      } else {
+        throw new Error(result.error || 'Failed to process delivery order')
+      }
+    } catch (error: any) {
+      console.error('❌ Error processing POD:', error)
+      toast.error(error.message || 'Gagal memproses Proof of Delivery')
+    } finally {
+      setLoading(false)
     }
   }
 
-  /* -------------------- Export DO to PDF (react-pdf) -------------------- */
-  const exportDOToPDF = (doId: string) => {
-    const doItem = doData.find(d => d.id === doId)
-    if (!doItem) return alert('DO not found')
-    const relatedPOs = poData.filter(p => doItem.poIds.includes(p.id))
-    const docElement = <DOReportDoc doItem={doItem} relatedPOs={relatedPOs} />
-    const filename = `${doItem.doNumber}.pdf`
-    downloadPdfDocument(docElement, filename)
+  /* -------------------- Export Functions -------------------- */
+  const exportDOToPDF = async (doId: string) => {
+    try {
+      const doItem = doData.find(d => d.id === doId)
+      if (!doItem) {
+        toast.error('DO tidak ditemukan')
+        return
+      }
+
+      const result = await DeliveryOrderService.exportDeliveryOrder(doItem.doNumber, 'pdf')
+      
+      if (result.success) {
+        // Generate PDF from the data
+        generatePDF(result.data)
+        toast.success(`PDF untuk DO ${doItem.doNumber} berhasil dibuat!`)
+      } else {
+        throw new Error(result.error || 'Failed to export delivery order')
+      }
+    } catch (error: any) {
+      console.error('❌ Error exporting DO:', error)
+      toast.error(error.message || 'Gagal mengekspor DO')
+    }
   }
 
-  /* -------------------- Export Invoice for DO (react-pdf) -------------------- */
-  const exportInvoiceForDO = (doId: string) => {
-    const doItem = doData.find(d => d.id === doId)
-    if (!doItem) return alert('DO not found')
-    const relatedPOs = poData.filter(p => doItem.poIds.includes(p.id))
-    const docElement = <InvoiceDoc doItem={doItem} relatedPOs={relatedPOs} />
-    const filename = `Invoice_${doItem.doNumber}.pdf`
-    downloadPdfDocument(docElement, filename)
+  const exportInvoiceForDO = async (doId: string) => {
+    try {
+      const doItem = doData.find(d => d.id === doId)
+      if (!doItem) {
+        toast.error('DO tidak ditemukan')
+        return
+      }
+
+      // For invoice, we'll also use PDF format
+      const result = await DeliveryOrderService.exportDeliveryOrder(doItem.doNumber, 'pdf')
+      
+      if (result.success) {
+        // Create invoice PDF from the same data but with invoice template
+        const invoiceData = {
+          ...result.data,
+          invoice_number: `INV-${doItem.doNumber}`,
+          is_invoice: true
+        }
+        generatePDF(invoiceData)
+        toast.success(`Invoice untuk ${doItem.doNumber} berhasil dibuat!`)
+      } else {
+        throw new Error(result.error || 'Failed to export invoice data')
+      }
+    } catch (error: any) {
+      console.error('❌ Error exporting invoice:', error)
+      toast.error(error.message || 'Gagal generate invoice')
+    }
   }
 
-  /* -------------------- Export CSV for all DOs in VIEW table -------------------- */
   const exportAllDOsToCSV = () => {
     if (!doData || doData.length === 0) {
-      alert('No DOs to export')
+      toast.error('Tidak ada data DO untuk diekspor')
       return
     }
 
@@ -556,14 +903,18 @@ export default function DeliveryTrackingPage() {
       d.trackingNumber || '',
       d.status,
       d.shippingDate || '',
-      d.shippingCost ? String(d.shippingCost) : '',
+      // Konversi shippingCost ke string dengan format
+      d.shippingCost ? `Rp ${d.shippingCost.toLocaleString('id-ID')}` : '',
       d.receivedDate || '',
       d.receivedBy || '',
       d.confirmationMethod || '',
       d.createdAt || ''
     ])
 
-    const csvContent = [headers, ...rows].map(r => r.map(cell => `"${String(cell).replace(/"/g,'""')}"`).join(',')).join('\n')
+    const csvContent = [headers, ...rows].map(r => 
+      r.map(cell => `"${String(cell).replace(/"/g,'""')}"`).join(',')
+    ).join('\n')
+    
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -571,6 +922,8 @@ export default function DeliveryTrackingPage() {
     a.download = `delivery_orders_${new Date().toISOString().slice(0,10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
+    
+    toast.success('Data DO berhasil diekspor ke CSV')
   }
 
   /* -------------------- UI helpers -------------------- */
@@ -579,25 +932,58 @@ export default function DeliveryTrackingPage() {
     if (s === 'shipping') return <Badge className="bg-yellow-100 text-yellow-800">Shipping</Badge>
     return <Badge className="bg-green-100 text-green-800">Completed</Badge>
   }
-  const renderDOStatusBadge = (s: DOStatus) => s === 'shipping' ? <Badge className="bg-yellow-100 text-yellow-800">Shipping</Badge> : <Badge className="bg-green-100 text-green-800">Delivered</Badge>
+
+  const renderDOStatusBadge = (s: DOStatus) => 
+    s === 'shipping' ? 
+      <Badge className="bg-yellow-100 text-yellow-800">Shipping</Badge> : 
+      <Badge className="bg-green-100 text-green-800">Delivered</Badge>
 
   const copyToClipboard = async (text: string) => {
-    try { await navigator.clipboard.writeText(text); alert('Copied to clipboard') } catch { alert('Unable to copy') }
+    try { 
+      await navigator.clipboard.writeText(text); 
+      toast.success('Copied to clipboard') 
+    } catch { 
+      toast.error('Unable to copy') 
+    }
   }
 
-  /* -------------------- Pagination component -------------------- */
+  /* -------------------- Pagination Component -------------------- */
   const Pagination = () => (
     <div className="flex items-center justify-between border-t pt-4">
       <div className="text-sm text-gray-600">
-        Showing {Math.min(poFiltered.length, indexOfFirstItem + 1)} to {Math.min(indexOfLastItem, poFiltered.length)} of {poFiltered.length} results
+        Showing {Math.min(pagination.total, (pagination.page - 1) * pagination.limit + 1)} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} results
       </div>
       <div className="flex gap-2">
-        <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>Prev</Button>
-        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={() => setCurrentPage(p => Math.max(1, p - 1))} 
+          disabled={currentPage === 1 || loading}
+        >
+          Prev
+        </Button>
+        {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
           const pageNum = i + 1
-          return <Button key={pageNum} variant={currentPage === pageNum ? 'default' : 'outline'} size="sm" onClick={() => setCurrentPage(pageNum)}>{pageNum}</Button>
+          return (
+            <Button 
+              key={pageNum} 
+              variant={currentPage === pageNum ? 'default' : 'outline'} 
+              size="sm" 
+              onClick={() => setCurrentPage(pageNum)}
+              disabled={loading}
+            >
+              {pageNum}
+            </Button>
+          )
         })}
-        <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>Next</Button>
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={() => setCurrentPage(p => Math.min(pagination.totalPages, p + 1))} 
+          disabled={currentPage === pagination.totalPages || loading}
+        >
+          Next
+        </Button>
       </div>
     </div>
   )
@@ -616,22 +1002,73 @@ export default function DeliveryTrackingPage() {
               </div>
 
               <div className="flex gap-2">
-                <Button variant={mode === 'create' ? 'default' : 'outline'} onClick={() => setMode('create')}>DO CREATE</Button>
-                <Button variant={mode === 'process' ? 'default' : 'outline'} onClick={() => setMode('process')}>DO PROCESS</Button>
-                <Button variant={mode === 'view' ? 'default' : 'outline'} onClick={() => setMode('view')}>VIEW DOs</Button>
+                <Button 
+                  variant={mode === 'create' ? 'default' : 'outline'} 
+                  onClick={() => setMode('create')}
+                  disabled={loading}
+                >
+                  {loading && mode === 'create' ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : null}
+                  DO CREATE
+                </Button>
+                <Button 
+                  variant={mode === 'process' ? 'default' : 'outline'} 
+                  onClick={() => setMode('process')}
+                  disabled={loading}
+                >
+                  {loading && mode === 'process' ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : null}
+                  DO PROCESS
+                </Button>
+                <Button 
+                  variant={mode === 'view' ? 'default' : 'outline'} 
+                  onClick={() => setMode('view')}
+                  disabled={loading}
+                >
+                  {loading && mode === 'view' ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : null}
+                  VIEW DOs
+                </Button>
               </div>
             </div>
           </CardHeader>
 
           <CardContent>
+            {/* Error State */}
+            {error && (
+              <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3">
+                <AlertCircle className="h-5 w-5 text-red-600" />
+                <div>
+                  <div className="font-medium text-red-800">Error</div>
+                  <div className="text-red-600 text-sm">{error}</div>
+                </div>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => setError(null)}
+                  className="ml-auto"
+                >
+                  Dismiss
+                </Button>
+              </div>
+            )}
+
             {/* Filters */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
               <div className="flex gap-2 items-center">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
-                  <Input className="pl-10 w-64" placeholder="Search PO number, customer, SO..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                  <Input 
+                    className="pl-10 w-64" 
+                    placeholder="Search PO number, customer, SO..." 
+                    value={searchTerm} 
+                    onChange={e => setSearchTerm(e.target.value)}
+                    disabled={loading}
+                  />
                 </div>
-                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} className="border rounded px-3 py-2 text-sm">
+                <select 
+                  value={statusFilter} 
+                  onChange={e => setStatusFilter(e.target.value as any)} 
+                  className="border rounded px-3 py-2 text-sm"
+                  disabled={loading}
+                >
                   <option value="all">All PO</option>
                   <option value="ready to ship">Ready to Ship</option>
                   <option value="shipping">Shipping</option>
@@ -646,240 +1083,473 @@ export default function DeliveryTrackingPage() {
               </div>
             </div>
 
+            {/* Loading State */}
+            {loading && (
+              <div className="flex justify-center items-center py-8">
+                <RefreshCw className="h-8 w-8 animate-spin text-blue-600" />
+                <span className="ml-2 text-gray-600">Loading...</span>
+              </div>
+            )}
+
             {/* Table area */}
-            <div className="overflow-x-auto">
-              {/* CREATE MODE */}
-              {mode === 'create' && (
-                <>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>
-                          <input type="checkbox" checked={currentItems.length > 0 && currentItems.every(ci => selectedPOIds.includes(ci.id) || ci.status !== 'ready to ship')} onChange={(e) => selectAllPage(e.target.checked)} />
-                        </TableHead>
-                        <TableHead>PO Number</TableHead>
-                        <TableHead>Customer</TableHead>
-                        <TableHead>SO Reference</TableHead>
-                        <TableHead>Supplier</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="text-right">Total</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {currentItems.map(po => (
-                        <TableRow key={po.id} className={`hover:bg-gray-50 ${selectedPOIds.includes(po.id) ? 'bg-blue-50' : ''}`}>
-                          <TableCell>
-                            <input type="checkbox" checked={selectedPOIds.includes(po.id)} disabled={po.status !== 'ready to ship'} onChange={() => toggleSelectPO(po.id)} />
-                          </TableCell>
-                          <TableCell className="font-medium">{po.poNumber}</TableCell>
-                          <TableCell>{po.customerName}</TableCell>
-                          <TableCell className="text-blue-600">{po.soReference}</TableCell>
-                          <TableCell>{po.supplier}</TableCell>
-                          <TableCell>{renderPOStatusBadge(po.status)}</TableCell>
-                          <TableCell className="text-right">Rp {po.totalAmount.toLocaleString('id-ID')}</TableCell>
+            {!loading && (
+              <div className="overflow-x-auto">
+                {/* CREATE MODE */}
+                {mode === 'create' && (
+                  <>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>
+                            <input 
+                              type="checkbox" 
+                              checked={poFiltered.length > 0 && poFiltered.every(ci => selectedPOIds.includes(ci.id) || ci.status !== 'ready to ship')} 
+                              onChange={(e) => selectAllPage(e.target.checked)}
+                              disabled={loading}
+                            />
+                          </TableHead>
+                          <TableHead>PO Number</TableHead>
+                          <TableHead>Customer</TableHead>
+                          <TableHead>SO Reference</TableHead>
+                          <TableHead>Supplier</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="text-right">Total</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {poFiltered.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={7} className="text-center text-sm text-gray-500 py-8">
+                              {searchTerm ? 'Tidak ada PO yang sesuai dengan pencarian' : 'Tidak ada PO yang ready untuk delivery'}
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          poFiltered.map(po => (
+                            <TableRow key={po.id} className={`hover:bg-gray-50 ${selectedPOIds.includes(po.id) ? 'bg-blue-50' : ''}`}>
+                              <TableCell>
+                                <input 
+                                  type="checkbox" 
+                                  checked={selectedPOIds.includes(po.id)} 
+                                  disabled={po.status !== 'ready to ship' || loading}
+                                  onChange={() => toggleSelectPO(po.id)} 
+                                />
+                              </TableCell>
+                              <TableCell className="font-medium">{po.poNumber}</TableCell>
+                              <TableCell>{po.customerName}</TableCell>
+                              <TableCell className="text-blue-600">{po.soReference}</TableCell>
+                              <TableCell>{po.supplier}</TableCell>
+                              <TableCell>{renderPOStatusBadge(po.status)}</TableCell>
+                              <TableCell className="text-right">Rp {po.totalAmount.toLocaleString('id-ID')}</TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
 
-                  <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
-                    <div className="col-span-2">
-                      <Card>
-                        <CardHeader><CardTitle>Create Delivery Order</CardTitle></CardHeader>
-                        <CardContent>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <div>
-                              <Label>Courier *</Label>
-                              <input className="w-full border rounded px-3 py-2" value={createDOForm.courier} onChange={e => setCreateDOForm(p => ({ ...p, courier: e.target.value }))} />
-                            </div>
-                            <div>
-                              <Label>Tracking Number *</Label>
-                              <input className="w-full border rounded px-3 py-2" value={createDOForm.trackingNumber} onChange={e => setCreateDOForm(p => ({ ...p, trackingNumber: e.target.value }))} />
-                            </div>
-                            <div>
-                              <Label>Shipping Date *</Label>
-                              <input type="date" className="w-full border rounded px-3 py-2" value={createDOForm.shippingDate} onChange={e => setCreateDOForm(p => ({ ...p, shippingDate: e.target.value }))} />
-                            </div>
-                            <div>
-                              <Label>Shipping Cost</Label>
-                              <input type="number" className="w-full border rounded px-3 py-2" value={createDOForm.shippingCost} onChange={e => setCreateDOForm(p => ({ ...p, shippingCost: e.target.value }))} />
-                            </div>
-                          </div>
-
-                          <div className="mt-3">
-                            <Label>Shipping Proof (optional)</Label>
-                            <div className="flex items-center gap-2 mt-2">
-                              <Button variant="outline" onClick={() => createShippingProofRef.current?.click()}><Upload className="h-4 w-4 mr-2" /> Upload</Button>
-                              <input ref={createShippingProofRef} type="file" className="hidden" onChange={handleCreateShippingProof} accept=".pdf,.jpg,.jpeg,.png" />
-                              <div className="text-sm text-gray-600">{createShippingProof ? createShippingProof.name : 'No file uploaded'}</div>
-                            </div>
-                          </div>
-
-                          <div className="mt-4 flex gap-2">
-                            <Button onClick={handleCreateDO} disabled={!isValidSelectionForDO()}><Truck className="h-4 w-4 mr-2" /> Create DO ({selectedPOIds.length})</Button>
-                            <Button variant="ghost" onClick={() => { setSelectedPOIds([]); setCreateDOForm({ courier: '', trackingNumber: '', shippingDate: '', shippingCost: '' }); setCreateShippingProof(null) }}>Clear</Button>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </div>
-
-                    <div>
-                      <Card>
-                        <CardHeader><CardTitle>Selection Info</CardTitle></CardHeader>
-                        <CardContent>
-                          <div className="text-sm">
-                            <div>Selected PO: <strong>{selectedPOIds.length}</strong></div>
-                            <div className="mt-2 text-xs text-gray-500">Rules: only PO with status <strong>Ready to Ship</strong>. All selected must be from same SO.</div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </div>
-                  </div>
-
-                  <div className="mt-4">{poFiltered.length > 0 && <Pagination />}</div>
-                </>
-              )}
-
-              {/* PROCESS MODE */}
-              {mode === 'process' && (
-                <>
-                  <div className="mb-3 flex justify-end gap-2">
-                    <Button variant="ghost" onClick={() => { /* helper */ }}>Refresh</Button>
-                  </div>
-
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>DO Number</TableHead>
-                        <TableHead>SO</TableHead>
-                        <TableHead>PO Count</TableHead>
-                        <TableHead>Courier</TableHead>
-                        <TableHead>Tracking</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Action</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {shippingDOs.length === 0 && (
-                        <TableRow><TableCell colSpan={7} className="text-center text-sm text-gray-500">No DOs in shipping state</TableCell></TableRow>
-                      )}
-                      {shippingDOs.map(d => (
-                        <TableRow key={d.id}>
-                          <TableCell className="font-medium">{d.doNumber}</TableCell>
-                          <TableCell>{d.soReference}</TableCell>
-                          <TableCell>{d.poIds.length}</TableCell>
-                          <TableCell>{d.courier}</TableCell>
-                          <TableCell className="text-blue-600">{d.trackingNumber}</TableCell>
-                          <TableCell>{renderDOStatusBadge(d.status)}</TableCell>
-                          <TableCell>
-                            <div className="flex gap-2">
-                              <Button size="sm" variant={selectedDOId === d.id ? 'default' : 'outline'} onClick={() => handleStartProcessDO(d.id)}>{selectedDOId === d.id ? 'Cancel' : 'Process'}</Button>
-                              <Button size="sm" variant="outline" onClick={() => exportDOToPDF(d.id)}><Download className="h-4 w-4 mr-1" />Export PDF</Button>
-                              <Button size="sm" variant="ghost" onClick={() => copyToClipboard(d.trackingNumber ?? '')}><Copy className="h-4 w-4 mr-1" />Copy</Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-
-                  {selectedDOId && (
-                    <div className="mt-4">
-                      <Card>
-                        <CardHeader><CardTitle>Process DO - Proof of Delivery</CardTitle></CardHeader>
-                        <CardContent>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <div>
-                              <Label>Upload POD (file)</Label>
-                              <div className="flex items-center gap-2 mt-2">
-                                <Button variant="outline" onClick={() => podProofRef.current?.click()}><Upload className="h-4 w-4 mr-2" /> Upload</Button>
-                                <input ref={podProofRef} type="file" className="hidden" onChange={handlePodProof} accept=".pdf,.jpg,.jpeg,.png" />
-                                <div className="text-sm text-gray-600">{podFile ? podFile.name : 'No file'}</div>
+                    <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+                      <div className="col-span-2">
+                        <Card>
+                          <CardHeader><CardTitle>Create Delivery Order</CardTitle></CardHeader>
+                          <CardContent>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <div>
+                                <Label>Courier *</Label>
+                                <Input 
+                                  value={createDOForm.courier} 
+                                  onChange={e => setCreateDOForm(p => ({ ...p, courier: e.target.value }))}
+                                  disabled={loading}
+                                  placeholder="JNE, TIKI, J&T, etc."
+                                />
+                              </div>
+                              <div>
+                                <Label>Tracking Number *</Label>
+                                <Input 
+                                  value={createDOForm.trackingNumber} 
+                                  onChange={e => setCreateDOForm(p => ({ ...p, trackingNumber: e.target.value }))}
+                                  disabled={loading}
+                                  placeholder="Tracking number"
+                                />
+                              </div>
+                              <div>
+                                <Label>Shipping Date *</Label>
+                                <Input 
+                                  type="date" 
+                                  value={createDOForm.shippingDate} 
+                                  onChange={e => setCreateDOForm(p => ({ ...p, shippingDate: e.target.value }))}
+                                  disabled={loading}
+                                />
+                              </div>
+                              <div>
+                                <Label>Shipping Cost</Label>
+                                <Input 
+                                  type="number" 
+                                  value={createDOForm.shippingCost} 
+                                  onChange={e => setCreateDOForm(p => ({ ...p, shippingCost: e.target.value }))}
+                                  disabled={loading}
+                                  placeholder="0"
+                                />
                               </div>
                             </div>
-                            <div>
-                              <Label>Received Date *</Label>
-                              <input type="date" className="w-full border rounded px-3 py-2" value={podForm.receivedDate} onChange={(e) => setPodForm(p => ({ ...p, receivedDate: e.target.value }))} />
-                            </div>
-                            <div>
-                              <Label>Received By *</Label>
-                              <input className="w-full border rounded px-3 py-2" value={podForm.receivedBy} onChange={(e) => setPodForm(p => ({ ...p, receivedBy: e.target.value }))} />
-                            </div>
-                            <div>
-                              <Label>Confirmation Method</Label>
-                              <select className="w-full border rounded px-3 py-2" value={podForm.confirmationMethod} onChange={(e) => setPodForm(p => ({ ...p, confirmationMethod: e.target.value }))}>
-                                <option value="">Select method</option>
-                                <option value="whatsapp">WhatsApp</option>
-                                <option value="email">Email</option>
-                                <option value="call">Phone Call</option>
-                                <option value="other">Other</option>
-                              </select>
-                            </div>
-                            <div className="md:col-span-2">
-                              <Label>Notes (auto)</Label>
-                              <input className="w-full border rounded px-3 py-2" value={podForm.receivedBy ? `Received by ${podForm.receivedBy}` : ''} readOnly />
-                            </div>
-                          </div>
 
-                          <div className="mt-4 flex gap-2">
-                            <Button onClick={handleSubmitPOD}><CheckCircle className="h-4 w-4 mr-2" /> Submit POD</Button>
-                            <Button variant="ghost" onClick={() => { setSelectedDOId(null); setPodFile(null); setPodForm({ receivedDate: '', receivedBy: '', confirmationMethod: '' }) }}>Cancel</Button>
-                          </div>
-                        </CardContent>
-                      </Card>
+                            <div className="mt-3">
+                              <Label>Shipping Proof (optional)</Label>
+                              <div className="flex items-center gap-2 mt-2">
+                                <Button 
+                                  variant="outline" 
+                                  onClick={() => createShippingProofRef.current?.click()}
+                                  disabled={loading}
+                                >
+                                  <Upload className="h-4 w-4 mr-2" /> Upload
+                                </Button>
+                                <input 
+                                  ref={createShippingProofRef} 
+                                  type="file" 
+                                  className="hidden" 
+                                  onChange={handleCreateShippingProof} 
+                                  accept=".pdf,.jpg,.jpeg,.png"
+                                  disabled={loading}
+                                />
+                                <div className="text-sm text-gray-600">
+                                  {createShippingProof ? createShippingProof.name : 'No file uploaded'}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="mt-4 flex gap-2">
+                              <Button 
+                                onClick={handleCreateDO} 
+                                disabled={!isValidSelectionForDO() || loading}
+                              >
+                                {loading ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <Truck className="h-4 w-4 mr-2" />}
+                                Create DO ({selectedPOIds.length})
+                              </Button>
+                              <Button 
+                                variant="ghost" 
+                                onClick={() => { 
+                                  setSelectedPOIds([]); 
+                                  setCreateDOForm({ courier: '', trackingNumber: '', shippingDate: '', shippingCost: '', so_code: '' }); 
+                                  setCreateShippingProof(null) 
+                                }}
+                                disabled={loading}
+                              >
+                                Clear
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+
+                      <div>
+                        <Card>
+                          <CardHeader><CardTitle>Selection Info</CardTitle></CardHeader>
+                          <CardContent>
+                            <div className="text-sm">
+                              <div>Selected PO: <strong>{selectedPOIds.length}</strong></div>
+                              {selectedPOIds.length > 0 && (
+                                <div className="mt-2 space-y-2">
+                                  <div>
+                                    <div className="font-medium">SO Reference:</div>
+                                    <div className="text-blue-600">
+                                      {poData.find(p => p.id === selectedPOIds[0])?.soReference}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="font-medium">Total Amount:</div>
+                                    <div className="text-green-600 font-semibold">
+                                      Rp {getSelectedPOsTotal().toLocaleString('id-ID')}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="font-medium">POs Included:</div>
+                                    <div className="text-xs text-gray-600">
+                                      {selectedPOIds.map(id => poData.find(p => p.id === id)?.poNumber).join(', ')}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="mt-2 text-xs text-gray-500">
+                                Rules: only PO with status <strong>Ready to Ship</strong>. All selected must be from same SO.
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
                     </div>
-                  )}
-                </>
-              )}
 
-              {/* VIEW MODE */}
-              {mode === 'view' && (
-                <>
-                  <div className="mb-3 flex justify-between items-center">
-                    <div />
-                    <div className="flex gap-2">
-                      <Button onClick={exportAllDOsToCSV} variant="outline">Export CSV (All DOs)</Button>
+                    {pagination.totalPages > 1 && <Pagination />}
+                  </>
+                )}
+
+                {/* PROCESS MODE */}
+                {mode === 'process' && (
+                  <>
+                    <div className="mb-3 flex justify-end gap-2">
+                      <Button 
+                        variant="ghost" 
+                        onClick={fetchDeliveryOrders}
+                        disabled={loading}
+                      >
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Refresh
+                      </Button>
                     </div>
-                  </div>
 
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>DO Number</TableHead>
-                        <TableHead>SO</TableHead>
-                        <TableHead>PO Count</TableHead>
-                        <TableHead>Courier</TableHead>
-                        <TableHead>Tracking</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Shipping Cost</TableHead>
-                        <TableHead>Action</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {doData.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-sm text-gray-500">No DOs created yet.</TableCell></TableRow>}
-                      {doData.map(d => (
-                        <TableRow key={d.id}>
-                          <TableCell>{d.doNumber}</TableCell>
-                          <TableCell>{d.soReference}</TableCell>
-                          <TableCell>{d.poIds.length}</TableCell>
-                          <TableCell>{d.courier}</TableCell>
-                          <TableCell className="text-blue-600">{d.trackingNumber}</TableCell>
-                          <TableCell>{renderDOStatusBadge(d.status)}</TableCell>
-                          <TableCell>{d.shippingCost ? `Rp ${d.shippingCost.toLocaleString('id-ID')}` : '-'}</TableCell>
-                          <TableCell>
-                            <div className="flex gap-2">
-                              <Button size="sm" variant="outline" onClick={() => exportDOToPDF(d.id)}><Download className="h-4 w-4 mr-1" />Export PDF</Button>
-                              <Button size="sm" variant="outline" onClick={() => exportInvoiceForDO(d.id)}>Generate Invoice</Button>
-                              <Button size="sm" variant="ghost" onClick={() => copyToClipboard(d.trackingNumber ?? '')}><Copy className="h-4 w-4 mr-1" />Copy</Button>
-                            </div>
-                          </TableCell>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>DO Number</TableHead>
+                          <TableHead>SO</TableHead>
+                          <TableHead>PO Count</TableHead>
+                          <TableHead>Courier</TableHead>
+                          <TableHead>Tracking</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Action</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </>
-              )}
-            </div>
+                      </TableHeader>
+                      <TableBody>
+                        {shippingDOs.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={7} className="text-center text-sm text-gray-500 py-8">
+                              Tidak ada DO dalam status shipping
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          shippingDOs.map(d => (
+                            <TableRow key={d.id}>
+                              <TableCell className="font-medium">{d.doNumber}</TableCell>
+                              <TableCell>{d.soReference}</TableCell>
+                              <TableCell>{d.poIds.length}</TableCell>
+                              <TableCell>{d.courier}</TableCell>
+                              <TableCell className="text-blue-600">{d.trackingNumber}</TableCell>
+                              <TableCell>{renderDOStatusBadge(d.status)}</TableCell>
+                              <TableCell>
+                                <div className="flex gap-2">
+                                  <Button 
+                                    size="sm" 
+                                    variant={selectedDOId === d.id ? 'default' : 'outline'} 
+                                    onClick={() => handleStartProcessDO(d)}
+                                    disabled={loading}
+                                  >
+                                    {selectedDOId === d.id ? 'Cancel' : 'Process'}
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    onClick={() => exportDOToPDF(d.id)}
+                                    disabled={loading}
+                                  >
+                                    <Download className="h-4 w-4 mr-1" />
+                                    Export PDF
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    variant="ghost" 
+                                    onClick={() => copyToClipboard(d.trackingNumber ?? '')}
+                                    disabled={loading}
+                                  >
+                                    <Copy className="h-4 w-4 mr-1" />
+                                    Copy
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+
+                    {selectedDOId && (
+                      <div className="mt-4">
+                        <Card>
+                          <CardHeader><CardTitle>Process DO - Proof of Delivery</CardTitle></CardHeader>
+                          <CardContent>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <div>
+                                <Label>Upload POD (file) *</Label>
+                                <div className="flex items-center gap-2 mt-2">
+                                  <Button 
+                                    variant="outline" 
+                                    onClick={() => podProofRef.current?.click()}
+                                    disabled={loading}
+                                  >
+                                    <Upload className="h-4 w-4 mr-2" /> Upload
+                                  </Button>
+                                  <input 
+                                    ref={podProofRef} 
+                                    type="file" 
+                                    className="hidden" 
+                                    onChange={handlePodProof} 
+                                    accept=".pdf,.jpg,.jpeg,.png"
+                                    disabled={loading}
+                                  />
+                                  <div className="text-sm text-gray-600">
+                                    {podFile ? podFile.name : 'No file'}
+                                  </div>
+                                </div>
+                              </div>
+                              <div>
+                                <Label>Received Date *</Label>
+                                <Input 
+                                  type="date" 
+                                  value={podForm.receivedDate} 
+                                  onChange={(e) => setPodForm(p => ({ ...p, receivedDate: e.target.value }))}
+                                  disabled={loading}
+                                />
+                              </div>
+                              <div>
+                                <Label>Received By *</Label>
+                                <Input 
+                                  value={podForm.receivedBy} 
+                                  onChange={(e) => setPodForm(p => ({ ...p, receivedBy: e.target.value }))}
+                                  disabled={loading}
+                                  placeholder="Nama penerima"
+                                />
+                              </div>
+                              <div>
+                                <Label>Confirmation Method</Label>
+                                <select 
+                                  className="w-full border rounded px-3 py-2" 
+                                  value={podForm.confirmationMethod} 
+                                  onChange={(e) => setPodForm(p => ({ ...p, confirmationMethod: e.target.value }))}
+                                  disabled={loading}
+                                >
+                                  <option value="">Select method</option>
+                                  <option value="whatsapp">WhatsApp</option>
+                                  <option value="email">Email</option>
+                                  <option value="call">Phone Call</option>
+                                  <option value="other">Other</option>
+                                </select>
+                              </div>
+                              <div className="md:col-span-2">
+                                <Label>Notes (auto)</Label>
+                                <Input 
+                                  value={podForm.receivedBy ? `Received by ${podForm.receivedBy}` : ''} 
+                                  readOnly 
+                                />
+                              </div>
+                            </div>
+
+                            <div className="mt-4 flex gap-2">
+                              <Button 
+                                onClick={handleSubmitPOD}
+                                disabled={loading}
+                              >
+                                {loading ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle className="h-4 w-4 mr-2" />}
+                                Submit POD
+                              </Button>
+                              <Button 
+                                variant="ghost" 
+                                onClick={() => { 
+                                  setSelectedDOId(null); 
+                                  setPodFile(null); 
+                                  setPodForm({ receivedDate: '', receivedBy: '', confirmationMethod: '', do_code: '' }) 
+                                }}
+                                disabled={loading}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    )}
+
+                    {pagination.totalPages > 1 && <Pagination />}
+                  </>
+                )}
+
+                {/* VIEW MODE */}
+                {mode === 'view' && (
+                  <>
+                    <div className="mb-3 flex justify-between items-center">
+                      <div className="text-sm text-gray-600">
+                        Total DOs: {doData.length} ({shippingDOs.length} shipping, {deliveredDOs.length} delivered)
+                      </div>
+                      <div className="flex gap-2">
+                        <Button 
+                          onClick={exportAllDOsToCSV} 
+                          variant="outline"
+                          disabled={loading || doData.length === 0}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Export CSV (All DOs)
+                        </Button>
+                      </div>
+                    </div>
+
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>DO Number</TableHead>
+                          <TableHead>SO</TableHead>
+                          <TableHead>PO Count</TableHead>
+                          <TableHead>Courier</TableHead>
+                          <TableHead>Tracking</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Shipping Cost</TableHead>
+                          <TableHead>Action</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {doData.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={8} className="text-center text-sm text-gray-500 py-8">
+                              Belum ada DO yang dibuat
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          doData.map(d => (
+                            <TableRow key={d.id}>
+                              <TableCell className="font-medium">{d.doNumber}</TableCell>
+                              <TableCell>{d.soReference}</TableCell>
+                              <TableCell>{d.poIds.length}</TableCell>
+                              <TableCell>{d.courier}</TableCell>
+                              <TableCell className="text-blue-600">{d.trackingNumber}</TableCell>
+                              <TableCell>{renderDOStatusBadge(d.status)}</TableCell>
+                              <TableCell>
+                                {d.shippingCost ? `Rp ${d.shippingCost.toLocaleString('id-ID')}` : '-'}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex gap-2">
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    onClick={() => exportDOToPDF(d.id)}
+                                    disabled={loading}
+                                  >
+                                    <Download className="h-4 w-4 mr-1" />
+                                    Export PDF
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    onClick={() => exportInvoiceForDO(d.id)}
+                                    disabled={loading}
+                                  >
+                                    Generate Invoice
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    variant="ghost" 
+                                    onClick={() => copyToClipboard(d.trackingNumber ?? '')}
+                                    disabled={loading}
+                                  >
+                                    <Copy className="h-4 w-4 mr-1" />
+                                    Copy
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+
+                    {pagination.totalPages > 1 && <Pagination />}
+                  </>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

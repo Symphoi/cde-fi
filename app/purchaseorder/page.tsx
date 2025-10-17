@@ -11,47 +11,59 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Search, Plus, FileText, Trash2, ChevronUp, ChevronLeft, ChevronRight, Upload, Download, Eye, Calendar, CreditCard, Banknote, Landmark } from 'lucide-react'
 
-// Type definitions
+// Type definitions - UPDATED FOR BACKEND INTEGRATION
 interface SalesOrder {
-  id: string
-  soNumber: string
-  date: string
-  customerName: string
-  customerNumber: string
-  status: 'confirmed' | 'processing' | 'completed'
+  so_code: string
+  customer_name: string
+  customer_phone: string
+  customer_email?: string
+  status: 'submitted' | 'processing' | 'shipped' | 'delivered' | 'completed' | 'cancelled'
   items: OrderItem[]
-  purchaseOrders: PurchaseOrder[]
+  po_count: number
+  created_at: string
 }
 
 interface OrderItem {
-  id: string
-  productName: string
-  sku: string
+  so_item_code: string
+  product_name: string
+  product_code: string
   quantity: number
-  unitPrice: number
+  unit_price: number
   subtotal: number
 }
 
 interface PurchaseOrder {
-  id: string
-  poNumber: string
+  po_code: string
+  so_code: string
+  so_reference: string
+  supplier_name: string
+  supplier_contact?: string
+  supplier_bank?: string
+  total_amount: number
+  status: 'submitted' | 'approved_spv' | 'approved_finance' | 'paid' | 'rejected'
+  notes?: string
   date: string
-  supplier: string
-  status: 'draft' | 'submitted' | 'approved' | 'rejected' | 'paid'
+  priority: 'low' | 'medium' | 'high'
   items: POItem[]
-  totalAmount: number
-  payment?: Payment
+  payments: Payment[]
+  attachments: Attachment[]
+  approved_by_spv?: string
+  approved_by_finance?: string
+  approved_date_spv?: string
+  approved_date_finance?: string
+  approval_notes?: string
+  rejection_reason?: string
+  created_at: string
 }
 
 interface POItem {
-  id: string
-  productName: string
-  sku: string
+  po_item_code: string
+  product_name: string
+  product_code: string
   quantity: number
   supplier: string
-  purchasePrice: number
+  purchase_price: number
   notes: string
-  invoiceFile?: File
 }
 
 interface POFormData {
@@ -66,41 +78,41 @@ interface POFormData {
   invoiceFile?: File
 }
 
-// Payment Types
+// Payment Types - UPDATED FOR BACKEND
 interface Payment {
-  id: string
-  paymentCode: string
-  poNumber: string
-  soNumber: string
-  supplier: string
+  payment_code: string
+  po_code: string
+  so_code?: string
+  so_reference?: string
+  supplier_name: string
   amount: number
-  paymentDate: string
-  paymentMethod: 'transfer' | 'cash' | 'credit_card' | 'other'
-  bankName?: string
-  accountNumber?: string
-  referenceNumber: string
-  notes: string
+  payment_date: string
+  payment_method: 'transfer' | 'cash' | 'credit_card' | 'other'
+  bank_name?: string
+  account_number?: string
+  reference_number: string
+  notes?: string
   status: 'pending' | 'paid' | 'failed'
-  documents: PaymentDocument[]
-  createdAt: string
+  created_at: string
 }
 
-interface PaymentDocument {
+interface Attachment {
   id: string
   name: string
   type: 'invoice' | 'proof'
-  file: File
+  filename: string
+  upload_date: string
 }
 
 interface PaymentFormData {
-  poId: string
-  paymentMethod: 'transfer' | 'cash' | 'credit_card' | 'other'
-  bankName: string
-  accountNumber: string
-  paymentDate: string
-  referenceNumber: string
+  po_code: string
+  payment_method: 'transfer' | 'cash' | 'credit_card' | 'other'
+  bank_name: string
+  account_number: string
+  payment_date: string
+  reference_number: string
   notes: string
-  documents: PaymentDocument[]
+  documents: File[]
 }
 
 export default function PurchaseOrderPage() {
@@ -112,6 +124,12 @@ export default function PurchaseOrderPage() {
   const [itemsPerPage, setItemsPerPage] = useState(5)
   const [activeTable, setActiveTable] = useState<'so' | 'po' | 'payment'>('so')
 
+  // State untuk data
+  const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([])
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
+  const [payments, setPayments] = useState<Payment[]>([])
+  const [loading, setLoading] = useState(true)
+
   // State untuk form PO
   const [selectedSO, setSelectedSO] = useState<SalesOrder | null>(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -122,223 +140,104 @@ export default function PurchaseOrderPage() {
   const [showPaymentForm, setShowPaymentForm] = useState(false)
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null)
   const [paymentForm, setPaymentForm] = useState<PaymentFormData>({
-    poId: '',
-    paymentMethod: 'transfer',
-    bankName: '',
-    accountNumber: '',
-    paymentDate: new Date().toISOString().split('T')[0],
-    referenceNumber: '',
+    po_code: '',
+    payment_method: 'transfer',
+    bank_name: '',
+    account_number: '',
+    payment_date: new Date().toISOString().split('T')[0],
+    reference_number: '',
     notes: '',
     documents: []
   })
-  const [payments, setPayments] = useState<Payment[]>([])
   const [viewingPayment, setViewingPayment] = useState<Payment | null>(null)
   const paymentFileInputRef = useRef<HTMLInputElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
 
-  // Sample data
- // Sample data - UPDATE DENGAN STATUS BERBEDA
-const salesOrders: SalesOrder[] = [
-  {
-    id: '1',
-    soNumber: 'SO-2024-001',
-    date: '2024-01-15',
-    customerName: 'PT. Customer Utama',
-    customerNumber: 'CUST-001',
-    status: 'confirmed',
-    items: [
-      { id: '1', productName: 'Laptop Dell XPS 13', sku: 'LP-DLL-XPS-13', quantity: 100, unitPrice: 1200000, subtotal: 120000000 },
-      { id: '2', productName: 'Wireless Mouse Logitech', sku: 'ACC-MSE-LOG-01', quantity: 25, unitPrice: 235000, subtotal: 5875000 },
-    ],
-    purchaseOrders: [
-      {
-        id: 'po-1',
-        poNumber: 'PO-2024-001-01',
-        date: '2024-01-20',
-        supplier: 'PT. Supplier Elektronik',
-        status: 'draft', // ✅ DRAFT - PDF ONLY
-        items: [
-          {
-            id: '1',
-            productName: 'Laptop Dell XPS 13',
-            sku: 'LP-DLL-XPS-13',
-            quantity: 50,
-            supplier: 'PT. Supplier Elektronik',
-            purchasePrice: 1150000,
-            notes: 'Part 1 dari 100 pcs'
+  // Fetch data dari API
+  useEffect(() => {
+    fetchData()
+  }, [activeTable])
+
+  const fetchData = async () => {
+    try {
+      setLoading(true)
+      const token = localStorage.getItem('token')
+      
+      if (activeTable === 'so' || activeTable === 'po') {
+        // Fetch sales orders
+        const soResponse = await fetch('/api/sales-orders', {
+          headers: {
+            'Authorization': `Bearer ${token}`
           }
-        ],
-        totalAmount: 57500000
-      },
-      {
-        id: 'po-2',
-        poNumber: 'PO-2024-001-02',
-        date: '2024-01-21',
-        supplier: 'PT. Supplier Elektronik',
-        status: 'submitted', // ✅ SUBMITTED - PDF ONLY
-        items: [
-          {
-            id: '2',
-            productName: 'Wireless Mouse Logitech',
-            sku: 'ACC-MSE-LOG-01',
-            quantity: 25,
-            supplier: 'PT. Supplier Elektronik',
-            purchasePrice: 200000,
-            notes: 'Full quantity'
+        })
+        
+        if (soResponse.ok) {
+          const soData = await soResponse.json()
+          if (soData.success) {
+            setSalesOrders(soData.data)
           }
-        ],
-        totalAmount: 5000000
-      },
-      {
-        id: 'po-3',
-        poNumber: 'PO-2024-001-03',
-        date: '2024-01-22',
-        supplier: 'PT. Supplier Elektronik',
-        status: 'approved', // ✅ APPROVED - PAY + PDF
-        items: [
-          {
-            id: '1',
-            productName: 'Laptop Dell XPS 13',
-            sku: 'LP-DLL-XPS-13',
-            quantity: 50,
-            supplier: 'PT. Supplier Elektronik',
-            purchasePrice: 1150000,
-            notes: 'Part 2 dari 100 pcs'
+        }
+
+        // Fetch purchase orders
+        const poResponse = await fetch('/api/purchase-orders', {
+          headers: {
+            'Authorization': `Bearer ${token}`
           }
-        ],
-        totalAmount: 57500000
-      }
-    ]
-  },
-  {
-    id: '2',
-    soNumber: 'SO-2024-002',
-    date: '2024-01-16',
-    customerName: 'CV. Berkah Abadi',
-    customerNumber: 'CUST-002',
-    status: 'confirmed',
-    items: [
-      { id: '3', productName: 'Monitor 24" Samsung', sku: 'MON-24-SAM-FHD', quantity: 80, unitPrice: 3500000, subtotal: 280000000 }
-    ],
-    purchaseOrders: [
-      {
-        id: 'po-4',
-        poNumber: 'PO-2024-002-01',
-        date: '2024-01-22',
-        supplier: 'CV. Komputer Mandiri',
-        status: 'rejected', // ✅ REJECTED - PDF ONLY
-        items: [
-          {
-            id: '3',
-            productName: 'Monitor 24" Samsung',
-            sku: 'MON-24-SAM-FHD',
-            quantity: 40,
-            supplier: 'CV. Komputer Mandiri',
-            purchasePrice: 3200000,
-            notes: 'Part 1 dari 80 pcs'
+        })
+        
+        if (poResponse.ok) {
+          const poData = await poResponse.json()
+          if (poData.success) {
+            setPurchaseOrders(poData.data)
+            
+            // Extract all payments dari purchase orders
+            const allPayments = poData.data.flatMap((po: PurchaseOrder) => po.payments || [])
+            setPayments(allPayments)
           }
-        ],
-        totalAmount: 128000000
-      },
-      {
-        id: 'po-5',
-        poNumber: 'PO-2024-002-02',
-        date: '2024-01-23',
-        supplier: 'CV. Komputer Mandiri',
-        status: 'paid', // ✅ PAID - PDF ONLY
-        items: [
-          {
-            id: '3',
-            productName: 'Monitor 24" Samsung',
-            sku: 'MON-24-SAM-FHD',
-            quantity: 40,
-            supplier: 'CV. Komputer Mandiri',
-            purchasePrice: 3200000,
-            notes: 'Part 2 dari 80 pcs'
-          }
-        ],
-        totalAmount: 128000000,
-        payment: {
-          id: 'pay-1',
-          paymentCode: 'PAY-2024-001',
-          poNumber: 'PO-2024-002-02',
-          soNumber: 'SO-2024-002',
-          supplier: 'CV. Komputer Mandiri',
-          amount: 128000000,
-          paymentDate: '2024-01-25',
-          paymentMethod: 'transfer',
-          bankName: 'BCA',
-          accountNumber: '1234567890',
-          referenceNumber: 'TRF-2024-001',
-          notes: 'Pembayaran untuk monitor',
-          status: 'paid',
-          documents: [],
-          createdAt: '2024-01-25T10:30:00Z'
         }
       }
-    ]
-  },
-  {
-    id: '3',
-    soNumber: 'SO-2024-003',
-    date: '2024-01-17',
-    customerName: 'PT. Global Teknologi',
-    customerNumber: 'CUST-003',
-    status: 'processing',
-    items: [
-      { id: '4', productName: 'Server Rack Cabinet', sku: 'SRV-RACK-42U', quantity: 5, unitPrice: 3500000, subtotal: 17500000 },
-    ],
-    purchaseOrders: [
-      {
-        id: 'po-6',
-        poNumber: 'PO-2024-003-01',
-        date: '2024-01-23',
-        supplier: 'PT. Teknologi Server',
-        status: 'approved', // ✅ APPROVED - PAY + PDF
-        items: [
-          {
-            id: '4',
-            productName: 'Server Rack Cabinet',
-            sku: 'SRV-RACK-42U',
-            quantity: 5,
-            supplier: 'PT. Teknologi Server',
-            purchasePrice: 3000000,
-            notes: 'Full quantity'
-          }
-        ],
-        totalAmount: 15000000
-      }
-    ]
+      
+    } catch (error) {
+      console.error('Error fetching data:', error)
+      alert('Error loading data')
+    } finally {
+      setLoading(false)
+    }
   }
-]
 
-  const allPOs = salesOrders.flatMap(so => so.purchaseOrders)
+  const allPOs = purchaseOrders
   const paidPOs = allPOs.filter(po => po.status === 'paid')
-  const payablePOs = allPOs.filter(po => po.status === 'approved' && !po.payment)
+  const payablePOs = allPOs.filter(po => po.status === 'approved_finance' && (!po.payments || po.payments.length === 0))
 
   // Filter logic
   const filteredSO = salesOrders.filter(so => {
+    const searchLower = searchTerm?.toLowerCase() || ''
+    
     const matchesSearch = 
-      so.soNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      so.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      so.customerNumber.toLowerCase().includes(searchTerm.toLowerCase())
+      so.so_code?.toLowerCase()?.includes(searchLower) ||
+      so.customer_name?.toLowerCase()?.includes(searchLower)
     
     const matchesStatus = statusFilter === 'all' || so.status === statusFilter
-    const matchesDate = dateFilter === 'all' || so.date === dateFilter
+    const matchesDate = dateFilter === 'all' || so.created_at?.split('T')[0] === dateFilter
     
     return matchesSearch && matchesStatus && matchesDate
   })
 
   const filteredPO = allPOs.filter(po => {
-    return po.poNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-           po.supplier.toLowerCase().includes(searchTerm.toLowerCase())
+    const searchLower = searchTerm?.toLowerCase() || ''
+    
+    return po.po_code?.toLowerCase()?.includes(searchLower) ||
+           po.supplier_name?.toLowerCase()?.includes(searchLower) ||
+           po.so_reference?.toLowerCase()?.includes(searchLower)
   })
 
   const filteredPayments = payments.filter(payment => {
-    return payment.paymentCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
-           payment.poNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-           payment.supplier.toLowerCase().includes(searchTerm.toLowerCase()) ||
-           payment.soNumber.toLowerCase().includes(searchTerm.toLowerCase())
+    const searchLower = searchTerm?.toLowerCase() || ''
+    
+    return payment.payment_code?.toLowerCase()?.includes(searchLower) ||
+           payment.po_code?.toLowerCase()?.includes(searchLower) ||
+           payment.supplier_name?.toLowerCase()?.includes(searchLower) ||
+           payment.so_reference?.toLowerCase()?.includes(searchLower)
   })
 
   const currentData = activeTable === 'so' ? filteredSO : 
@@ -350,20 +249,89 @@ const salesOrders: SalesOrder[] = [
   const currentItems = currentData.slice(indexOfFirstItem, indexOfLastItem)
   const totalPages = Math.ceil(currentData.length / itemsPerPage)
 
+  // FIXED: Fungsi untuk menghitung remaining quantity untuk SO tertentu
+  const getRemainingQuantityForSO = (itemId: string, productCode: string, soCode: string) => {
+    const so = salesOrders.find(so => so.so_code === soCode)
+    if (!so) return 0
+
+    const item = so.items.find(item => item.so_item_code === itemId)
+    if (!item) return 0
+
+    // Hitung total quantity yang sudah dibuat PO untuk product ini dari SO yang sama
+    const existingPOsForThisProduct = purchaseOrders.filter(po => 
+      po.so_code === soCode && 
+      po.items.some(poItem => poItem.product_code === productCode)
+    )
+
+    const totalInExistingPOs = existingPOsForThisProduct.reduce((total, po) => {
+      const poItem = po.items.find(poItem => poItem.product_code === productCode)
+      return total + (poItem ? poItem.quantity : 0)
+    }, 0)
+
+    return Math.max(0, item.quantity - totalInExistingPOs)
+  }
+
+  // FIXED: Fungsi untuk cek apakah SO masih bisa buat PO (ada item yang remaining > 0)
+  const canCreatePO = (so: SalesOrder) => {
+    return so.items.some(item => {
+      const remaining = getRemainingQuantityForSO(item.so_item_code, item.product_code, so.so_code)
+      return remaining > 0
+    })
+  }
+
+  // FIXED: Fungsi untuk menghitung remaining quantity yang benar (dengan selectedSO)
+  const getRemainingQuantity = (itemId: string, productCode: string) => {
+    if (!selectedSO) return 0
+
+    const item = selectedSO.items.find(item => item.so_item_code === itemId)
+    if (!item) return 0
+
+    // Hitung total quantity yang sudah dibuat PO untuk product ini dari SO yang sama
+    const existingPOsForThisProduct = purchaseOrders.filter(po => 
+      po.so_code === selectedSO.so_code && 
+      po.items.some(poItem => poItem.product_code === productCode)
+    )
+
+    const totalInExistingPOs = existingPOsForThisProduct.reduce((total, po) => {
+      const poItem = po.items.find(poItem => poItem.product_code === productCode)
+      return total + (poItem ? poItem.quantity : 0)
+    }, 0)
+
+    // Hitung total quantity yang sedang dalam form untuk product ini
+    const formsForThisProduct = poForms.filter(form => 
+      form.itemId === itemId && form.sku === productCode
+    )
+    const totalInForms = formsForThisProduct.reduce((sum, form) => sum + form.quantity, 0)
+
+    // Remaining = quantity original - (sudah di PO + sedang di form)
+    const remaining = item.quantity - totalInExistingPOs - totalInForms
+    
+    return Math.max(0, remaining)
+  }
+
   // Handlers untuk PO
   const handleCreatePO = (so: SalesOrder) => {
+    // FIXED: Cek dulu apakah masih bisa buat PO
+    if (!canCreatePO(so)) {
+      alert('Tidak bisa membuat PO untuk Sales Order ini. Semua quantity sudah diproses.')
+      return
+    }
+    
     setSelectedSO(so)
     setShowCreateForm(true)
     setPoForms([])
   }
 
   const addPOForm = (item: OrderItem) => {
+    const remaining = getRemainingQuantity(item.so_item_code, item.product_code)
+    
+    // PERUBAHAN: Boleh buat form meski remaining 0
     const newForm: POFormData = {
       id: Date.now().toString(),
-      itemId: item.id,
-      productName: item.productName,
-      sku: item.sku,
-      quantity: item.quantity,
+      itemId: item.so_item_code,
+      productName: item.product_name,
+      sku: item.product_code,
+      quantity: Math.min(1, Math.max(1, remaining)), // Default quantity 1
       supplier: '',
       purchasePrice: 0,
       notes: ''
@@ -376,19 +344,33 @@ const salesOrders: SalesOrder[] = [
   }
 
   const updatePOForm = (formId: string, field: keyof POFormData, value: string | number) => {
-    setPoForms(prev => prev.map(form => 
-      form.id === formId ? { ...form, [field]: value } : form
-    ))
-  }
-
-  const getRemainingQuantity = (itemId: string) => {
-    const item = selectedSO?.items.find(item => item.id === itemId)
-    if (!item) return 0
-
-    const formsForThisItem = poForms.filter(form => form.itemId === itemId)
-    const totalInForms = formsForThisItem.reduce((sum, form) => sum + form.quantity, 0)
-    
-    return item.quantity - totalInForms
+    setPoForms(prev => prev.map(form => {
+      if (form.id === formId) {
+        // Validasi quantity
+        if (field === 'quantity') {
+          const numericValue = typeof value === 'string' ? parseInt(value) || 0 : value
+          
+          // PERUBAHAN: Validasi lebih longgar
+          if (numericValue < 0) {
+            alert('Quantity tidak boleh negatif')
+            return form
+          }
+          
+          const remaining = getRemainingQuantity(form.itemId, form.sku)
+          const maxAllowed = remaining + form.quantity // Bisa pakai quantity yang sudah ada di form
+          
+          if (numericValue > maxAllowed) {
+            alert(`Quantity tidak boleh melebihi ${maxAllowed} (available quantity)`)
+            return { ...form, quantity: maxAllowed }
+          }
+          
+          return { ...form, [field]: numericValue }
+        }
+        
+        return { ...form, [field]: value }
+      }
+      return form
+    }))
   }
 
   const handleInvoiceUpload = (formId: string, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -406,13 +388,8 @@ const salesOrders: SalesOrder[] = [
     ))
   }
 
-  const exportToPDF = (po: PurchaseOrder) => {
-    console.log('Exporting PO to PDF:', po.poNumber)
-    alert(`Exporting ${po.poNumber} to PDF...`)
-  }
-
-  const submitAllPOs = () => {
-    if (poForms.length === 0) {
+  const submitAllPOs = async () => {
+    if (poForms.length === 0 || !selectedSO) {
       alert('No PO forms to submit')
       return
     }
@@ -432,62 +409,111 @@ const salesOrders: SalesOrder[] = [
         return
       }
 
-      const remaining = getRemainingQuantity(form.itemId)
-      if (form.quantity > remaining) {
-        alert(`Quantity exceeds remaining quantity for ${form.productName}`)
+      const remaining = getRemainingQuantity(form.itemId, form.sku)
+      
+      // PERUBAHAN: Boleh submit meski remaining 0, asal quantity di form valid
+      if (form.quantity > (remaining + form.quantity)) {
+        // Ini seharusnya tidak terjadi karena sudah divalidasi di updatePOForm
+        alert(`Quantity exceeds available quantity for ${form.productName}. Available: ${remaining}`)
         return
       }
     }
 
-    // Create POs
-    poForms.forEach((form, index) => {
-      const sequence = index + 1
-      const poNumber = `PO-${selectedSO?.soNumber.split('-').pop()}-${String(sequence).padStart(2, '0')}`
+    // PERUBAHAN: Cek apakah ada setidaknya satu form dengan quantity > 0
+    const hasValidQuantity = poForms.some(form => form.quantity > 0)
+    if (!hasValidQuantity) {
+      alert('Please enter at least one item with quantity greater than 0')
+      return
+    }
+
+    try {
+      const token = localStorage.getItem('token')
       
-      const newPO: PurchaseOrder = {
-        id: Date.now().toString() + index,
-        poNumber,
-        date: new Date().toISOString().split('T')[0],
-        supplier: form.supplier,
-        status: 'draft',
-        items: [{
-          id: form.itemId,
-          productName: form.productName,
-          sku: form.sku,
-          quantity: form.quantity,
-          supplier: form.supplier,
-          purchasePrice: form.purchasePrice,
-          notes: form.notes,
-          invoiceFile: form.invoiceFile
-        }],
-        totalAmount: form.purchasePrice * form.quantity
+      // Filter hanya form dengan quantity > 0
+      const validForms = poForms.filter(form => form.quantity > 0)
+      
+      if (validForms.length === 0) {
+        alert('No valid PO forms to submit (all quantities are 0)')
+        return
       }
 
-      console.log('Created PO:', newPO)
-    })
+      // Group by supplier untuk buat multiple POs
+      const formsBySupplier: { [key: string]: POFormData[] } = {}
+      
+      validForms.forEach(form => {
+        if (!formsBySupplier[form.supplier]) {
+          formsBySupplier[form.supplier] = []
+        }
+        formsBySupplier[form.supplier].push(form)
+      })
 
-    alert(`Successfully created ${poForms.length} Purchase Orders!`)
-    setPoForms([])
-    setShowCreateForm(false)
-    setSelectedSO(null)
+      // Create PO untuk setiap supplier
+      for (const [supplier, forms] of Object.entries(formsBySupplier)) {
+        const poData = {
+          so_code: selectedSO.so_code,
+          so_reference: selectedSO.so_code,
+          supplier_name: supplier,
+          supplier_contact: '',
+          supplier_bank: '',
+          notes: forms.map(f => f.notes).filter(n => n).join(', '),
+          items: forms.map(form => ({
+            product_name: form.productName,
+            product_code: form.sku,
+            quantity: form.quantity,
+            supplier: form.supplier,
+            purchase_price: form.purchasePrice,
+            notes: form.notes
+          })),
+          priority: 'medium',
+          customer_ref: selectedSO.so_code
+        }
+
+        const response = await fetch('/api/purchase-orders', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(poData)
+        })
+
+        if (!response.ok) {
+          const error = await response.json()
+          throw new Error(error.error)
+        }
+
+        const result = await response.json()
+        console.log(`Created PO: ${result.po_code}`)
+      }
+
+      alert(`Successfully created ${Object.keys(formsBySupplier).length} Purchase Order(s)!`)
+      setPoForms([])
+      setShowCreateForm(false)
+      setSelectedSO(null)
+      fetchData() // Refresh data
+      
+    } catch (error) {
+      console.error('Error creating PO:', error)
+      alert('Error creating purchase order')
+    }
   }
 
   // Handlers untuk Payment
   const handleCreatePayment = (po: PurchaseOrder) => {
-    // Cek apakah PO approved
-    if (po.status !== 'approved') {
-      alert('Only approved Purchase Orders can be paid')
+    // Cek apakah PO approved_finance
+    if (po.status !== 'approved_finance') {
+      alert('Only finance-approved Purchase Orders can be paid')
       return
     }
     
     setSelectedPO(po)
     setPaymentForm({
-      poId: po.id,
-      paymentMethod: 'transfer',
-      bankName: '',
-      accountNumber: '',
-      paymentDate: new Date().toISOString().split('T')[0],
-      referenceNumber: '',
+      po_code: po.po_code,
+      payment_method: 'transfer',
+      bank_name: '',
+      account_number: '',
+      payment_date: new Date().toISOString().split('T')[0],
+      reference_number: '',
       notes: '',
       documents: []
     })
@@ -502,16 +528,10 @@ const salesOrders: SalesOrder[] = [
     const files = e.target.files
     if (!files) return
 
-    const newDocuments: PaymentDocument[] = Array.from(files).map(file => ({
-      id: Date.now().toString() + Math.random(),
-      name: file.name,
-      type: file.name.toLowerCase().includes('invoice') ? 'invoice' : 'proof',
-      file: file
-    }))
-
+    const newFiles = Array.from(files)
     setPaymentForm(prev => ({
       ...prev,
-      documents: [...prev.documents, ...newDocuments]
+      documents: [...prev.documents, ...newFiles]
     }))
   }
 
@@ -533,42 +553,30 @@ const salesOrders: SalesOrder[] = [
     const files = e.dataTransfer.files
     if (!files) return
 
-    const newDocuments: PaymentDocument[] = Array.from(files).map(file => ({
-      id: Date.now().toString() + Math.random(),
-      name: file.name,
-      type: file.name.toLowerCase().includes('invoice') ? 'invoice' : 'proof',
-      file: file
-    }))
-
+    const newFiles = Array.from(files)
     setPaymentForm(prev => ({
       ...prev,
-      documents: [...prev.documents, ...newDocuments]
+      documents: [...prev.documents, ...newFiles]
     }))
   }
 
-  const removePaymentDocument = (docId: string) => {
+  const removePaymentDocument = (index: number) => {
     setPaymentForm(prev => ({
       ...prev,
-      documents: prev.documents.filter(doc => doc.id !== docId)
+      documents: prev.documents.filter((_, i) => i !== index)
     }))
   }
 
-  const generatePaymentCode = () => {
-    const timestamp = new Date().getTime()
-    const random = Math.floor(Math.random() * 1000)
-    return `PAY-${timestamp}-${random}`
-  }
-
-  const submitPayment = () => {
+  const submitPayment = async () => {
     if (!selectedPO) return
 
     // Validation
-    if (paymentForm.paymentMethod === 'transfer' && (!paymentForm.bankName || !paymentForm.accountNumber)) {
+    if (paymentForm.payment_method === 'transfer' && (!paymentForm.bank_name || !paymentForm.account_number)) {
       alert('Please select bank and enter account number for transfer payment')
       return
     }
 
-    if (!paymentForm.referenceNumber.trim()) {
+    if (!paymentForm.reference_number.trim()) {
       alert('Please enter reference number')
       return
     }
@@ -578,45 +586,64 @@ const salesOrders: SalesOrder[] = [
       return
     }
 
-    const newPayment: Payment = {
-      id: Date.now().toString(),
-      paymentCode: generatePaymentCode(),
-      poNumber: selectedPO.poNumber,
-      soNumber: salesOrders.find(so => so.purchaseOrders.some(po => po.id === selectedPO.id))?.soNumber || '',
-      supplier: selectedPO.supplier,
-      amount: selectedPO.totalAmount,
-      paymentDate: paymentForm.paymentDate,
-      paymentMethod: paymentForm.paymentMethod,
-      bankName: paymentForm.paymentMethod === 'transfer' ? paymentForm.bankName : undefined,
-      accountNumber: paymentForm.paymentMethod === 'transfer' ? paymentForm.accountNumber : undefined,
-      referenceNumber: paymentForm.referenceNumber,
-      notes: paymentForm.notes,
-      status: 'paid',
-      documents: paymentForm.documents,
-      createdAt: new Date().toISOString()
+    try {
+      const token = localStorage.getItem('token')
+      const formData = new FormData()
+      
+      // Add payment data
+      const paymentData = {
+        po_code: selectedPO.po_code,
+        payment_method: paymentForm.payment_method,
+        bank_name: paymentForm.bank_name,
+        account_number: paymentForm.account_number,
+        payment_date: paymentForm.payment_date,
+        reference_number: paymentForm.reference_number,
+        notes: paymentForm.notes,
+        amount: selectedPO.total_amount,
+        supplier_name: selectedPO.supplier_name,
+        so_code: selectedPO.so_code,
+        so_reference: selectedPO.so_reference
+      }
+      
+      formData.append('data', JSON.stringify(paymentData))
+      
+      // Add files
+      paymentForm.documents.forEach(file => {
+        formData.append('files', file)
+      })
+
+      const response = await fetch('/api/purchase-orders', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        alert(`Payment ${result.payment_code} created successfully!`)
+        setShowPaymentForm(false)
+        setSelectedPO(null)
+        setPaymentForm({
+          po_code: '',
+          payment_method: 'transfer',
+          bank_name: '',
+          account_number: '',
+          payment_date: new Date().toISOString().split('T')[0],
+          reference_number: '',
+          notes: '',
+          documents: []
+        })
+        fetchData() // Refresh data
+      } else {
+        const error = await response.json()
+        alert(`Error: ${error.error}`)
+      }
+    } catch (error) {
+      console.error('Error creating payment:', error)
+      alert('Error creating payment')
     }
-
-    // Add to payments list
-    setPayments(prev => [...prev, newPayment])
-
-    // Update PO status to paid
-    const updatedPOs = allPOs.map(po => 
-      po.id === selectedPO.id ? { ...po, status: 'paid', payment: newPayment } : po
-    )
-
-    alert(`Payment ${newPayment.paymentCode} created successfully!`)
-    setShowPaymentForm(false)
-    setSelectedPO(null)
-    setPaymentForm({
-      poId: '',
-      paymentMethod: 'transfer',
-      bankName: '',
-      accountNumber: '',
-      paymentDate: new Date().toISOString().split('T')[0],
-      referenceNumber: '',
-      notes: '',
-      documents: []
-    })
   }
 
   const viewPaymentDetails = (payment: Payment) => {
@@ -625,18 +652,40 @@ const salesOrders: SalesOrder[] = [
 
   const getStatusColor = (status: string) => {
     const colors = {
-      confirmed: 'bg-blue-100 text-blue-800',
-      processing: 'bg-yellow-100 text-yellow-800',
-      completed: 'bg-green-100 text-green-800',
-      draft: 'bg-gray-100 text-gray-800',
+      // SO Status
       submitted: 'bg-blue-100 text-blue-800',
-      approved: 'bg-green-100 text-green-800',
+      processing: 'bg-yellow-100 text-yellow-800',
+      shipped: 'bg-orange-100 text-orange-800',
+      delivered: 'bg-green-100 text-green-800',
+      completed: 'bg-green-100 text-green-800',
+      cancelled: 'bg-red-100 text-red-800',
+      
+      // PO Status
+      submitted: 'bg-blue-100 text-blue-800',
+      approved_spv: 'bg-green-100 text-green-800',
+      approved_finance: 'bg-purple-100 text-purple-800',
+      paid: 'bg-indigo-100 text-indigo-800',
       rejected: 'bg-red-100 text-red-800',
-      paid: 'bg-purple-100 text-purple-800',
+      
+      // Payment Status
       pending: 'bg-yellow-100 text-yellow-800',
+      paid: 'bg-green-100 text-green-800',
       failed: 'bg-red-100 text-red-800'
     }
     return colors[status as keyof typeof colors] || 'bg-gray-100 text-gray-800'
+  }
+
+  const getStatusText = (status: string) => {
+    const texts: {[key: string]: string} = {
+      submitted: 'Submitted',
+      approved_spv: 'Approved SPV',
+      approved_finance: 'Approved Finance',
+      paid: 'Paid',
+      rejected: 'Rejected',
+      pending: 'Pending',
+      failed: 'Failed'
+    }
+    return texts[status] || status
   }
 
   const getPaymentMethodIcon = (method: string) => {
@@ -733,7 +782,6 @@ const salesOrders: SalesOrder[] = [
 
   // Reset ketika switch table
   useEffect(() => {
-    // Reset semua form dan state ketika ganti tab
     setSelectedSO(null)
     setPoForms([])
     setShowCreateForm(false)
@@ -741,16 +789,27 @@ const salesOrders: SalesOrder[] = [
     setShowPaymentForm(false)
     setViewingPayment(null)
     setPaymentForm({
-      poId: '',
-      paymentMethod: 'transfer',
-      bankName: '',
-      accountNumber: '',
-      paymentDate: new Date().toISOString().split('T')[0],
-      referenceNumber: '',
+      po_code: '',
+      payment_method: 'transfer',
+      bank_name: '',
+      account_number: '',
+      payment_date: new Date().toISOString().split('T')[0],
+      reference_number: '',
       notes: '',
       documents: []
     })
   }, [activeTable])
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen">
@@ -800,9 +859,9 @@ const salesOrders: SalesOrder[] = [
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <Input
                   placeholder={
-                    activeTable === 'so' ? "Search SO number or customer..." :
-                    activeTable === 'po' ? "Search PO number or supplier..." :
-                    "Search payment code or PO number..."
+                    activeTable === 'so' ? "Search SO code or customer..." :
+                    activeTable === 'po' ? "Search PO code or supplier..." :
+                    "Search payment code or PO code..."
                   }
                   value={searchTerm}
                   onChange={(e) => {
@@ -825,17 +884,20 @@ const salesOrders: SalesOrder[] = [
                 <option value="all">All Status</option>
                 {activeTable === 'so' ? (
                   <>
-                    <option value="confirmed">Confirmed</option>
+                    <option value="submitted">Submitted</option>
                     <option value="processing">Processing</option>
+                    <option value="shipped">Shipped</option>
+                    <option value="delivered">Delivered</option>
                     <option value="completed">Completed</option>
+                    <option value="cancelled">Cancelled</option>
                   </>
                 ) : activeTable === 'po' ? (
                   <>
-                    <option value="draft">Draft</option>
                     <option value="submitted">Submitted</option>
-                    <option value="approved">Approved</option>
-                    <option value="rejected">Rejected</option>
+                    <option value="approved_spv">Approved SPV</option>
+                    <option value="approved_finance">Approved Finance</option>
                     <option value="paid">Paid</option>
+                    <option value="rejected">Rejected</option>
                   </>
                 ) : (
                   <>
@@ -856,7 +918,11 @@ const salesOrders: SalesOrder[] = [
                 className="border rounded px-3 py-2 text-sm"
               >
                 <option value="all">All Dates</option>
-                {Array.from(new Set(salesOrders.map(so => so.date))).map(date => (
+                {Array.from(new Set([
+                  ...salesOrders.map(so => so.created_at?.split('T')[0]).filter(Boolean),
+                  ...purchaseOrders.map(po => po.date).filter(Boolean),
+                  ...payments.map(p => p.payment_date).filter(Boolean)
+                ])).slice(0, 10).map(date => (
                   <option key={date} value={date}>
                     {new Date(date).toLocaleDateString('en-US', { 
                       year: 'numeric', 
@@ -931,7 +997,7 @@ const salesOrders: SalesOrder[] = [
                 <TableHeader>
                   {activeTable === 'so' ? (
                     <TableRow>
-                      <TableHead>SO Number</TableHead>
+                      <TableHead>SO Code</TableHead>
                       <TableHead>Customer</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead>Items</TableHead>
@@ -941,11 +1007,10 @@ const salesOrders: SalesOrder[] = [
                     </TableRow>
                   ) : activeTable === 'po' ? (
                     <TableRow>
-                      <TableHead>PO Number</TableHead>
+                      <TableHead>PO Code</TableHead>
                       <TableHead>Supplier</TableHead>
                       <TableHead>SO Reference</TableHead>
                       <TableHead>Date</TableHead>
-                      <TableHead>Items</TableHead>
                       <TableHead>Total Amount</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
@@ -953,7 +1018,7 @@ const salesOrders: SalesOrder[] = [
                   ) : (
                     <TableRow>
                       <TableHead>Payment Code</TableHead>
-                      <TableHead>PO Number</TableHead>
+                      <TableHead>PO Code</TableHead>
                       <TableHead>SO Reference</TableHead>
                       <TableHead>Supplier</TableHead>
                       <TableHead>Amount</TableHead>
@@ -967,17 +1032,20 @@ const salesOrders: SalesOrder[] = [
                 <TableBody>
                   {currentItems.length > 0 ? (
                     currentItems.map((item) => (
-                      <TableRow key={item.id} className="hover:bg-gray-50">
+                      <TableRow key={activeTable === 'so' ? (item as SalesOrder).so_code : 
+                                    activeTable === 'po' ? (item as PurchaseOrder).po_code : 
+                                    (item as Payment).payment_code} 
+                                className="hover:bg-gray-50">
                         {activeTable === 'so' ? (
                           <>
-                            <TableCell className="font-semibold">{(item as SalesOrder).soNumber}</TableCell>
+                            <TableCell className="font-semibold">{(item as SalesOrder).so_code}</TableCell>
                             <TableCell>
                               <div>
-                                <div className="font-medium">{(item as SalesOrder).customerName}</div>
-                                <div className="text-sm text-gray-500">{(item as SalesOrder).customerNumber}</div>
+                                <div className="font-medium">{(item as SalesOrder).customer_name}</div>
+                                <div className="text-sm text-gray-500">{(item as SalesOrder).customer_phone}</div>
                               </div>
                             </TableCell>
-                            <TableCell>{(item as SalesOrder).date}</TableCell>
+                            <TableCell>{new Date((item as SalesOrder).created_at).toLocaleDateString()}</TableCell>
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <span>{(item as SalesOrder).items.length} items</span>
@@ -989,14 +1057,15 @@ const salesOrders: SalesOrder[] = [
                               </Badge>
                             </TableCell>
                             <TableCell>
-                              <Badge variant={(item as SalesOrder).purchaseOrders.length > 0 ? "default" : "secondary"}>
-                                {(item as SalesOrder).purchaseOrders.length} PO
+                              <Badge variant={(item as SalesOrder).po_count > 0 ? "default" : "secondary"}>
+                                {(item as SalesOrder).po_count} PO
                               </Badge>
                             </TableCell>
                             <TableCell className="text-right">
                               <Button 
                                 onClick={() => handleCreatePO(item as SalesOrder)}
                                 size="sm"
+                                disabled={!canCreatePO(item as SalesOrder)} // FIXED: Disable jika tidak bisa buat PO
                               >
                                 <Plus className="h-4 w-4 mr-1" />
                                 Create PO
@@ -1005,25 +1074,24 @@ const salesOrders: SalesOrder[] = [
                           </>
                         ) : activeTable === 'po' ? (
                           <>
-                            <TableCell className="font-semibold">{(item as PurchaseOrder).poNumber}</TableCell>
-                            <TableCell>{(item as PurchaseOrder).supplier}</TableCell>
+                            <TableCell className="font-semibold">{(item as PurchaseOrder).po_code}</TableCell>
+                            <TableCell>{(item as PurchaseOrder).supplier_name}</TableCell>
                             <TableCell className="text-blue-600">
-                              {salesOrders.find(so => so.purchaseOrders.some(p => p.id === (item as PurchaseOrder).id))?.soNumber || '-'}
+                              {(item as PurchaseOrder).so_reference}
                             </TableCell>
                             <TableCell>{(item as PurchaseOrder).date}</TableCell>
-                            <TableCell>{(item as PurchaseOrder).items.length} items</TableCell>
                             <TableCell className="font-semibold">
-                              Rp {(item as PurchaseOrder).totalAmount.toLocaleString()}
+                              Rp {(item as PurchaseOrder).total_amount.toLocaleString()}
                             </TableCell>
                             <TableCell>
                               <Badge className={getStatusColor((item as PurchaseOrder).status)}>
-                                {(item as PurchaseOrder).status}
+                                {getStatusText((item as PurchaseOrder).status)}
                               </Badge>
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex gap-2 justify-end">
-                                {/* HANYA TAMPIL JIKA PO APPROVED DAN BELUM PAID */}
-                                {(item as PurchaseOrder).status === 'approved' && !(item as PurchaseOrder).payment && (
+                                {/* PAYMENT ACTION - HANYA UNTUK APPROVED_FINANCE */}
+                                {(item as PurchaseOrder).status === 'approved_finance' && (
                                   <Button 
                                     onClick={() => handleCreatePayment(item as PurchaseOrder)}
                                     size="sm"
@@ -1032,8 +1100,10 @@ const salesOrders: SalesOrder[] = [
                                     Pay
                                   </Button>
                                 )}
+                                
+                                {/* PDF EXPORT */}
                                 <Button 
-                                  onClick={() => exportToPDF(item as PurchaseOrder)}
+                                  onClick={() => {/* Export PDF logic */}}
                                   size="sm"
                                   variant="outline"
                                 >
@@ -1045,20 +1115,20 @@ const salesOrders: SalesOrder[] = [
                           </>
                         ) : (
                           <>
-                            <TableCell className="font-semibold">{(item as Payment).paymentCode}</TableCell>
-                            <TableCell className="font-semibold">{(item as Payment).poNumber}</TableCell>
-                            <TableCell className="text-blue-600">{(item as Payment).soNumber}</TableCell>
-                            <TableCell>{(item as Payment).supplier}</TableCell>
+                            <TableCell className="font-semibold">{(item as Payment).payment_code}</TableCell>
+                            <TableCell className="font-semibold">{(item as Payment).po_code}</TableCell>
+                            <TableCell className="text-blue-600">{(item as Payment).so_reference || '-'}</TableCell>
+                            <TableCell>{(item as Payment).supplier_name}</TableCell>
                             <TableCell className="font-semibold">
                               Rp {(item as Payment).amount.toLocaleString()}
                             </TableCell>
-                            <TableCell>{(item as Payment).paymentDate}</TableCell>
+                            <TableCell>{(item as Payment).payment_date}</TableCell>
                             <TableCell>
                               <div className="flex items-center gap-2">
-                                {getPaymentMethodIcon((item as Payment).paymentMethod)}
-                                <span className="capitalize">{(item as Payment).paymentMethod.replace('_', ' ')}</span>
-                                {(item as Payment).bankName && (
-                                  <span className="text-xs text-gray-500">({(item as Payment).bankName})</span>
+                                {getPaymentMethodIcon((item as Payment).payment_method)}
+                                <span className="capitalize">{(item as Payment).payment_method.replace('_', ' ')}</span>
+                                {(item as Payment).bank_name && (
+                                  <span className="text-xs text-gray-500">({(item as Payment).bank_name})</span>
                                 )}
                               </div>
                             </TableCell>
@@ -1086,7 +1156,7 @@ const salesOrders: SalesOrder[] = [
                       <TableCell 
                         colSpan={
                           activeTable === 'so' ? 7 : 
-                          activeTable === 'po' ? 8 : 
+                          activeTable === 'po' ? 7 : 
                           9
                         } 
                         className="text-center py-8 text-gray-500"
@@ -1124,7 +1194,7 @@ const salesOrders: SalesOrder[] = [
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="flex items-center gap-2">
-                  Create New Purchase Order - {selectedSO.soNumber}
+                  Create New Purchase Order - {selectedSO.so_code}
                 </CardTitle>
                 <Button 
                   variant="outline" 
@@ -1154,28 +1224,38 @@ const salesOrders: SalesOrder[] = [
                           <TableHead className="w-12">No</TableHead>
                           <TableHead>Product Name</TableHead>
                           <TableHead>SKU</TableHead>
-                          <TableHead>Quantity</TableHead>
+                          <TableHead>Original Quantity</TableHead>
+                          <TableHead>Remaining Quantity</TableHead>
                           <TableHead className="text-right">Action</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {selectedSO.items.map((item, index) => (
-                          <TableRow key={item.id}>
-                            <TableCell className="font-medium">{index + 1}</TableCell>
-                            <TableCell className="font-semibold">{item.productName}</TableCell>
-                            <TableCell className="font-mono">{item.sku}</TableCell>
-                            <TableCell>{item.quantity} pcs</TableCell>
-                            <TableCell className="text-right">
-                              <Button 
-                                onClick={() => addPOForm(item)}
-                                size="sm"
-                              >
-                                <Plus className="h-4 w-4 mr-1" />
-                                Add PO Form
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
+                        {selectedSO.items.map((item, index) => {
+                          const remaining = getRemainingQuantity(item.so_item_code, item.product_code)
+                          return (
+                            <TableRow key={item.so_item_code}>
+                              <TableCell className="font-medium">{index + 1}</TableCell>
+                              <TableCell className="font-semibold">{item.product_name}</TableCell>
+                              <TableCell className="font-mono">{item.product_code}</TableCell>
+                              <TableCell>{item.quantity} pcs</TableCell>
+                              <TableCell>
+                                <Badge variant={remaining > 0 ? "default" : "secondary"}>
+                                  {remaining} pcs
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Button 
+                                  onClick={() => addPOForm(item)}
+                                  size="sm"
+                                  // PERUBAHAN: Tidak disable meski remaining 0
+                                >
+                                  <Plus className="h-4 w-4 mr-1" />
+                                  Add PO Form
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
                       </TableBody>
                     </Table>
                   </CardContent>
@@ -1192,8 +1272,10 @@ const salesOrders: SalesOrder[] = [
                     <CardContent>
                       <div className="space-y-4">
                         {poForms.map((form, index) => {
-                          const item = selectedSO.items.find(item => item.id === form.itemId)
+                          const item = selectedSO.items.find(item => item.so_item_code === form.itemId)
                           if (!item) return null
+
+                          const remaining = getRemainingQuantity(form.itemId, form.sku)
 
                           return (
                             <div key={form.id} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-3 p-4 border rounded-lg relative">
@@ -1249,10 +1331,10 @@ const salesOrders: SalesOrder[] = [
                                   onChange={(e) => updatePOForm(form.id, 'quantity', parseInt(e.target.value) || 0)}
                                   placeholder="Enter quantity"
                                   min="1"
-                                  max={item.quantity}
+                                  max={remaining + form.quantity} // Bisa sampai remaining + quantity yang sudah di form
                                 />
                                 <p className="text-xs text-gray-500 mt-1">
-                                  Remaining: {getRemainingQuantity(form.itemId)} pcs
+                                  Remaining: {remaining} pcs
                                 </p>
                               </div>
 
@@ -1265,7 +1347,7 @@ const salesOrders: SalesOrder[] = [
                                 />
                               </div>
 
-                              {/* Invoice Upload Section - SUPER SIMPLE */}
+                              {/* Invoice Upload Section */}
                               <div className="space-y-2">
                                 <Label className="text-sm">Invoice</Label>
                                 {form.invoiceFile ? (
@@ -1326,7 +1408,7 @@ const salesOrders: SalesOrder[] = [
               <div className="flex items-center justify-between">
                 <CardTitle className="flex items-center gap-2">
                   <CreditCard className="h-5 w-5" />
-                  Create Payment - {selectedPO.poNumber}
+                  Create Payment - {selectedPO.po_code}
                 </CardTitle>
                 <Button 
                   variant="outline" 
@@ -1351,21 +1433,21 @@ const salesOrders: SalesOrder[] = [
                   <CardContent>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="space-y-2">
-                        <Label className="text-sm font-medium">PO Number</Label>
+                        <Label className="text-sm font-medium">PO Code</Label>
                         <div className="p-2 bg-gray-50 rounded border font-semibold">
-                          {selectedPO.poNumber}
+                          {selectedPO.po_code}
                         </div>
                       </div>
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">Supplier</Label>
                         <div className="p-2 bg-gray-50 rounded border">
-                          {selectedPO.supplier}
+                          {selectedPO.supplier_name}
                         </div>
                       </div>
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">Total Amount</Label>
                         <div className="p-2 bg-gray-50 rounded border font-semibold text-green-600">
-                          Rp {selectedPO.totalAmount.toLocaleString()}
+                          Rp {selectedPO.total_amount.toLocaleString()}
                         </div>
                       </div>
                     </div>
@@ -1387,8 +1469,8 @@ const salesOrders: SalesOrder[] = [
                           </Label>
                           <select
                             id="paymentMethod"
-                            value={paymentForm.paymentMethod}
-                            onChange={(e) => updatePaymentForm('paymentMethod', e.target.value)}
+                            value={paymentForm.payment_method}
+                            onChange={(e) => updatePaymentForm('payment_method', e.target.value)}
                             className="w-full border rounded-md px-3 py-2"
                           >
                             <option value="transfer">Transfer Bank</option>
@@ -1398,7 +1480,7 @@ const salesOrders: SalesOrder[] = [
                           </select>
                         </div>
 
-                        {paymentForm.paymentMethod === 'transfer' && (
+                        {paymentForm.payment_method === 'transfer' && (
                           <>
                             <div className="space-y-2">
                               <Label htmlFor="bankName" className="text-sm font-medium">
@@ -1406,8 +1488,8 @@ const salesOrders: SalesOrder[] = [
                               </Label>
                               <select
                                 id="bankName"
-                                value={paymentForm.bankName}
-                                onChange={(e) => updatePaymentForm('bankName', e.target.value)}
+                                value={paymentForm.bank_name}
+                                onChange={(e) => updatePaymentForm('bank_name', e.target.value)}
                                 className="w-full border rounded-md px-3 py-2"
                               >
                                 <option value="">Pilih Bank</option>
@@ -1424,20 +1506,9 @@ const salesOrders: SalesOrder[] = [
                               </Label>
                               <Input
                                 id="accountNumber"
-                                value={paymentForm.accountNumber}
-                                onChange={(e) => updatePaymentForm('accountNumber', e.target.value)}
+                                value={paymentForm.account_number}
+                                onChange={(e) => updatePaymentForm('account_number', e.target.value)}
                                 placeholder="Masukkan nomor rekening supplier"
-                              />
-                            </div>
-                              <div className="space-y-2">
-                              <Label htmlFor="accountNumber" className="text-sm font-medium">
-                                Nomor Bank Name upplier*
-                              </Label>
-                              <Input
-                                id="accountNumber"
-                                value={paymentForm.accountNumber}
-                                onChange={(e) => updatePaymentForm('accountNumber', e.target.value)}
-                                placeholder="Masukkan bank name supplier"
                               />
                             </div>
                           </>
@@ -1450,8 +1521,8 @@ const salesOrders: SalesOrder[] = [
                           <Input
                             id="paymentDate"
                             type="date"
-                            value={paymentForm.paymentDate}
-                            onChange={(e) => updatePaymentForm('paymentDate', e.target.value)}
+                            value={paymentForm.payment_date}
+                            onChange={(e) => updatePaymentForm('payment_date', e.target.value)}
                           />
                         </div>
                       </div>
@@ -1464,8 +1535,8 @@ const salesOrders: SalesOrder[] = [
                           </Label>
                           <Input
                             id="referenceNumber"
-                            value={paymentForm.referenceNumber}
-                            onChange={(e) => updatePaymentForm('referenceNumber', e.target.value)}
+                            value={paymentForm.reference_number}
+                            onChange={(e) => updatePaymentForm('reference_number', e.target.value)}
                             placeholder="Masukkan nomor referensi pembayaran"
                           />
                         </div>
@@ -1483,7 +1554,7 @@ const salesOrders: SalesOrder[] = [
                           />
                         </div>
 
-                        {/* Document Upload - CENTERED & IMPROVED */}
+                        {/* Document Upload */}
                         <div className="space-y-2">
                           <Label className="text-sm font-medium">
                             Payment Documents *
@@ -1505,7 +1576,7 @@ const salesOrders: SalesOrder[] = [
                                 {isDragOver ? 'Drop files here' : 'Click to upload or drag and drop'}
                               </p>
                               <p className="text-sm text-gray-500">
-                                Upload invoice dan bukti transfer
+                                Upload bukti transfer atau dokumen pembayaran
                               </p>
                               <p className="text-xs text-gray-400">
                                 PDF, JPG, PNG (Max. 10MB per file)
@@ -1527,13 +1598,13 @@ const salesOrders: SalesOrder[] = [
                               <Label className="text-sm font-medium text-gray-700">
                                 Uploaded Documents ({paymentForm.documents.length})
                               </Label>
-                              {paymentForm.documents.map((doc) => (
-                                <div key={doc.id} className="flex items-center justify-between p-3 border rounded-lg bg-white shadow-sm">
+                              {paymentForm.documents.map((doc, index) => (
+                                <div key={index} className="flex items-center justify-between p-3 border rounded-lg bg-white shadow-sm">
                                   <div className="flex items-center gap-3">
                                     <FileText className="h-5 w-5 text-green-600" />
                                     <div>
                                       <div className="font-medium text-sm">{doc.name}</div>
-                                      <div className="text-xs text-gray-500 capitalize">{doc.type} • {(doc.file.size / 1024 / 1024).toFixed(2)} MB</div>
+                                      <div className="text-xs text-gray-500">{(doc.size / 1024 / 1024).toFixed(2)} MB</div>
                                     </div>
                                   </div>
                                   <Button
@@ -1541,7 +1612,7 @@ const salesOrders: SalesOrder[] = [
                                     size="sm"
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      removePaymentDocument(doc.id)
+                                      removePaymentDocument(index)
                                     }}
                                     className="h-8 w-8 p-0 text-red-600 hover:bg-red-50"
                                   >
@@ -1561,7 +1632,7 @@ const salesOrders: SalesOrder[] = [
                         onClick={submitPayment} 
                         size="lg" 
                         className="w-full bg-green-600 hover:bg-green-700"
-                        disabled={!paymentForm.referenceNumber.trim() || paymentForm.documents.length === 0}
+                        disabled={!paymentForm.reference_number.trim() || paymentForm.documents.length === 0}
                       >
                         <CreditCard className="h-5 w-5 mr-2" />
                         Submit Payment
@@ -1579,7 +1650,7 @@ const salesOrders: SalesOrder[] = [
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
               <div className="flex justify-between items-center p-6 border-b">
-                <h3 className="text-lg font-semibold">Payment Details - {viewingPayment.paymentCode}</h3>
+                <h3 className="text-lg font-semibold">Payment Details - {viewingPayment.payment_code}</h3>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -1600,19 +1671,19 @@ const salesOrders: SalesOrder[] = [
                       <div className="space-y-3">
                         <div className="flex justify-between">
                           <span className="text-sm font-medium">Payment Code:</span>
-                          <span className="font-semibold">{viewingPayment.paymentCode}</span>
+                          <span className="font-semibold">{viewingPayment.payment_code}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-sm font-medium">PO Number:</span>
-                          <span className="font-semibold">{viewingPayment.poNumber}</span>
+                          <span className="text-sm font-medium">PO Code:</span>
+                          <span className="font-semibold">{viewingPayment.po_code}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm font-medium">SO Reference:</span>
-                          <span className="font-semibold">{viewingPayment.soNumber}</span>
+                          <span className="font-semibold">{viewingPayment.so_reference || '-'}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm font-medium">Supplier:</span>
-                          <span>{viewingPayment.supplier}</span>
+                          <span>{viewingPayment.supplier_name}</span>
                         </div>
                       </div>
                       <div className="space-y-3">
@@ -1622,11 +1693,11 @@ const salesOrders: SalesOrder[] = [
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm font-medium">Payment Date:</span>
-                          <span>{viewingPayment.paymentDate}</span>
+                          <span>{viewingPayment.payment_date}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm font-medium">Payment Method:</span>
-                          <span className="capitalize">{viewingPayment.paymentMethod.replace('_', ' ')}</span>
+                          <span className="capitalize">{viewingPayment.payment_method.replace('_', ' ')}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm font-medium">Status:</span>
@@ -1638,14 +1709,14 @@ const salesOrders: SalesOrder[] = [
                     </div>
 
                     {/* Bank Details for Transfer */}
-                    {viewingPayment.paymentMethod === 'transfer' && viewingPayment.bankName && (
+                    {viewingPayment.payment_method === 'transfer' && viewingPayment.bank_name && (
                       <div className="mt-4 p-4 border rounded-lg bg-blue-50">
                         <h4 className="font-medium text-blue-800 mb-2">Bank Transfer Details</h4>
                         <div className="grid grid-cols-2 gap-2 text-sm">
                           <span>Bank Name:</span>
-                          <span className="font-medium">{viewingPayment.bankName}</span>
+                          <span className="font-medium">{viewingPayment.bank_name}</span>
                           <span>Account Number:</span>
-                          <span className="font-medium">{viewingPayment.accountNumber}</span>
+                          <span className="font-medium">{viewingPayment.account_number}</span>
                         </div>
                       </div>
                     )}
@@ -1655,7 +1726,7 @@ const salesOrders: SalesOrder[] = [
                       <h4 className="font-medium mb-2">Reference Information</h4>
                       <div className="text-sm">
                         <span className="font-medium">Reference Number: </span>
-                        <span>{viewingPayment.referenceNumber}</span>
+                        <span>{viewingPayment.reference_number}</span>
                       </div>
                       {viewingPayment.notes && (
                         <div className="mt-2 text-sm">
@@ -1664,73 +1735,6 @@ const salesOrders: SalesOrder[] = [
                         </div>
                       )}
                     </div>
-                  </CardContent>
-                </Card>
-
-                {/* Payment Documents */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Payment Documents</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      {viewingPayment.documents.map((doc) => (
-                        <div key={doc.id} className="flex items-center justify-between p-3 border rounded">
-                          <div className="flex items-center gap-3">
-                            <FileText className="h-5 w-5 text-blue-600" />
-                            <div>
-                              <div className="font-medium">{doc.name}</div>
-                              <div className="text-sm text-gray-500 capitalize">{doc.type}</div>
-                            </div>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              // Simulate document download
-                              const url = URL.createObjectURL(doc.file)
-                              const link = document.createElement('a')
-                              link.href = url
-                              link.download = doc.name
-                              link.click()
-                              URL.revokeObjectURL(url)
-                            }}
-                          >
-                            <Download className="h-4 w-4 mr-1" />
-                            Download
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Payment History */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Payment History</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Date</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Notes</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        <TableRow>
-                          <TableCell>{viewingPayment.createdAt.split('T')[0]}</TableCell>
-                          <TableCell>
-                            <Badge className={getStatusColor(viewingPayment.status)}>
-                              {viewingPayment.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>Payment created and processed</TableCell>
-                        </TableRow>
-                      </TableBody>
-                    </Table>
                   </CardContent>
                 </Card>
               </div>

@@ -1,4 +1,4 @@
-// app/invoice-payment/page.tsx - REVISED VERSION
+// app/invoice-payment/page.tsx - FIXED JWT VERSION
 'use client'
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -7,124 +7,255 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
-import { Search, FileText, Eye, Download, Upload, CheckCircle, Calendar, DollarSign, User, Building, Truck, Package, ShoppingCart, Ship, Receipt, CreditCard, Landmark, Banknote } from 'lucide-react'
-import { useState, useRef } from 'react'
+import { Search, FileText, Eye, Download, Upload, CheckCircle, Calendar, DollarSign, User, Building, Truck, Package, ShoppingCart, Ship, Receipt, CreditCard, Landmark, Banknote, FileIcon, RefreshCw, AlertCircle } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { toast } from 'sonner'
 
-// Extended Type definitions - REAL CASE dengan ITEM → MULTIPLE PO
+// ============================ JWT API SERVICE ============================
+class InvoiceService {
+  private static getAuthHeaders() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
+  }
+
+  private static getAuthHeadersFormData() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('No authentication token found');
+    }
+    return {
+      'Authorization': `Bearer ${token}`,
+    };
+  }
+
+  private static async handleResponse(response: Response) {
+    const text = await response.text();
+    
+    let data;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (error) {
+      console.error('Invalid JSON response:', text);
+      throw new Error(`Invalid response from server: ${text.substring(0, 100)}`);
+    }
+    
+    if (!response.ok) {
+      throw new Error(data.error || `HTTP error! status: ${response.status}`);
+    }
+    
+    return data;
+  }
+
+  // Get sales orders ready for invoice
+  static async getReadySalesOrders(filters: {
+    search?: string;
+    page?: string;
+    limit?: string;
+  } = {}) {
+    try {
+      const params = new URLSearchParams();
+      if (filters.search) params.append('search', filters.search);
+      params.append('page', filters.page || '1');
+      params.append('limit', filters.limit || '10');
+
+      const response = await fetch(`/api/invoice-payment?${params}`, {
+        headers: this.getAuthHeaders()
+      });
+
+      return await this.handleResponse(response);
+    } catch (error) {
+      console.error('Service error in getReadySalesOrders:', error);
+      throw error;
+    }
+  }
+
+  // Process payment and create invoice
+  static async processPayment(data: {
+    so_code: string;
+    invoice_number: string;
+    payment_date: string;
+    payment_amount: number;
+    payment_method: 'transfer' | 'cash' | 'credit_card' | 'other';
+    bank_name?: string;
+    account_number?: string;
+    reference_number: string;
+    notes?: string;
+  }, paymentProofFile?: File) {
+    try {
+      const formData = new FormData();
+      formData.append('data', JSON.stringify(data));
+      
+      if (paymentProofFile) {
+        formData.append('payment_proof', paymentProofFile);
+      }
+
+      const response = await fetch('/api/invoice-payment', {
+        method: 'POST',
+        headers: this.getAuthHeadersFormData(),
+        body: formData
+      });
+
+      return await this.handleResponse(response);
+    } catch (error) {
+      console.error('Service error in processPayment:', error);
+      throw error;
+    }
+  }
+
+  // Export invoice data
+  static async exportInvoice(so_code: string) {
+    try {
+      const response = await fetch('/api/invoice-payment', {
+        method: 'PUT',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({ so_code })
+      });
+
+      return await this.handleResponse(response);
+    } catch (error) {
+      console.error('Service error in exportInvoice:', error);
+      throw error;
+    }
+  }
+}
+
+// ============================ TYPES ============================
 interface SalesOrder {
   id: string
-  soNumber: string
+  so_code: string
   date: string
-  customerName: string
-  customerPhone: string
-  customerEmail: string
-  customerCompany: string
-  billingAddress: string
-  shippingAddress: string
-  salesRep: string
-  salesRepEmail: string
-  totalAmount: number
-  status: 'draft' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled' | 'completed'
+  customer_name: string
+  customer_phone: string
+  customer_email: string
+  billing_address: string
+  shipping_address: string
+  sales_rep: string
+  sales_rep_email: string
+  total_amount: number
+  tax_amount: number
+  shipping_cost: number
+  status: 'submitted' | 'processing' | 'shipped' | 'delivered' | 'completed' | 'cancelled'
+  notes?: string
   items: OrderItem[]
   taxes: Tax[]
   purchaseOrders: PurchaseOrder[]
-  deliveryData?: DeliveryData
+  attachments: Attachment[]
   paymentStatus?: 'pending' | 'paid' | 'overdue'
   invoiceNumber?: string
-  profitMargin: number
-  totalProfit: number
-  totalCost: number
+  financialSummary?: {
+    totalCost: number
+    totalProfit: number
+    profitMargin: number
+  }
+  po_count?: number
+  do_count?: number
 }
 
 interface OrderItem {
   id: string
-  productName: string
-  sku: string
+  so_item_code: string
+  so_code: string
+  product_name: string
+  product_code: string
   quantity: number
-  unitPrice: number
+  unit_price: number
   subtotal: number
-  costPrice?: number
-  profit?: number
-  poReferences: string[] // Link ke PO yang handle item ini
 }
 
 interface Tax {
   id: string
-  name: string
-  rate: number
-  amount: number
+  so_tax_code: string
+  so_code: string
+  tax_name: string
+  tax_rate: number
+  tax_amount: number
+}
+
+interface Attachment {
+  id: string
+  attachment_code: string
+  so_code: string
+  filename: string
+  original_filename: string
+  file_type: string
+  file_size: number
+  file_path: string
+  uploaded_at: string
 }
 
 interface PurchaseOrder {
   id: string
-  poNumber: string
+  po_code: string
+  so_code: string
+  supplier_name: string
+  supplier_contact: string
+  supplier_bank: string
+  total_amount: number
+  status: 'submitted' | 'approved_spv' | 'approved_finance' | 'paid' | 'rejected'
+  notes?: string
   date: string
-  supplier: string
-  supplierContact: string
-  supplierBank: string
-  status: 'draft' | 'submitted' | 'approved' | 'rejected' | 'paid'
+  so_reference: string
+  submitted_by: string
+  submitted_date: string
+  submitted_time: string
   items: POItem[]
-  totalAmount: number
-  payment?: Payment
-  deliveryOrders?: DeliveryOrder[]
+  payments: Payment[]
+  deliveryOrders: DeliveryOrder[]
+  do_status: 'not_created' | 'created' | 'shipped' | 'delivered'
+  do_code?: string
+  delivery_date?: string
 }
 
 interface POItem {
   id: string
-  productName: string
-  sku: string
+  po_item_code: string
+  po_code: string
+  product_name: string
+  product_code: string
   quantity: number
-  purchasePrice: number
+  supplier: string
+  purchase_price: number
   subtotal: number
-  soReference: string
-  soItemId: string // Link ke item di SO
+  notes?: string
 }
 
 interface Payment {
   id: string
-  paymentCode: string
+  payment_code: string
+  po_code: string
+  supplier_name: string
   amount: number
-  paymentDate: string
-  paymentMethod: 'transfer' | 'cash' | 'credit_card' | 'other'
-  bankName?: string
-  accountNumber?: string
-  referenceNumber: string
+  payment_date: string
+  payment_method: 'transfer' | 'cash' | 'credit_card' | 'other'
+  bank_name?: string
+  account_number?: string
+  reference_number: string
+  notes?: string
   status: 'pending' | 'paid' | 'failed'
 }
 
 interface DeliveryOrder {
   id: string
-  doNumber: string
-  date: string
+  do_code: string
+  so_code: string
+  purchase_order_codes: string[]
   courier: string
-  trackingNumber: string
-  shippingDate: string
-  shippingCost: number
-  receivedDate: string
-  confirmationMethod: 'whatsapp' | 'email' | 'call' | 'other'
-  clientNotes: string
-  status: 'shipped' | 'delivered' | 'completed'
-  poReferences: string[]
-  items: DOItem[]
-}
-
-interface DOItem {
-  id: string
-  productName: string
-  sku: string
-  quantity: number
-  poReference: string
-  soItemId: string
-}
-
-interface DeliveryData {
-  trackingNumber: string
-  courier: string
-  shippingDate: string
-  shippingCost: number
-  receivedDate: string
-  confirmationMethod: string
-  clientNotes: string
+  tracking_number: string
+  shipping_date: string
+  shipping_cost: number
+  shipping_proof?: string
+  status: 'shipping' | 'delivered'
+  proof_of_delivery?: string
+  received_date?: string
+  received_by?: string
+  confirmation_method: 'whatsapp' | 'email' | 'call' | 'other'
+  notes?: string
 }
 
 interface PaymentData {
@@ -132,298 +263,86 @@ interface PaymentData {
   paymentDate: string
   paymentAmount: number
   paymentMethod: 'transfer' | 'cash' | 'credit_card' | 'other'
+  bankName?: string
+  accountNumber?: string
+  referenceNumber: string
   paymentProof?: File
   notes: string
 }
 
+// ============================ MAIN COMPONENT ============================
 export default function InvoicePaymentPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedSO, setSelectedSO] = useState<SalesOrder | null>(null)
   const [selectedRow, setSelectedRow] = useState<string | null>(null)
   const [showPaymentForm, setShowPaymentForm] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
+  const [loading, setLoading] = useState(true)
+  const [soData, setSoData] = useState<SalesOrder[]>([])
+  const [error, setError] = useState<string | null>(null)
   const itemsPerPage = 10
 
   const paymentProofRef = useRef<HTMLInputElement>(null)
 
-  // Sample data - REAL CASE dengan ITEM → MULTIPLE PO
-  const salesOrders: SalesOrder[] = [
-    {
-      id: '1',
-      soNumber: 'SO-2024-001',
-      date: '2024-01-15',
-      customerName: 'PT. Customer Maju',
-      customerPhone: '+62 21 1234 5678',
-      customerEmail: 'contact@customermaju.com',
-      customerCompany: 'PT. Customer Maju Indonesia',
-      billingAddress: 'Jl. Sudirman No. 123, Jakarta Selatan 12190, Indonesia',
-      shippingAddress: 'Jl. Sudirman No. 123, Jakarta Selatan 12190, Indonesia',
-      salesRep: 'Budi Santoso',
-      salesRepEmail: 'budi@company.com',
-      totalAmount: 2870000,
-      totalCost: 2300000,
-      totalProfit: 570000,
-      profitMargin: 19.86,
-      status: 'delivered',
-      paymentStatus: 'pending',
-      items: [
-        { 
-          id: '1', 
-          productName: 'Laptop Dell XPS 13', 
-          sku: 'LP-DLL-XPS-13', 
-          quantity: 2, 
-          unitPrice: 1200000, 
-          subtotal: 2400000,
-          costPrice: 1150000,
-          profit: 100000,
-          poReferences: ['PO-2024-001-01', 'PO-2024-001-02'] // 1 ITEM → 2 PO
-        },
-        { 
-          id: '2', 
-          productName: 'Wireless Mouse', 
-          sku: 'ACC-MSE-WRL-01', 
-          quantity: 2, 
-          unitPrice: 150000, 
-          subtotal: 300000,
-          costPrice: 125000, 
-          profit: 50000,
-          poReferences: ['PO-2024-001-01'] // 1 ITEM → 1 PO
-        }
-      ],
-      taxes: [
-        { id: '1', name: 'VAT', rate: 10, amount: 270000 }
-      ],
-      purchaseOrders: [
-        {
-          id: 'po-1',
-          poNumber: 'PO-2024-001-01',
-          date: '2024-01-20',
-          supplier: 'PT. Supplier Elektronik',
-          supplierContact: '+62 21 9876 5432',
-          supplierBank: 'BCA 123-456-789',
-          status: 'paid',
-          items: [
-            { 
-              id: '1', 
-              productName: 'Laptop Dell XPS 13', 
-              sku: 'LP-DLL-XPS-13', 
-              quantity: 1,  // ← SPLIT QUANTITY: 1 dari 2
-              purchasePrice: 1150000, 
-              subtotal: 1150000, 
-              soReference: 'SO-2024-001',
-              soItemId: '1'
-            },
-            { 
-              id: '2', 
-              productName: 'Wireless Mouse', 
-              sku: 'ACC-MSE-WRL-01', 
-              quantity: 2,  // ← FULL QUANTITY
-              purchasePrice: 125000, 
-              subtotal: 250000, 
-              soReference: 'SO-2024-001',
-              soItemId: '2'
-            }
-          ],
-          totalAmount: 1400000,
-          payment: {
-            id: 'pay-1',
-            paymentCode: 'PAY-2024-001',
-            amount: 1400000,
-            paymentDate: '2024-01-22',
-            paymentMethod: 'transfer',
-            bankName: 'BCA',
-            accountNumber: '1234567890',
-            referenceNumber: 'TRF-2024-001',
-            status: 'paid'
-          },
-          deliveryOrders: [
-            {
-              id: 'do-1',
-              doNumber: 'DO-2024-001-01',
-              date: '2024-01-25',
-              courier: 'JNE',
-              trackingNumber: 'JNE1234567890',
-              shippingDate: '2024-01-25',
-              shippingCost: 25000,
-              receivedDate: '2024-01-27',
-              confirmationMethod: 'whatsapp',
-              clientNotes: 'Barang diterima dengan baik',
-              status: 'completed',
-              poReferences: ['PO-2024-001-01'],
-              items: [
-                { id: '1', productName: 'Laptop Dell XPS 13', sku: 'LP-DLL-XPS-13', quantity: 1, poReference: 'PO-2024-001-01', soItemId: '1' },
-                { id: '2', productName: 'Wireless Mouse', sku: 'ACC-MSE-WRL-01', quantity: 2, poReference: 'PO-2024-001-01', soItemId: '2' }
-              ]
-            }
-          ]
-        },
-        {
-          id: 'po-2',
-          poNumber: 'PO-2024-001-02',
-          date: '2024-01-21',
-          supplier: 'PT. Tech Gadget',
-          supplierContact: '+62 21 5555 6666',
-          supplierBank: 'Mandiri 987-654-321',
-          status: 'paid',
-          items: [
-            { 
-              id: '3', 
-              productName: 'Laptop Dell XPS 13', 
-              sku: 'LP-DLL-XPS-13', 
-              quantity: 1,  // ← SPLIT QUANTITY: 1 dari 2
-              purchasePrice: 1150000, 
-              subtotal: 1150000, 
-              soReference: 'SO-2024-001',
-              soItemId: '1'
-            }
-          ],
-          totalAmount: 1150000,
-          payment: {
-            id: 'pay-2',
-            paymentCode: 'PAY-2024-002',
-            amount: 1150000,
-            paymentDate: '2024-01-23',
-            paymentMethod: 'transfer',
-            bankName: 'Mandiri',
-            accountNumber: '9876543210',
-            referenceNumber: 'TRF-2024-002',
-            status: 'paid'
-          },
-          deliveryOrders: [
-            {
-              id: 'do-2',
-              doNumber: 'DO-2024-001-02',
-              date: '2024-01-26',
-              courier: 'TIKI',
-              trackingNumber: 'TIKI987654321',
-              shippingDate: '2024-01-26',
-              shippingCost: 20000,
-              receivedDate: '2024-01-28',
-              confirmationMethod: 'email',
-              clientNotes: 'Packaging rapi, barang aman',
-              status: 'completed',
-              poReferences: ['PO-2024-001-02'],
-              items: [
-                { id: '3', productName: 'Laptop Dell XPS 13', sku: 'LP-DLL-XPS-13', quantity: 1, poReference: 'PO-2024-001-02', soItemId: '1' }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      id: '2',
-      soNumber: 'SO-2024-002',
-      date: '2024-01-16',
-      customerName: 'CV. Berkah Jaya',
-      customerPhone: '+62 22 8765 4321',
-      customerEmail: 'info@berkahjaya.com',
-      customerCompany: 'CV. Berkah Jaya',
-      billingAddress: 'Jl. Merdeka No. 45, Bandung 40115, Indonesia',
-      shippingAddress: 'Gudang Utama, Jl. Industri No. 78, Bandung 40235, Indonesia',
-      salesRep: 'Sari Dewi',
-      salesRepEmail: 'sari@company.com',
-      totalAmount: 1925000,
-      totalCost: 1600000,
-      totalProfit: 325000,
-      profitMargin: 16.88,
-      status: 'delivered',
-      paymentStatus: 'pending',
-      items: [
-        { 
-          id: '1', 
-          productName: 'Monitor 24" Samsung', 
-          sku: 'MON-24-SAM-FHD', 
-          quantity: 5, 
-          unitPrice: 350000, 
-          subtotal: 1750000,
-          costPrice: 320000,
-          profit: 150000,
-          poReferences: ['PO-2024-002-01']
-        }
-      ],
-      taxes: [
-        { id: '1', name: 'VAT', rate: 10, amount: 175000 }
-      ],
-      purchaseOrders: [
-        {
-          id: 'po-3',
-          poNumber: 'PO-2024-002-01',
-          date: '2024-01-22',
-          supplier: 'CV. Komputer Mandiri',
-          supplierContact: '+62 22 5555 6666',
-          supplierBank: 'Mandiri 987-654-321',
-          status: 'paid',
-          items: [
-            { 
-              id: '1', 
-              productName: 'Monitor 24" Samsung', 
-              sku: 'MON-24-SAM-FHD', 
-              quantity: 5, 
-              purchasePrice: 320000, 
-              subtotal: 1600000, 
-              soReference: 'SO-2024-002',
-              soItemId: '1'
-            }
-          ],
-          totalAmount: 1600000,
-          payment: {
-            id: 'pay-3',
-            paymentCode: 'PAY-2024-003',
-            amount: 1600000,
-            paymentDate: '2024-01-24',
-            paymentMethod: 'transfer',
-            bankName: 'Mandiri',
-            accountNumber: '9876543210',
-            referenceNumber: 'TRF-2024-003',
-            status: 'paid'
-          },
-          deliveryOrders: [
-            {
-              id: 'do-3',
-              doNumber: 'DO-2024-002-01',
-              date: '2024-01-26',
-              courier: 'TIKI',
-              trackingNumber: 'TIKI987654321',
-              shippingDate: '2024-01-26',
-              shippingCost: 35000,
-              receivedDate: '2024-01-28',
-              confirmationMethod: 'email',
-              clientNotes: 'Semua barang sesuai pesanan',
-              status: 'completed',
-              poReferences: ['PO-2024-002-01'],
-              items: [
-                { id: '1', productName: 'Monitor 24" Samsung', sku: 'MON-24-SAM-FHD', quantity: 5, poReference: 'PO-2024-002-01', soItemId: '1' }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-  ]
-
-  const [soData, setSoData] = useState<SalesOrder[]>(salesOrders)
   const [paymentData, setPaymentData] = useState<PaymentData>({
     invoiceNumber: '',
     paymentDate: new Date().toISOString().split('T')[0],
     paymentAmount: 0,
     paymentMethod: 'transfer',
+    bankName: '',
+    accountNumber: '',
+    referenceNumber: '',
     notes: ''
   })
 
+  // ============================ DATA FETCHING ============================
+  const fetchSalesOrders = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      
+      const response = await InvoiceService.getReadySalesOrders({
+        search: searchTerm,
+        page: String(currentPage),
+        limit: String(itemsPerPage)
+      })
+
+      if (response.success) {
+        setSoData(response.data)
+      } else {
+        throw new Error(response.error || 'Failed to fetch data from API')
+      }
+    } catch (err: any) {
+      console.error('❌ Error fetching sales orders:', err)
+      const errorMessage = err.message || 'Gagal memuat data sales orders';
+      setError(errorMessage)
+      toast.error(errorMessage)
+      
+      // Set empty data on error
+      setSoData([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchSalesOrders()
+  }, [currentPage, searchTerm])
+
+  // ============================ FILTER & PAGINATION ============================
   // Filter: Hanya tampilkan SO delivered yang semua PO-nya paid & delivered
   const readyForInvoiceSO = soData.filter(so => {
     const allPOComplete = so.purchaseOrders.every(po => 
       po.status === 'paid' && 
-      po.deliveryOrders?.every(doItem => doItem.status === 'completed')
+      po.deliveryOrders.every(doItem => doItem.status === 'delivered')
     )
-    return so.status === 'delivered' && so.paymentStatus === 'pending' && allPOComplete
+    return  allPOComplete
   })
 
   const filteredSO = readyForInvoiceSO.filter(so => {
-    return so.soNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-           so.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-           so.customerPhone.toLowerCase().includes(searchTerm.toLowerCase())
+    return so.so_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+           so.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+           so.customer_phone.toLowerCase().includes(searchTerm.toLowerCase())
   })
 
   // Pagination
@@ -432,6 +351,7 @@ export default function InvoicePaymentPage() {
   const currentItems = filteredSO.slice(indexOfFirstItem, indexOfLastItem)
   const totalPages = Math.ceil(filteredSO.length / itemsPerPage)
 
+  // ============================ PAYMENT FUNCTIONS ============================
   // Generate invoice number otomatis
   const generateInvoiceNumber = (soNumber: string) => {
     const date = new Date()
@@ -444,41 +364,61 @@ export default function InvoicePaymentPage() {
     return `INV-${soNumber}-${y}-${m}-${d}-${seq}-${uniqueCode}`
   }
 
-  const handlePaymentSubmit = () => {
+  const handlePaymentSubmit = async () => {
     if (!selectedSO) return
 
     // Validasi
-    if (!paymentData.paymentDate || paymentData.paymentAmount <= 0) {
-      alert('Please fill payment date and amount')
+    if (!paymentData.paymentDate || paymentData.paymentAmount <= 0 || !paymentData.referenceNumber) {
+      toast.error('Please fill required fields: payment date, amount, and reference number')
       return
     }
 
-    // Generate invoice number jika belum ada
-    const invoiceNumber = paymentData.invoiceNumber || generateInvoiceNumber(selectedSO.soNumber)
+    try {
+      setLoading(true)
+      
+      // Generate invoice number jika belum ada
+      const invoiceNumber = paymentData.invoiceNumber || generateInvoiceNumber(selectedSO.so_code)
+      
+      const result = await InvoiceService.processPayment({
+        so_code: selectedSO.so_code,
+        invoice_number: invoiceNumber,
+        payment_date: paymentData.paymentDate,
+        payment_amount: paymentData.paymentAmount,
+        payment_method: paymentData.paymentMethod,
+        bank_name: paymentData.bankName,
+        account_number: paymentData.accountNumber,
+        reference_number: paymentData.referenceNumber,
+        notes: paymentData.notes
+      }, paymentData.paymentProof)
 
-    // Update SO status
-    const updatedSOs = soData.map(so => 
-      so.id === selectedSO.id ? {
-        ...so,
-        paymentStatus: 'paid' as const,
-        invoiceNumber,
-        status: 'completed' as const
-      } : so
-    )
-
-    setSoData(updatedSOs)
-    alert(`Payment confirmed! Invoice ${invoiceNumber} has been created.`)
-    setShowPaymentForm(false)
-    setSelectedSO(null)
-    
-    // Reset payment form
-    setPaymentData({
-      invoiceNumber: '',
-      paymentDate: new Date().toISOString().split('T')[0],
-      paymentAmount: 0,
-      paymentMethod: 'transfer',
-      notes: ''
-    })
+      if (result.success) {
+        toast.success(`Payment confirmed! Invoice ${invoiceNumber} has been created.`)
+        setShowPaymentForm(false)
+        setSelectedSO(null)
+        
+        // Refresh data
+        await fetchSalesOrders()
+        
+        // Reset payment form
+        setPaymentData({
+          invoiceNumber: '',
+          paymentDate: new Date().toISOString().split('T')[0],
+          paymentAmount: 0,
+          paymentMethod: 'transfer',
+          bankName: '',
+          accountNumber: '',
+          referenceNumber: '',
+          notes: ''
+        })
+      } else {
+        throw new Error(result.error || 'Failed to process payment')
+      }
+    } catch (error: any) {
+      console.error('❌ Error processing payment:', error)
+      toast.error(error.message || 'Error processing payment')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handlePaymentProofUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -492,58 +432,102 @@ export default function InvoicePaymentPage() {
     setPaymentData(prev => ({ ...prev, paymentProof: undefined }))
   }
 
-  const exportInvoicePDF = (so: SalesOrder) => {
+  const exportInvoicePDF = async (so: SalesOrder) => {
     if (!so.invoiceNumber) {
       alert('Please process payment first to generate invoice')
       return
     }
     
-    console.log('Exporting Invoice PDF:', so.invoiceNumber)
-    alert(`Exporting Invoice ${so.invoiceNumber} to PDF...`)
+    try {
+      const result = await InvoiceService.exportInvoice(so.so_code)
+
+      if (result.success) {
+        // Di sini bisa implementasi generate PDF dengan data dari result.data
+        console.log('Export data:', result.data)
+        toast.success(`Exporting Invoice ${so.invoiceNumber} to PDF...`)
+        
+        // Contoh download file (harus implement PDF generation di backend)
+        // window.open(`/api/generate-pdf?so_code=${so.so_code}`, '_blank')
+      } else {
+        throw new Error(result.error || 'Failed to export invoice')
+      }
+    } catch (error: any) {
+      console.error('❌ Error exporting invoice:', error)
+      toast.error(error.message || 'Error exporting invoice')
+    }
+  }
+
+  // ============================ HELPER FUNCTIONS ============================
+  const downloadAttachment = (attachment: Attachment) => {
+    const fileUrl = `/uploads/${attachment.filename}`
+    window.open(fileUrl, '_blank')
   }
 
   const getStatusColor = (status: string) => {
     const colors = {
-      draft: 'bg-gray-100 text-gray-800',
-      confirmed: 'bg-blue-100 text-blue-800',
+      submitted: 'bg-gray-100 text-gray-800',
+      processing: 'bg-blue-100 text-blue-800',
       shipped: 'bg-yellow-100 text-yellow-800',
       delivered: 'bg-green-100 text-green-800',
       completed: 'bg-purple-100 text-purple-800',
       cancelled: 'bg-red-100 text-red-800'
     }
-    return colors[status as keyof typeof colors] || colors.draft
+    return colors[status as keyof typeof colors] || colors.submitted
   }
 
-  const getPaymentStatusColor = (status: string) => {
+  const getPOStatusColor = (status: string) => {
     const colors = {
-      pending: 'bg-yellow-100 text-yellow-800',
-      paid: 'bg-green-100 text-green-800',
-      overdue: 'bg-red-100 text-red-800'
+      submitted: 'bg-gray-100 text-gray-800',
+      approved_spv: 'bg-blue-100 text-blue-800',
+      approved_finance: 'bg-green-100 text-green-800',
+      paid: 'bg-purple-100 text-purple-800',
+      rejected: 'bg-red-100 text-red-800'
     }
-    return colors[status as keyof typeof colors] || colors.pending
+    return colors[status as keyof typeof colors] || colors.submitted
   }
 
   // Function untuk get PO items by SO item
-  const getPOItemsBySOItem = (soItemId: string, purchaseOrders: PurchaseOrder[]) => {
+  const getPOItemsBySOItem = (productCode: string, purchaseOrders: PurchaseOrder[]) => {
     const items: (POItem & { poNumber: string; supplier: string })[] = []
     purchaseOrders.forEach(po => {
-      po.items.filter(item => item.soItemId === soItemId).forEach(item => {
-        items.push({ ...item, poNumber: po.poNumber, supplier: po.supplier })
+      po.items.filter(item => item.product_code === productCode).forEach(item => {
+        items.push({ 
+          ...item, 
+          poNumber: po.po_code, 
+          supplier: po.supplier_name 
+        })
       })
     })
     return items
   }
 
-  // Component untuk timeline process - MUNCUL DI BAWAH CARD
+  // ============================ COMPONENTS ============================
+  const Pagination = () => (
+    <div className="flex items-center justify-between border-t pt-4">
+      <div className="text-sm text-gray-600">
+        Showing {indexOfFirstItem + 1} to {Math.min(indexOfLastItem, filteredSO.length)} of {filteredSO.length} results
+      </div>
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>
+          Previous
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>
+          Next
+        </Button>
+      </div>
+    </div>
+  )
+
+  // Component untuk timeline process
   const ProcessTimeline = ({ so }: { so: SalesOrder }) => {
-    const allDeliveryOrders = so.purchaseOrders.flatMap(po => po.deliveryOrders || [])
+    const allDeliveryOrders = so.purchaseOrders.flatMap(po => po.deliveryOrders)
     
     return (
       <Card className="mt-4">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5" />
-            Process Timeline - {so.soNumber}
+            Process Timeline - {so.so_code}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -563,28 +547,53 @@ export default function InvoicePaymentPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                 <div>
                   <Label className="text-xs text-gray-500">SO Number</Label>
-                  <p className="font-medium">{so.soNumber}</p>
+                  <p className="font-medium">{so.so_code}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-gray-500">Date</Label>
-                  <p className="font-medium">{so.date}</p>
+                  <p className="font-medium">{new Date(so.date).toLocaleDateString()}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-gray-500">Customer</Label>
-                  <p className="font-medium">{so.customerName}</p>
+                  <p className="font-medium">{so.customer_name}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-gray-500">Sales Rep</Label>
-                  <p className="font-medium">{so.salesRep}</p>
+                  <p className="font-medium">{so.sales_rep}</p>
                 </div>
               </div>
+              
+              {/* SO Attachments */}
+              {so.attachments && so.attachments.length > 0 && (
+                <div className="mt-4">
+                  <Label className="text-sm font-medium mb-2 block">Sales Order Documents</Label>
+                  <div className="space-y-2">
+                    {so.attachments.map((attachment, index) => (
+                      <div key={attachment.id} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                        <div className="flex items-center gap-2">
+                          <FileIcon className="h-4 w-4 text-gray-500" />
+                          <span className="text-sm">{attachment.original_filename}</span>
+                        </div>
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => downloadAttachment(attachment)}
+                        >
+                          <Download className="h-3 w-3 mr-1" />
+                          Download
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               
               {/* SO Items dengan PO References */}
               <div className="mt-4">
                 <Label className="text-sm font-medium mb-2 block">Items & PO Distribution</Label>
                 <div className="space-y-3">
                   {so.items.map((item, index) => {
-                    const poItems = getPOItemsBySOItem(item.id, so.purchaseOrders)
+                    const poItems = getPOItemsBySOItem(item.product_code, so.purchaseOrders)
                     return (
                       <div key={item.id} className="p-3 bg-white rounded border">
                         <div className="flex justify-between items-start mb-2">
@@ -593,27 +602,29 @@ export default function InvoicePaymentPage() {
                               {index + 1}
                             </div>
                             <div>
-                              <div className="font-medium">{item.productName}</div>
-                              <div className="text-sm text-gray-500">{item.sku}</div>
+                              <div className="font-medium">{item.product_name}</div>
+                              <div className="text-sm text-gray-500">{item.product_code}</div>
                             </div>
                           </div>
                           <div className="text-right">
                             <div className="font-medium">{item.quantity} pcs</div>
-                            <div className="text-sm text-gray-600">Rp {item.unitPrice.toLocaleString()}</div>
+                            <div className="text-sm text-gray-600">Rp {item.unit_price.toLocaleString()}</div>
                           </div>
                         </div>
                         
                         {/* PO Distribution untuk item ini */}
-                        <div className="ml-9 mt-2 space-y-2">
-                          <div className="text-xs text-gray-500">PO Distribution:</div>
-                          {poItems.map((poItem, poIndex) => (
-                            <div key={poIndex} className="flex justify-between items-center text-sm bg-gray-50 p-2 rounded">
-                              <span className="text-blue-600 font-medium">{poItem.poNumber}</span>
-                              <span>{poItem.quantity} pcs × Rp {poItem.purchasePrice.toLocaleString()}</span>
-                              <span className="text-gray-600">{poItem.supplier}</span>
-                            </div>
-                          ))}
-                        </div>
+                        {poItems.length > 0 && (
+                          <div className="ml-9 mt-2 space-y-2">
+                            <div className="text-xs text-gray-500">PO Distribution:</div>
+                            {poItems.map((poItem, poIndex) => (
+                              <div key={poIndex} className="flex justify-between items-center text-sm bg-gray-50 p-2 rounded">
+                                <span className="text-blue-600 font-medium">{poItem.poNumber}</span>
+                                <span>{poItem.quantity} pcs × Rp {poItem.purchase_price.toLocaleString()}</span>
+                                <span className="text-gray-600">{poItem.supplier}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )
                   })}
@@ -644,15 +655,15 @@ export default function InvoicePaymentPage() {
                   <div key={po.id} className="border rounded-lg p-4 bg-white">
                     <div className="flex justify-between items-start mb-3">
                       <div>
-                        <div className="font-semibold">{po.poNumber}</div>
-                        <div className="text-sm text-gray-600">{po.supplier}</div>
-                        <div className="text-xs text-gray-500">{po.supplierContact} | {po.supplierBank}</div>
+                        <div className="font-semibold">{po.po_code}</div>
+                        <div className="text-sm text-gray-600">{po.supplier_name}</div>
+                        <div className="text-xs text-gray-500">{po.supplier_contact} | {po.supplier_bank}</div>
                       </div>
                       <div className="text-right">
-                        <Badge className={po.status === 'paid' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}>
-                          {po.status}
+                        <Badge className={getPOStatusColor(po.status)}>
+                          {po.status.replace('_', ' ')}
                         </Badge>
-                        <div className="text-sm font-medium mt-1">Rp {po.totalAmount.toLocaleString()}</div>
+                        <div className="text-sm font-medium mt-1">Rp {po.total_amount.toLocaleString()}</div>
                       </div>
                     </div>
 
@@ -667,14 +678,14 @@ export default function InvoicePaymentPage() {
                                 {itemIndex + 1}
                               </div>
                               <div>
-                                <div className="font-medium text-sm">{item.productName}</div>
-                                <div className="text-xs text-gray-500">{item.sku}</div>
-                                <div className="text-xs text-blue-600">SO Item ID: {item.soItemId}</div>
+                                <div className="font-medium text-sm">{item.product_name}</div>
+                                <div className="text-xs text-gray-500">{item.product_code}</div>
+                                <div className="text-xs text-blue-600">Supplier: {item.supplier}</div>
                               </div>
                             </div>
                             <div className="text-right">
                               <div className="text-sm font-medium">{item.quantity} pcs</div>
-                              <div className="text-xs text-gray-600">Rp {item.purchasePrice.toLocaleString()}</div>
+                              <div className="text-xs text-gray-600">Rp {item.purchase_price.toLocaleString()}</div>
                             </div>
                           </div>
                         ))}
@@ -682,30 +693,38 @@ export default function InvoicePaymentPage() {
                     </div>
 
                     {/* PO Payment */}
-                    {po.payment && (
+                    {po.payments && po.payments.length > 0 && (
                       <div className="mb-3 p-3 bg-blue-50 rounded border">
                         <div className="flex items-center gap-2 mb-2">
                           <CreditCard className="h-4 w-4 text-blue-600" />
                           <Label className="text-sm font-medium">Payment</Label>
                         </div>
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                          <div>
-                            <span className="text-gray-600">Code:</span>
-                            <span className="font-medium ml-2">{po.payment.paymentCode}</span>
+                        {po.payments.map(payment => (
+                          <div key={payment.id} className="grid grid-cols-2 gap-2 text-sm">
+                            <div>
+                              <span className="text-gray-600">Code:</span>
+                              <span className="font-medium ml-2">{payment.payment_code}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Date:</span>
+                              <span className="font-medium ml-2">{new Date(payment.payment_date).toLocaleDateString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Method:</span>
+                              <span className="font-medium ml-2 capitalize">{payment.payment_method}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Reference:</span>
+                              <span className="font-medium ml-2">{payment.reference_number}</span>
+                            </div>
+                            {payment.bank_name && (
+                              <div className="col-span-2">
+                                <span className="text-gray-600">Bank:</span>
+                                <span className="font-medium ml-2">{payment.bank_name} {payment.account_number}</span>
+                              </div>
+                            )}
                           </div>
-                          <div>
-                            <span className="text-gray-600">Date:</span>
-                            <span className="font-medium ml-2">{po.payment.paymentDate}</span>
-                          </div>
-                          <div>
-                            <span className="text-gray-600">Method:</span>
-                            <span className="font-medium ml-2 capitalize">{po.payment.paymentMethod}</span>
-                          </div>
-                          <div>
-                            <span className="text-gray-600">Reference:</span>
-                            <span className="font-medium ml-2">{po.payment.referenceNumber}</span>
-                          </div>
-                        </div>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -727,7 +746,7 @@ export default function InvoicePaymentPage() {
               <div className="flex items-center gap-2 mb-2">
                 <h3 className="font-semibold text-lg">Delivery Orders ({allDeliveryOrders.length})</h3>
                 <Badge className="bg-purple-100 text-purple-800">
-                  {allDeliveryOrders.every(doItem => doItem.status === 'completed') ? 'All Delivered' : 'In Transit'}
+                  {allDeliveryOrders.every(doItem => doItem.status === 'delivered') ? 'All Delivered' : 'In Transit'}
                 </Badge>
               </div>
               
@@ -736,60 +755,78 @@ export default function InvoicePaymentPage() {
                   <div key={doItem.id} className="border rounded-lg p-4 bg-white">
                     <div className="flex justify-between items-start mb-3">
                       <div>
-                        <div className="font-semibold">{doItem.doNumber}</div>
+                        <div className="font-semibold">{doItem.do_code}</div>
                         <div className="text-sm text-gray-600">
-                          {doItem.courier} - {doItem.trackingNumber}
+                          {doItem.courier} - {doItem.tracking_number}
                         </div>
-                        <div className="text-xs text-gray-500">PO: {doItem.poReferences.join(', ')}</div>
+                        <div className="text-xs text-gray-500">PO: {doItem.purchase_order_codes.join(', ')}</div>
                       </div>
                       <div className="text-right">
-                        <Badge className={doItem.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}>
+                        <Badge className={doItem.status === 'delivered' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}>
                           {doItem.status}
                         </Badge>
-                        <div className="text-sm mt-1">{doItem.receivedDate}</div>
-                      </div>
-                    </div>
-
-                    {/* DO Items */}
-                    <div className="mb-3">
-                      <Label className="text-sm font-medium mb-2 block">Delivered Items</Label>
-                      <div className="space-y-2">
-                        {doItem.items.map((item, itemIndex) => (
-                          <div key={item.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                            <div className="flex items-center gap-3">
-                              <div className="w-5 h-5 bg-gray-200 rounded flex items-center justify-center text-xs">
-                                {itemIndex + 1}
-                              </div>
-                              <div>
-                                <div className="font-medium text-sm">{item.productName}</div>
-                                <div className="text-xs text-gray-500">{item.sku}</div>
-                                <div className="text-xs text-blue-600">
-                                  PO: {item.poReference} | SO Item: {item.soItemId}
-                                </div>
-                              </div>
-                            </div>
-                            <div className="text-right">
-                              <div className="text-sm font-medium">{item.quantity} pcs</div>
-                            </div>
-                          </div>
-                        ))}
+                        <div className="text-sm mt-1">
+                          {doItem.received_date ? new Date(doItem.received_date).toLocaleDateString() : 'Not received'}
+                        </div>
                       </div>
                     </div>
 
                     {/* DO Details */}
-                    <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div className="grid grid-cols-2 gap-4 text-sm mb-3">
                       <div>
                         <Label className="text-xs text-gray-500">Shipping Date</Label>
-                        <p className="font-medium">{doItem.shippingDate}</p>
+                        <p className="font-medium">{new Date(doItem.shipping_date).toLocaleDateString()}</p>
                       </div>
                       <div>
                         <Label className="text-xs text-gray-500">Shipping Cost</Label>
-                        <p className="font-medium">Rp {doItem.shippingCost.toLocaleString()}</p>
+                        <p className="font-medium">Rp {doItem.shipping_cost.toLocaleString()}</p>
                       </div>
-                      <div className="col-span-2">
-                        <Label className="text-xs text-gray-500">Client Notes</Label>
-                        <p className="font-medium">{doItem.clientNotes}</p>
+                      {doItem.received_by && (
+                        <div>
+                          <Label className="text-xs text-gray-500">Received By</Label>
+                          <p className="font-medium">{doItem.received_by}</p>
+                        </div>
+                      )}
+                      <div>
+                        <Label className="text-xs text-gray-500">Confirmation Method</Label>
+                        <p className="font-medium capitalize">{doItem.confirmation_method}</p>
                       </div>
+                      {doItem.notes && (
+                        <div className="col-span-2">
+                          <Label className="text-xs text-gray-500">Notes</Label>
+                          <p className="font-medium">{doItem.notes}</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* DO Proofs */}
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      {doItem.shipping_proof && (
+                        <div>
+                          <Label className="text-xs text-gray-500">Shipping Proof</Label>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => window.open(`/uploads/${doItem.shipping_proof}`, '_blank')}
+                          >
+                            <Eye className="h-3 w-3 mr-1" />
+                            View
+                          </Button>
+                        </div>
+                      )}
+                      {doItem.proof_of_delivery && (
+                        <div>
+                          <Label className="text-xs text-gray-500">Proof of Delivery</Label>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => window.open(`/uploads/${doItem.proof_of_delivery}`, '_blank')}
+                          >
+                            <Eye className="h-3 w-3 mr-1" />
+                            View
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -815,7 +852,7 @@ export default function InvoicePaymentPage() {
                 <Card>
                   <CardContent className="p-4">
                     <div className="text-center">
-                      <div className="text-2xl font-bold text-green-600">Rp {so.totalAmount.toLocaleString()}</div>
+                      <div className="text-2xl font-bold text-green-600">Rp {so.total_amount.toLocaleString()}</div>
                       <div className="text-sm text-gray-600">Total Sales</div>
                     </div>
                   </CardContent>
@@ -824,7 +861,9 @@ export default function InvoicePaymentPage() {
                 <Card>
                   <CardContent className="p-4">
                     <div className="text-center">
-                      <div className="text-2xl font-bold text-blue-600">Rp {so.totalCost.toLocaleString()}</div>
+                      <div className="text-2xl font-bold text-blue-600">
+                        Rp {so.financialSummary?.totalCost.toLocaleString() || '0'}
+                      </div>
                       <div className="text-sm text-gray-600">Total Cost</div>
                     </div>
                   </CardContent>
@@ -833,8 +872,12 @@ export default function InvoicePaymentPage() {
                 <Card>
                   <CardContent className="p-4">
                     <div className="text-center">
-                      <div className="text-2xl font-bold text-purple-600">Rp {so.totalProfit.toLocaleString()}</div>
-                      <div className="text-sm text-gray-600">Profit ({so.profitMargin}%)</div>
+                      <div className="text-2xl font-bold text-purple-600">
+                        Rp {so.financialSummary?.totalProfit.toLocaleString() || '0'}
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        Profit ({so.financialSummary?.profitMargin.toFixed(2) || '0'}%)
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -847,8 +890,10 @@ export default function InvoicePaymentPage() {
                   <div className="space-y-2">
                     {so.taxes.map(tax => (
                       <div key={tax.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                        <span className="font-medium">{tax.name}</span>
-                        <span className="text-red-600">Rp {tax.amount.toLocaleString()} ({tax.rate}%)</span>
+                        <span className="font-medium">{tax.tax_name}</span>
+                        <span className="text-red-600">
+                          Rp {tax.tax_amount.toLocaleString()} ({tax.tax_rate}%)
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -861,21 +906,17 @@ export default function InvoicePaymentPage() {
     )
   }
 
-  const Pagination = () => (
-    <div className="flex items-center justify-between border-t pt-4">
-      <div className="text-sm text-gray-600">
-        Showing {indexOfFirstItem + 1} to {Math.min(indexOfLastItem, filteredSO.length)} of {filteredSO.length} results
+  // ============================ RENDER ============================
+  if (loading) {
+    return (
+      <div className="min-h-screen p-6 flex items-center justify-center">
+        <div className="text-center">
+          <RefreshCw className="h-12 w-12 animate-spin text-blue-500 mx-auto mb-4" />
+          <p className="mt-4 text-gray-600">Loading sales orders...</p>
+        </div>
       </div>
-      <div className="flex gap-2">
-        <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>
-          Previous
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>
-          Next
-        </Button>
-      </div>
-    </div>
-  )
+    )
+  }
 
   return (
     <div className="min-h-screen p-6">
@@ -885,6 +926,25 @@ export default function InvoicePaymentPage() {
           <h1 className="text-3xl font-bold text-gray-900">Invoice & Payment</h1>
           <p className="text-gray-600 mt-2">Process customer payments for completed orders</p>
         </div>
+
+        {/* Error State */}
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600" />
+            <div>
+              <div className="font-medium text-red-800">Error</div>
+              <div className="text-red-600 text-sm">{error}</div>
+            </div>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => setError(null)}
+              className="ml-auto"
+            >
+              Dismiss
+            </Button>
+          </div>
+        )}
 
         {/* Ready for Invoice Table */}
         <Card>
@@ -904,6 +964,14 @@ export default function InvoicePaymentPage() {
                   {readyForInvoiceSO.length} Ready for Invoice
                 </Badge>
               </div>
+              <Button 
+                variant="outline" 
+                onClick={fetchSalesOrders}
+                disabled={loading}
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Refresh
+              </Button>
             </div>
           </CardHeader>
           <CardContent>
@@ -925,29 +993,33 @@ export default function InvoicePaymentPage() {
                     <TableRow 
                       key={so.id} 
                       className={`hover:bg-gray-50 cursor-pointer ${
-                        selectedRow === so.id ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
+                        selectedRow === so.so_code ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
                       }`}
-                      onClick={() => setSelectedRow(selectedRow === so.id ? null : so.id)}
+                      onClick={() => setSelectedRow(selectedRow === so.so_code ? null : so.so_code)}
                     >
-                      <TableCell className="font-semibold">{so.soNumber}</TableCell>
+                      <TableCell className="font-semibold">{so.so_code}</TableCell>
                       <TableCell>
                         <div>
-                          <div className="font-medium">{so.customerName}</div>
-                          <div className="text-sm text-gray-500">{so.customerPhone}</div>
+                          <div className="font-medium">{so.customer_name}</div>
+                          <div className="text-sm text-gray-500">{so.customer_phone}</div>
                         </div>
                       </TableCell>
                       <TableCell className="font-semibold">
-                        Rp {so.totalAmount.toLocaleString()}
+                        Rp {so.total_amount.toLocaleString()}
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary">
-                          {so.purchaseOrders.length} PO
+                          {so.po_count || 0} PO
                         </Badge>
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-green-600">{so.profitMargin}%</span>
-                          <span className="text-sm text-gray-500">(Rp {so.totalProfit.toLocaleString()})</span>
+                          <span className="font-medium text-green-600">
+                            {so.financialSummary?.profitMargin.toFixed(2) || '0'}%
+                          </span>
+                          <span className="text-sm text-gray-500">
+                            (Rp {so.financialSummary?.totalProfit.toLocaleString() || '0'})
+                          </span>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -971,13 +1043,14 @@ export default function InvoicePaymentPage() {
                               setSelectedSO(so)
                               setPaymentData(prev => ({
                                 ...prev,
-                                invoiceNumber: so.invoiceNumber || generateInvoiceNumber(so.soNumber),
-                                paymentAmount: so.totalAmount
+                                invoiceNumber: so.invoiceNumber || generateInvoiceNumber(so.so_code),
+                                paymentAmount: so.total_amount,
+                                referenceNumber: `PAY-${so.so_code}-${Date.now()}`
                               }))
                               setShowPaymentForm(true)
                             }}
                             size="sm"
-                            disabled={so.paymentStatus === 'paid'}
+                            disabled={so.status === 'completed'}
                           >
                             <DollarSign className="h-4 w-4 mr-1" />
                             Process Payment
@@ -990,12 +1063,17 @@ export default function InvoicePaymentPage() {
               </Table>
             </div>
             {filteredSO.length > 0 && <Pagination />}
+            {filteredSO.length === 0 && (
+              <div className="text-center py-8 text-gray-500">
+                No sales orders ready for invoice
+              </div>
+            )}
           </CardContent>
         </Card>
 
         {/* Process Timeline Card - MUNCUL DI BAWAH SETELAH CLICK ROW */}
         {selectedRow && (
-          <ProcessTimeline so={currentItems.find(so => so.id === selectedRow)!} />
+          <ProcessTimeline so={currentItems.find(so => so.so_code === selectedRow)!} />
         )}
 
         {/* Payment Form */}
@@ -1004,7 +1082,7 @@ export default function InvoicePaymentPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <DollarSign className="h-5 w-5" />
-                Process Payment - {selectedSO.soNumber}
+                Process Payment - {selectedSO.so_code}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -1026,29 +1104,32 @@ export default function InvoicePaymentPage() {
                         </div>
                         <div>
                           <Label className="text-sm text-gray-600">Customer</Label>
-                          <p className="font-medium">{selectedSO.customerName}</p>
-                          <p className="text-sm text-gray-600">{selectedSO.customerCompany}</p>
-                          <p className="text-sm text-gray-500">{selectedSO.customerEmail}</p>
+                          <p className="font-medium">{selectedSO.customer_name}</p>
+                          <p className="text-sm text-gray-500">{selectedSO.customer_email}</p>
                         </div>
                         <div>
                           <Label className="text-sm text-gray-600">Billing Address</Label>
-                          <p className="text-sm">{selectedSO.billingAddress}</p>
+                          <p className="text-sm">{selectedSO.billing_address}</p>
                         </div>
                       </div>
                       <div className="space-y-4">
                         <div>
                           <Label className="text-sm text-gray-600">SO Date</Label>
-                          <p className="font-medium">{selectedSO.date}</p>
+                          <p className="font-medium">{new Date(selectedSO.date).toLocaleDateString()}</p>
                         </div>
                         <div>
                           <Label className="text-sm text-gray-600">Total Amount</Label>
-                          <p className="font-bold text-lg">Rp {selectedSO.totalAmount.toLocaleString()}</p>
+                          <p className="font-bold text-lg">Rp {selectedSO.total_amount.toLocaleString()}</p>
                         </div>
                         <div>
                           <Label className="text-sm text-gray-600">Profit Summary</Label>
                           <p className="text-sm">
-                            Margin: <span className="text-green-600 font-medium">{selectedSO.profitMargin}%</span> | 
-                            Profit: <span className="text-green-600 font-medium">Rp {selectedSO.totalProfit.toLocaleString()}</span>
+                            Margin: <span className="text-green-600 font-medium">
+                              {selectedSO.financialSummary?.profitMargin.toFixed(2) || '0'}%
+                            </span> | 
+                            Profit: <span className="text-green-600 font-medium">
+                              Rp {selectedSO.financialSummary?.totalProfit.toLocaleString() || '0'}
+                            </span>
                           </p>
                         </div>
                       </div>
@@ -1072,8 +1153,16 @@ export default function InvoicePaymentPage() {
                       <Input
                         type="number"
                         value={paymentData.paymentAmount || ''}
-                        onChange={(e) => setPaymentData(prev => ({ ...prev, paymentAmount: parseInt(e.target.value) || 0 }))}
+                        onChange={(e) => setPaymentData(prev => ({ ...prev, paymentAmount: parseFloat(e.target.value) || 0 }))}
                         placeholder="Enter payment amount"
+                      />
+                    </div>
+                    <div>
+                      <Label className="mb-2 block">Reference Number *</Label>
+                      <Input
+                        value={paymentData.referenceNumber}
+                        onChange={(e) => setPaymentData(prev => ({ ...prev, referenceNumber: e.target.value }))}
+                        placeholder="Payment reference number"
                       />
                     </div>
                   </div>
@@ -1082,7 +1171,10 @@ export default function InvoicePaymentPage() {
                       <Label className="mb-2 block">Payment Method *</Label>
                       <select
                         value={paymentData.paymentMethod}
-                        onChange={(e) => setPaymentData(prev => ({ ...prev, paymentMethod: e.target.value as any }))}
+                        onChange={(e) => setPaymentData(prev => ({ 
+                          ...prev, 
+                          paymentMethod: e.target.value as any 
+                        }))}
                         className="w-full border rounded px-3 py-2"
                       >
                         <option value="transfer">Bank Transfer</option>
@@ -1091,6 +1183,28 @@ export default function InvoicePaymentPage() {
                         <option value="other">Other</option>
                       </select>
                     </div>
+                    
+                    {paymentData.paymentMethod === 'transfer' && (
+                      <>
+                        <div>
+                          <Label className="mb-2 block">Bank Name</Label>
+                          <Input
+                            value={paymentData.bankName}
+                            onChange={(e) => setPaymentData(prev => ({ ...prev, bankName: e.target.value }))}
+                            placeholder="Bank name"
+                          />
+                        </div>
+                        <div>
+                          <Label className="mb-2 block">Account Number</Label>
+                          <Input
+                            value={paymentData.accountNumber}
+                            onChange={(e) => setPaymentData(prev => ({ ...prev, accountNumber: e.target.value }))}
+                            placeholder="Account number"
+                          />
+                        </div>
+                      </>
+                    )}
+                    
                     <div>
                       <Label className="mb-2 block">Payment Notes</Label>
                       <Input
@@ -1155,8 +1269,13 @@ export default function InvoicePaymentPage() {
                     onClick={handlePaymentSubmit}
                     className="flex-1"
                     size="lg"
+                    disabled={loading}
                   >
-                    <CheckCircle className="h-4 w-4 mr-2" />
+                    {loading ? (
+                      <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                    ) : (
+                      <CheckCircle className="h-4 w-4 mr-2" />
+                    )}
                     Confirm Payment
                   </Button>
                 </div>
