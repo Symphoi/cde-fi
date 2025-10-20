@@ -6,108 +6,181 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
-import { Search, FileText, DollarSign, Calculator, Upload, Download, CheckCircle, ChevronLeft, ChevronRight } from 'lucide-react'
-import { useState, useRef } from 'react'
+import { Search, FileText, DollarSign, Calculator, Upload, Download, CheckCircle, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
 
 interface CashAdvance {
-  id: string
-  caNumber: string
-  employee: string
+  ca_code: string
+  employee_name: string
   purpose: string
-  totalAmount: number
-  usedAmount: number
-  remainingAmount: number
-  status: 'active' | 'in_settlement' | 'completed'
+  total_amount: number
+  used_amount: number
+  remaining_amount: number
+  status: string
 }
 
-interface CATransaction {
-  id: string
-  date: string
+interface Transaction {
+  transaction_code: string
+  transaction_date: string
   description: string
   category: string
   amount: number
-  receipt: string
+  receipt_filename: string
+  receipt_path: string
+}
+
+interface SettlementData {
+  cash_advance: CashAdvance
+  transactions: Transaction[]
+  settlement: any
 }
 
 export default function CASettlementPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
   const [selectedCA, setSelectedCA] = useState<CashAdvance | null>(null)
+  const [settlementData, setSettlementData] = useState<SettlementData | null>(null)
+  const [cashAdvances, setCashAdvances] = useState<CashAdvance[]>([])
   const [refundProof, setRefundProof] = useState<File | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const itemsPerPage = 8
 
-  // Sample data
-  const cashAdvances: CashAdvance[] = [
-    {
-      id: '1',
-      caNumber: 'CA-2024-001',
-      employee: 'Budi Santoso',
-      purpose: 'Perjalanan dinas ke Surabaya',
-      totalAmount: 10000000,
-      usedAmount: 8500000,
-      remainingAmount: 1500000,
-      status: 'in_settlement'
-    },
-    {
-      id: '2',
-      caNumber: 'CA-2024-002',
-      employee: 'Sari Dewi',
-      purpose: 'Meeting dengan client Jakarta',
-      totalAmount: 5000000,
-      usedAmount: 5200000,
-      remainingAmount: -200000,
-      status: 'active'
-    }
-  ]
+  useEffect(() => {
+    fetchSettlementCAs()
+  }, [])
 
-  // Sample transactions for selected CA
-  const transactions: CATransaction[] = selectedCA ? [
-    {
-      id: '1',
-      date: '2024-01-25',
-      description: 'Tiket pesawat Surabaya',
-      category: 'Transportation',
-      amount: 2500000,
-      receipt: 'tiket.pdf'
-    },
-    {
-      id: '2',
-      date: '2024-01-26',
-      description: 'Hotel 3 malam',
-      category: 'Accommodation',
-      amount: 3000000,
-      receipt: 'hotel.pdf'
-    },
-    {
-      id: '3',
-      date: '2024-01-27',
-      description: 'Transportasi lokal',
-      category: 'Transportation',
-      amount: 500000,
-      receipt: 'transport.pdf'
-    },
-    {
-      id: '4',
-      date: '2024-01-28',
-      description: 'Makan dan konsumsi',
-      category: 'Meals',
-      amount: 1500000,
-      receipt: 'makan.pdf'
-    },
-    {
-      id: '5',
-      date: '2024-01-29',
-      description: 'Meeting expenses',
-      category: 'Entertainment',
-      amount: 1000000,
-      receipt: 'meeting.pdf'
+  const fetchSettlementCAs = async () => {
+    setLoading(true)
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch('/api/ca-settlement', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      
+      if (!response.ok) throw new Error('Failed to fetch data')
+      
+      const result = await response.json()
+      if (result.success) {
+        setCashAdvances(result.data || [])
+      } else {
+        throw new Error(result.error || 'Failed to fetch data')
+      }
+    } catch (error) {
+      console.error('Error fetching settlement CAs:', error)
+      alert('Gagal memuat data Cash Advance')
+    } finally {
+      setLoading(false)
     }
-  ] : []
+  }
+
+  const handleSelectCA = async (ca: CashAdvance) => {
+    setSelectedCA(ca)
+    setLoading(true)
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch(`/api/ca-settlement?ca_code=${ca.ca_code}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      
+      if (!response.ok) throw new Error('Failed to fetch settlement data')
+      
+      const result = await response.json()
+      if (result.success) {
+        setSettlementData(result.data)
+      } else {
+        throw new Error(result.error || 'Failed to fetch settlement data')
+      }
+    } catch (error) {
+      console.error('Error fetching settlement detail:', error)
+      alert('Gagal memuat detail settlement')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) {
+        alert('File terlalu besar. Maksimal 5MB')
+        return
+      }
+      setRefundProof(file)
+    }
+  }
+
+  const handleSubmitSettlement = async () => {
+    if (!selectedCA || !settlementData) return
+
+    // Validate refund proof for remaining amount
+    if (selectedCA.remaining_amount > 0 && !refundProof) {
+      alert('Harap upload bukti refund untuk sisa dana')
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      const formData = new FormData()
+      formData.append('data', JSON.stringify({
+        ca_code: selectedCA.ca_code,
+        settlement_date: new Date().toISOString().split('T')[0]
+      }))
+
+      if (refundProof) {
+        formData.append('refund_proof', refundProof)
+      }
+
+      const token = localStorage.getItem('token')
+      const response = await fetch('/api/ca-settlement', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      })
+
+      const result = await response.json()
+      if (result.success) {
+        alert(result.message)
+        // Reset and refresh
+        setSelectedCA(null)
+        setSettlementData(null)
+        setRefundProof(null)
+        await fetchSettlementCAs()
+      } else {
+        alert(result.error || 'Gagal submit settlement')
+      }
+    } catch (error) {
+      console.error('Error submitting settlement:', error)
+      alert('Gagal submit settlement')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleDownloadReceipt = (transaction: Transaction) => {
+    if (transaction.receipt_path) {
+      window.open(transaction.receipt_path, '_blank')
+    }
+  }
+
+  const getCategoryColor = (category: string) => {
+    const colors: { [key: string]: string } = {
+      transportation: 'bg-blue-100 text-blue-800 border-blue-200',
+      accommodation: 'bg-green-100 text-green-800 border-green-200',
+      meals: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+      entertainment: 'bg-purple-100 text-purple-800 border-purple-200',
+      office_supplies: 'bg-gray-100 text-gray-800 border-gray-200',
+      other: 'bg-orange-100 text-orange-800 border-orange-200'
+    }
+    return colors[category] || 'bg-gray-100 text-gray-800 border-gray-200'
+  }
 
   const filteredCA = cashAdvances.filter(ca => 
-    ca.caNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    ca.employee.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    ca.ca_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    ca.employee_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     ca.purpose.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
@@ -116,39 +189,10 @@ export default function CASettlementPage() {
   const currentItems = filteredCA.slice(indexOfFirstItem, indexOfLastItem)
   const totalPages = Math.ceil(filteredCA.length / itemsPerPage)
 
-  const handleSelectCA = (ca: CashAdvance) => {
-    setSelectedCA(ca)
-    setRefundAmount(Math.max(0, ca.remainingAmount))
-  }
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      setRefundProof(file)
-    }
-  }
-
-  const handleSubmitSettlement = () => {
-    if (!selectedCA) return
-
-    if (selectedCA.remainingAmount > 0 && !refundProof) {
-      alert('Please upload refund proof for remaining amount')
-      return
-    }
-
-    console.log('Submitting settlement for:', selectedCA.caNumber)
-    alert(`Settlement for ${selectedCA.caNumber} submitted successfully!`)
-    
-    // Reset form
-    setSelectedCA(null)
-    setRefundProof(null)
-    if (fileInputRef.current) fileInputRef.current.value = ''
-  }
-
   const Pagination = () => (
     <div className="flex items-center justify-between border-t pt-4">
       <div className="text-sm text-gray-600">
-        Showing {indexOfFirstItem + 1} to {Math.min(indexOfLastItem, filteredCA.length)} of {filteredCA.length} results
+        Menampilkan {indexOfFirstItem + 1} sampai {Math.min(indexOfLastItem, filteredCA.length)} dari {filteredCA.length} hasil
       </div>
       <div className="flex gap-2">
         <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>
@@ -188,14 +232,14 @@ export default function CASettlementPage() {
         {/* CA Selection */}
         <Card>
           <CardHeader>
-            <CardTitle>Select Cash Advance for Settlement</CardTitle>
+            <CardTitle>Pilih Cash Advance untuk Settlement</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col sm:flex-row gap-3 mb-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <Input
-                  placeholder="Search CA number, employee, or purpose..."
+                  placeholder="Cari CA number, employee, atau purpose..."
                   value={searchTerm}
                   onChange={(e) => {
                     setSearchTerm(e.target.value)
@@ -206,109 +250,123 @@ export default function CASettlementPage() {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>CA Number</TableHead>
-                    <TableHead>Employee</TableHead>
-                    <TableHead>Purpose</TableHead>
-                    <TableHead>Total Amount</TableHead>
-                    <TableHead>Used Amount</TableHead>
-                    <TableHead>Remaining</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {currentItems.map((ca) => (
-                    <TableRow key={ca.id} className="hover:bg-gray-50">
-                      <TableCell className="font-semibold">
-                        {ca.caNumber}
-                      </TableCell>
-                      <TableCell>{ca.employee}</TableCell>
-                      <TableCell className="max-w-[200px] truncate" title={ca.purpose}>
-                        {ca.purpose}
-                      </TableCell>
-                      <TableCell className="font-semibold">
-                        Rp {ca.totalAmount.toLocaleString()}
-                      </TableCell>
-                      <TableCell>
-                        Rp {ca.usedAmount.toLocaleString()}
-                      </TableCell>
-                      <TableCell>
-                        <div className={`font-semibold ${
-                          ca.remainingAmount >= 0 ? 'text-green-600' : 'text-red-600'
-                        }`}>
-                          Rp {Math.abs(ca.remainingAmount).toLocaleString()}
-                          {ca.remainingAmount >= 0 ? ' (Kembali)' : ' (Kurang)'}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={
-                          ca.status === 'active' ? 'bg-green-100 text-green-800' :
-                          ca.status === 'in_settlement' ? 'bg-yellow-100 text-yellow-800' :
-                          'bg-blue-100 text-blue-800'
-                        }>
-                          {ca.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button 
-                          onClick={() => handleSelectCA(ca)}
-                          variant={selectedCA?.id === ca.id ? "default" : "outline"}
-                          disabled={ca.status === 'completed'}
-                        >
-                          {selectedCA?.id === ca.id ? 'Selected' : 'Settle'}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-            
-            {filteredCA.length > 0 && <Pagination />}
+            {loading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
+              </div>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>CA Number</TableHead>
+                        <TableHead>Employee</TableHead>
+                        <TableHead>Purpose</TableHead>
+                        <TableHead>Total Amount</TableHead>
+                        <TableHead>Used Amount</TableHead>
+                        <TableHead>Remaining</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {currentItems.map((ca) => (
+                        <TableRow key={ca.ca_code} className="hover:bg-gray-50">
+                          <TableCell className="font-semibold">
+                            {ca.ca_code}
+                          </TableCell>
+                          <TableCell>{ca.employee_name}</TableCell>
+                          <TableCell className="max-w-[200px] truncate" title={ca.purpose}>
+                            {ca.purpose}
+                          </TableCell>
+                          <TableCell className="font-semibold">
+                            Rp {ca.total_amount.toLocaleString()}
+                          </TableCell>
+                          <TableCell>
+                            Rp {ca.used_amount.toLocaleString()}
+                          </TableCell>
+                          <TableCell>
+                            <div className={`font-semibold ${
+                              ca.remaining_amount >= 0 ? 'text-green-600' : 'text-red-600'
+                            }`}>
+                              Rp {Math.abs(ca.remaining_amount).toLocaleString()}
+                              {ca.remaining_amount >= 0 ? ' (Kembali)' : ' (Kurang)'}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={
+                              ca.status === 'active' ? 'bg-green-100 text-green-800 border-green-200' :
+                              ca.status === 'in_settlement' ? 'bg-yellow-100 text-yellow-800 border-yellow-200' :
+                              'bg-blue-100 text-blue-800 border-blue-200'
+                            }>
+                              {ca.status === 'active' ? 'Aktif' : 
+                               ca.status === 'in_settlement' ? 'Dalam Settlement' : 
+                               ca.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button 
+                              onClick={() => handleSelectCA(ca)}
+                              variant={selectedCA?.ca_code === ca.ca_code ? "default" : "outline"}
+                              disabled={ca.status === 'completed'}
+                            >
+                              {selectedCA?.ca_code === ca.ca_code ? 'Selected' : 'Settle'}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                
+                {filteredCA.length > 0 && <Pagination />}
+              </>
+            )}
           </CardContent>
         </Card>
 
         {/* Settlement Details - Only show when CA is selected */}
-        {selectedCA && (
+        {selectedCA && settlementData && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Transactions Summary */}
             <div className="lg:col-span-2">
               <Card>
                 <CardHeader>
-                  <CardTitle>Transactions Summary</CardTitle>
+                  <CardTitle>Ringkasan Transaksi</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="overflow-x-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Date</TableHead>
-                          <TableHead>Description</TableHead>
-                          <TableHead>Category</TableHead>
+                          <TableHead>Tanggal</TableHead>
+                          <TableHead>Deskripsi</TableHead>
+                          <TableHead>Kategori</TableHead>
                           <TableHead>Amount</TableHead>
                           <TableHead>Receipt</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {transactions.map((transaction) => (
-                          <TableRow key={transaction.id}>
-                            <TableCell>{transaction.date}</TableCell>
+                        {settlementData.transactions.map((transaction) => (
+                          <TableRow key={transaction.transaction_code}>
+                            <TableCell>{transaction.transaction_date}</TableCell>
                             <TableCell>{transaction.description}</TableCell>
                             <TableCell>
-                              <Badge variant="outline">{transaction.category}</Badge>
+                              <Badge className={getCategoryColor(transaction.category)}>
+                                {transaction.category}
+                              </Badge>
                             </TableCell>
                             <TableCell className="font-semibold">
                               Rp {transaction.amount.toLocaleString()}
                             </TableCell>
                             <TableCell>
-                              <Button variant="ghost" size="sm">
-                                <Download className="h-4 w-4 mr-1" />
-                                Download
-                              </Button>
+                              {transaction.receipt_path && (
+                                <Button variant="ghost" size="sm" onClick={() => handleDownloadReceipt(transaction)}>
+                                  <Download className="h-4 w-4 mr-1" />
+                                  Download
+                                </Button>
+                              )}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -325,33 +383,33 @@ export default function CASettlementPage() {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Calculator className="h-5 w-5" />
-                    Settlement Calculation
+                    Perhitungan Settlement
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="space-y-2">
                     <div className="flex justify-between">
                       <span className="text-gray-600">Total CA Amount:</span>
-                      <span className="font-semibold">Rp {selectedCA.totalAmount.toLocaleString()}</span>
+                      <span className="font-semibold">Rp {settlementData.cash_advance.total_amount.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Total Used:</span>
-                      <span className="font-semibold">Rp {selectedCA.usedAmount.toLocaleString()}</span>
+                      <span className="font-semibold">Rp {settlementData.cash_advance.used_amount.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between border-t pt-2">
-                      <span className="text-gray-600">Remaining Amount:</span>
+                      <span className="text-gray-600">Sisa Amount:</span>
                       <span className={`font-semibold ${
-                        selectedCA.remainingAmount >= 0 ? 'text-green-600' : 'text-red-600'
+                        settlementData.cash_advance.remaining_amount >= 0 ? 'text-green-600' : 'text-red-600'
                       }`}>
-                        Rp {Math.abs(selectedCA.remainingAmount).toLocaleString()}
+                        Rp {Math.abs(settlementData.cash_advance.remaining_amount).toLocaleString()}
                       </span>
                     </div>
                   </div>
 
                   {/* Refund Section - Only show if there's remaining amount */}
-                  {selectedCA.remainingAmount > 0 && (
+                  {settlementData.cash_advance.remaining_amount > 0 && (
                     <div className="border-t pt-4">
-                      <Label className="text-sm font-medium mb-3 block">Refund Proof</Label>
+                      <Label className="text-sm font-medium mb-3 block">Bukti Refund</Label>
                       <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
                         {refundProof ? (
                           <div className="flex items-center justify-between p-2 bg-green-50 rounded">
@@ -360,7 +418,7 @@ export default function CASettlementPage() {
                               <span className="text-sm">{refundProof.name}</span>
                             </div>
                             <Button variant="ghost" size="sm" onClick={() => setRefundProof(null)}>
-                              Remove
+                              Hapus
                             </Button>
                           </div>
                         ) : (
@@ -372,7 +430,7 @@ export default function CASettlementPage() {
                               size="sm"
                             >
                               <Upload className="h-4 w-4 mr-2" />
-                              Upload Refund Proof
+                              Upload Bukti Refund
                             </Button>
                             <input
                               ref={fileInputRef}
@@ -382,7 +440,7 @@ export default function CASettlementPage() {
                               accept=".pdf,.jpg,.jpeg,.png"
                             />
                             <p className="text-xs text-gray-500 mt-2">
-                              Upload bukti transfer kembali sebesar Rp {selectedCA.remainingAmount.toLocaleString()}
+                              Upload bukti transfer kembali sebesar Rp {settlementData.cash_advance.remaining_amount.toLocaleString()}
                             </p>
                           </div>
                         )}
@@ -391,15 +449,15 @@ export default function CASettlementPage() {
                   )}
 
                   {/* Additional Payment Section - If used amount exceeds CA */}
-                  {selectedCA.remainingAmount < 0 && (
+                  {settlementData.cash_advance.remaining_amount < 0 && (
                     <div className="border-t pt-4">
                       <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
                         <div className="flex items-center gap-2 text-yellow-800">
                           <DollarSign className="h-4 w-4" />
-                          <span className="text-sm font-medium">Additional Payment Required</span>
+                          <span className="text-sm font-medium">Pembayaran Tambahan Diperlukan</span>
                         </div>
                         <p className="text-sm text-yellow-700 mt-1">
-                          Kekurangan sebesar Rp {Math.abs(selectedCA.remainingAmount).toLocaleString()} akan dibayarkan ke karyawan.
+                          Kekurangan sebesar Rp {Math.abs(settlementData.cash_advance.remaining_amount).toLocaleString()} akan dibayarkan ke karyawan.
                         </p>
                       </div>
                     </div>
@@ -408,10 +466,14 @@ export default function CASettlementPage() {
                   <Button 
                     className="w-full bg-green-600 hover:bg-green-700"
                     onClick={handleSubmitSettlement}
-                    disabled={selectedCA.remainingAmount > 0 && !refundProof}
+                    disabled={submitting || (settlementData.cash_advance.remaining_amount > 0 && !refundProof)}
                   >
-                    <CheckCircle className="h-4 w-4 mr-2" />
-                    Submit Settlement
+                    {submitting ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <CheckCircle className="h-4 w-4 mr-2" />
+                    )}
+                    {submitting ? 'Processing...' : 'Submit Settlement'}
                   </Button>
                 </CardContent>
               </Card>

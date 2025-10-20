@@ -5,66 +5,136 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Search, CheckCircle, XCircle, FileText, ChevronLeft, ChevronRight, User, Calendar, DollarSign } from 'lucide-react'
-import { useState } from 'react'
+import { Search, CheckCircle, XCircle, FileText, ChevronLeft, ChevronRight, DollarSign, Loader2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
 
 interface CashAdvance {
-  id: string
-  caNumber: string
-  employee: string
+  ca_code: string
+  employee_name: string
   department: string
   purpose: string
-  amount: number
-  requestDate: string
-  status: 'submitted' | 'approved' | 'rejected'
-  submittedDate: string
-  submittedTime: string
-  daysWaiting: number
+  total_amount: number
+  request_date: string
+  project_code?: string
+  created_at: string
+  submitted_date: string
+  submitted_time: string
+  days_waiting: number
+}
+
+interface Stats {
+  pending: number
+  totalAmount: number
 }
 
 export default function CAApprovalPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
+  const [cashAdvances, setCashAdvances] = useState<CashAdvance[]>([])
+  const [stats, setStats] = useState<Stats>({ pending: 0, totalAmount: 0 })
+  const [loading, setLoading] = useState(false)
+  const [processing, setProcessing] = useState<string | null>(null)
   const itemsPerPage = 8
 
-  // Sample data
-  const cashAdvances: CashAdvance[] = [
-    {
-      id: '1',
-      caNumber: 'CA-2024-001',
-      employee: 'Budi Santoso',
-      department: 'Sales',
-      purpose: 'Perjalanan dinas ke Surabaya untuk meeting client',
-      amount: 10000000,
-      requestDate: '2024-01-20',
-      status: 'submitted',
-      submittedDate: '2024-01-20',
-      submittedTime: '09:30',
-      daysWaiting: 3
-    },
-    {
-      id: '2', 
-      caNumber: 'CA-2024-002',
-      employee: 'Sari Dewi',
-      department: 'Marketing',
-      purpose: 'Event launching produk baru di Jakarta',
-      amount: 15000000,
-      requestDate: '2024-01-21',
-      status: 'submitted',
-      submittedDate: '2024-01-21',
-      submittedTime: '14:15',
-      daysWaiting: 2
-    }
-  ]
+  useEffect(() => {
+    fetchPendingApprovals()
+  }, [searchTerm])
 
-  const stats = {
-    pending: cashAdvances.length,
-    totalAmount: cashAdvances.reduce((sum, ca) => sum + ca.amount, 0)
+  const fetchPendingApprovals = async () => {
+    setLoading(true)
+    try {
+      const token = localStorage.getItem('token')
+      const url = `/api/ca-approval${searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : ''}`
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      
+      if (!response.ok) throw new Error('Failed to fetch data')
+      
+      const result = await response.json()
+      if (result.success) {
+        setCashAdvances(result.data || [])
+        setStats(result.stats || { pending: 0, totalAmount: 0 })
+      } else {
+        throw new Error(result.error || 'Failed to fetch data')
+      }
+    } catch (error) {
+      console.error('Error fetching pending approvals:', error)
+      alert('Gagal memuat data persetujuan')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleApprove = async (ca: CashAdvance) => {
+    if (!confirm(`Setujui Cash Advance ${ca.ca_code}?`)) return
+
+    setProcessing(ca.ca_code)
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch('/api/ca-approval', {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+          ca_code: ca.ca_code, 
+          action: 'approve' 
+        })
+      })
+
+      const result = await response.json()
+      if (result.success) {
+        alert(result.message)
+        await fetchPendingApprovals()
+      } else {
+        alert(result.error || 'Gagal menyetujui Cash Advance')
+      }
+    } catch (error) {
+      alert('Gagal menyetujui Cash Advance')
+    } finally {
+      setProcessing(null)
+    }
+  }
+
+  const handleReject = async (ca: CashAdvance) => {
+    const reason = prompt('Alasan penolakan:')
+    if (!reason) return
+
+    setProcessing(ca.ca_code)
+    try {
+      const token = localStorage.getItem('token')
+      const response = await fetch('/api/ca-approval', {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+          ca_code: ca.ca_code, 
+          action: 'reject',
+          notes: reason
+        })
+      })
+
+      const result = await response.json()
+      if (result.success) {
+        alert(result.message)
+        await fetchPendingApprovals()
+      } else {
+        alert(result.error || 'Gagal menolak Cash Advance')
+      }
+    } catch (error) {
+      alert('Gagal menolak Cash Advance')
+    } finally {
+      setProcessing(null)
+    }
   }
 
   const filteredCA = cashAdvances.filter(ca => 
-    ca.caNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    ca.employee.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    ca.ca_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    ca.employee_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     ca.purpose.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
@@ -73,20 +143,10 @@ export default function CAApprovalPage() {
   const currentItems = filteredCA.slice(indexOfFirstItem, indexOfLastItem)
   const totalPages = Math.ceil(filteredCA.length / itemsPerPage)
 
-  const handleApprove = (ca: CashAdvance) => {
-    console.log('Approving CA:', ca.caNumber)
-    alert(`CA ${ca.caNumber} approved!`)
-  }
-
-  const handleReject = (ca: CashAdvance) => {
-    console.log('Rejecting CA:', ca.caNumber)
-    alert(`CA ${ca.caNumber} rejected!`)
-  }
-
   const Pagination = () => (
     <div className="flex items-center justify-between border-t pt-4">
       <div className="text-sm text-gray-600">
-        Showing {indexOfFirstItem + 1} to {Math.min(indexOfLastItem, filteredCA.length)} of {filteredCA.length} results
+        Menampilkan {indexOfFirstItem + 1} sampai {Math.min(indexOfLastItem, filteredCA.length)} dari {filteredCA.length} hasil
       </div>
       <div className="flex gap-2">
         <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>
@@ -153,7 +213,7 @@ export default function CAApprovalPage() {
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <Input
-                  placeholder="Search CA number, employee, or purpose..."
+                  placeholder="Cari CA number, employee, atau purpose..."
                   value={searchTerm}
                   onChange={(e) => {
                     setSearchTerm(e.target.value)
@@ -165,77 +225,103 @@ export default function CAApprovalPage() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>CA Number</TableHead>
-                    <TableHead>Employee</TableHead>
-                    <TableHead>Purpose</TableHead>
-                    <TableHead>Amount</TableHead>
-                    <TableHead>Request Date</TableHead>
-                    <TableHead>Days Waiting</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {currentItems.map((ca) => (
-                    <TableRow key={ca.id} className="hover:bg-gray-50">
-                      <TableCell className="font-semibold">
-                        {ca.caNumber}
-                      </TableCell>
-                      <TableCell>
-                        <div className="font-medium">{ca.employee}</div>
-                        <div className="text-sm text-gray-500">{ca.department}</div>
-                      </TableCell>
-                      <TableCell className="max-w-[300px] truncate" title={ca.purpose}>
-                        {ca.purpose}
-                      </TableCell>
-                      <TableCell className="font-semibold">
-                        Rp {ca.amount.toLocaleString()}
-                      </TableCell>
-                      <TableCell>
-                        <div className="font-medium">{ca.requestDate}</div>
-                        <div className="text-sm text-gray-500">{ca.submittedTime}</div>
-                      </TableCell>
-                      <TableCell>
-                        <div className={`text-sm font-medium ${
-                          ca.daysWaiting > 2 ? 'text-red-600' : 'text-gray-600'
-                        }`}>
-                          {ca.daysWaiting}d
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge className="bg-blue-100 text-blue-800" variant="outline">
-                          Waiting Approval
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex gap-2 justify-end">
-                          <Button 
-                            onClick={() => handleApprove(ca)}
-                            size="sm"
-                            className="bg-green-600 hover:bg-green-700"
-                          >
-                            <CheckCircle className="h-4 w-4 mr-1" />
-                            Approve
-                          </Button>
-                          <Button 
-                            onClick={() => handleReject(ca)}
-                            size="sm"
-                            variant="destructive"
-                          >
-                            <XCircle className="h-4 w-4 mr-1" />
-                            Reject
-                          </Button>
-                        </div>
-                      </TableCell>
+            {loading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>CA Number</TableHead>
+                      <TableHead>Employee</TableHead>
+                      <TableHead>Purpose</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Request Date</TableHead>
+                      <TableHead>Days Waiting</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                  </TableHeader>
+                  <TableBody>
+                    {currentItems.map((ca) => (
+                      <TableRow key={ca.ca_code} className="hover:bg-gray-50">
+                        <TableCell className="font-semibold">
+                          {ca.ca_code}
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-medium">{ca.employee_name}</div>
+                          <div className="text-sm text-gray-500">{ca.department}</div>
+                        </TableCell>
+                        <TableCell className="max-w-[300px] truncate" title={ca.purpose}>
+                          {ca.purpose}
+                        </TableCell>
+                        <TableCell className="font-semibold">
+                          Rp {ca.total_amount.toLocaleString()}
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-medium">{ca.request_date}</div>
+                          <div className="text-sm text-gray-500">{ca.submitted_time}</div>
+                        </TableCell>
+                        <TableCell>
+                          <div className={`text-sm font-medium ${
+                            ca.days_waiting > 2 ? 'text-red-600' : 'text-gray-600'
+                          }`}>
+                            {ca.days_waiting}d
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge className="bg-blue-100 text-blue-800 border-blue-200" variant="outline">
+                            Menunggu Approval
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex gap-2 justify-end">
+                            <Button 
+                              onClick={() => handleApprove(ca)}
+                              size="sm"
+                              className="bg-green-600 hover:bg-green-700"
+                              disabled={processing === ca.ca_code}
+                            >
+                              {processing === ca.ca_code ? (
+                                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                              ) : (
+                                <CheckCircle className="h-4 w-4 mr-1" />
+                              )}
+                              {processing === ca.ca_code ? 'Processing...' : 'Approve'}
+                            </Button>
+                            <Button 
+                              onClick={() => handleReject(ca)}
+                              size="sm"
+                              variant="destructive"
+                              disabled={processing === ca.ca_code}
+                            >
+                              {processing === ca.ca_code ? (
+                                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                              ) : (
+                                <XCircle className="h-4 w-4 mr-1" />
+                              )}
+                              {processing === ca.ca_code ? 'Processing...' : 'Reject'}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+
+                {filteredCA.length === 0 && !loading && (
+                  <div className="text-center py-8">
+                    <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Tidak ada Cash Advance</h3>
+                    <p className="text-gray-500">
+                      {searchTerm ? 'Coba ubah pencarian Anda' : 'Tidak ada CA yang menunggu approval'}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
             
             {filteredCA.length > 0 && <Pagination />}
           </CardContent>

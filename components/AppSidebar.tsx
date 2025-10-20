@@ -103,25 +103,6 @@ const navItems: NavItem[] = [
       }
     ],
   },
-  //  // SIDE BAR Projects 
-  // {
-  //   icon: <BriefcaseBusinessIcon className="w-5 h-5" />,
-  //   name: "Projects",
-  //   subItems: [
-  //     {
-  //       name: "Create CA", path: "/salesorder2", pro: false 
-  //     },
-  //     {
-  //       name: "Create Transactions CA", path: "/purchaseorder2", pro: false 
-  //     },
-  //     {
-  //       name: "Approval CA", path: "/approval-transactions2", pro: false 
-  //     },
-  //     {
-  //       name: "Refund CA", path: "/deliver-to-client2", pro: false 
-  //     },
-  //   ],
-  // },
   
 ];
 
@@ -131,7 +112,12 @@ const othersItems: NavItem[] = [
     name: "Settings",
     subItems: [
       { name: "RBAC", path: "/rbac", pro: false },
-      { name: "Bar Chart", path: "/bar-chart", pro: false },
+      { name: "Projects", path: "/projects", pro: false },
+      { name: "Companies", path: "/companies", pro: false },
+      { name: "Taxes", path: "/taxes", pro: false },
+      { name: "Bank Account", path: "/bank-accounts", pro: false },
+      { name: "Reimbursement Categories ", path: "/reimbursement-categories", pro: false },
+      
     ],
   }
 ];

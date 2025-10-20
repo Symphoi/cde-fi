@@ -471,7 +471,34 @@ export async function PATCH(request) {
       );
     }
 
-    // Audit log
+    // ✅ AUTO-UPDATE STATUS SO: Cek apakah semua PO di SO ini sudah delivered
+    const allPOsDelivered = await query(
+      `SELECT COUNT(*) as pending_count 
+       FROM purchase_orders 
+       WHERE so_code = ? AND is_deleted = 0 
+       AND (do_status != 'delivered' OR do_status IS NULL)`,
+      [doCheck[0].so_code]
+    );
+
+    // Jika semua PO sudah delivered, update SO status ke 'invoicing'
+    if (allPOsDelivered[0].pending_count === 0) {
+      await query(
+        `UPDATE sales_orders SET status = 'invoicing' WHERE so_code = ? AND is_deleted = 0`,
+        [doCheck[0].so_code]
+      );
+      
+      // Audit log
+      await createAuditLog(
+        decoded.user_code,
+        decoded.name,
+        'update',
+        'sales_order',
+        doCheck[0].so_code,
+        'Auto-updated to invoicing status - all POs delivered'
+      );
+    }
+
+    // Audit log untuk DO
     await createAuditLog(
       decoded.user_code,
       decoded.name,
@@ -484,7 +511,8 @@ export async function PATCH(request) {
     return Response.json({
       success: true,
       message: 'Delivery order marked as delivered successfully',
-      po_count: poCodes.length
+      po_count: poCodes.length,
+      so_updated: allPOsDelivered[0].pending_count === 0 // Info apakah SO di-update
     });
 
   } catch (error) {

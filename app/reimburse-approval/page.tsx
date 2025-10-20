@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,694 +8,756 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
-import { Search, CheckCircle, XCircle, FileText, ChevronLeft, ChevronRight, Download, Filter, FileDown, User, Calendar, DollarSign, Upload, Eye, X, Plus, Trash2 } from 'lucide-react';
+import { Search, CheckCircle, XCircle, FileText, ChevronLeft, ChevronRight, Download, Filter, User, Calendar, DollarSign, Upload, Eye, X } from 'lucide-react';
+import { toast } from 'sonner';
+import React from 'react';
 
-type ReimburseStatus = 'pending' | 'approved' | 'rejected';
+// Constants
+const DOUBLE_CLICK_DELAY = 300;
+const DEBOUNCE_DELAY = 300;
+const FILE_UPLOAD_CONFIG = {
+  acceptTypes: '.pdf,.jpg,.jpeg,.png',
+  maxSize: 10 * 1024 * 1024,
+  maxSizeText: '10MB'
+} as const;
 
-type ReimburseItem = {
+// Types
+type ReimburseStatus = 'submitted' | 'approved' | 'rejected';
+
+interface ReimburseItem {
   id: string;
-  date: string;
+  item_code: string;
+  item_date: string;
   description: string;
-  category: string;
   amount: number;
-  tax: number;
-  total: number;
-  attachments: string[];
-};
+  attachment_path?: string;
+}
 
-type Reimburse = {
+interface Reimburse {
   id: string;
-  reimburseNumber: string;
+  reimbursement_code: string;
   title: string;
-  purpose: string;
-  submittedBy: string; // Yang ngajuin
-  actualUser: string; // Yang beneran punya pengeluaran
-  submittedDate: string;
-  submittedTime: string;
-  items: ReimburseItem[];
-  totalAmount: number;
-  totalTax: number;
-  grandTotal: number;
-  notes?: string;
+  notes: string;
+  submitted_by_user_name: string;
+  created_by_user_name: string;
+  category_code: string;
+  project_code?: string;
+  total_amount: number;
   status: ReimburseStatus;
-  daysWaiting: number;
-  approvedBy?: string;
-  approvedDate?: string;
-  rejectionReason?: string;
-  paymentProof?: string;
+  payment_proof_path?: string;
+  submitted_date: string;
+  submitted_time: string;
+  approved_by_user_name?: string;
+  approved_date?: string;
+  bank_account_code?: string;
+  rejection_reason?: string;
+  items_count: number;
+  days_waiting: number;
+  items: ReimburseItem[];
+}
+
+interface BankAccount {
+  bank_account_code: string;
+  bank_name: string;
+  account_number: string;
+  account_holder: string;
+}
+
+interface DateRange {
+  start: string;
+  end: string;
+}
+
+interface AmountRange {
+  min: string;
+  max: string;
+}
+
+// Utility functions
+const formatRupiah = (amount: number): string => {
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  }).format(amount);
 };
 
-// Analytics tracking
-const trackAction = (action: string, data: any) => {
-  console.log(`[Analytics] ${action}:`, data);
+const formatDate = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toLocaleDateString('id-ID', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  });
 };
 
+// Skeleton Loading Component
+const ReimburseSkeleton = () => (
+  <TableRow>
+    <TableCell className="px-4 text-center">
+      <div className="h-4 bg-gray-200 rounded animate-pulse w-8"></div>
+    </TableCell>
+    <TableCell className="px-4">
+      <div className="h-4 bg-gray-200 rounded animate-pulse w-24"></div>
+    </TableCell>
+    <TableCell className="px-4">
+      <div className="space-y-2">
+        <div className="h-4 bg-gray-200 rounded animate-pulse w-32"></div>
+        <div className="h-3 bg-gray-200 rounded animate-pulse w-24"></div>
+      </div>
+    </TableCell>
+    <TableCell className="px-4">
+      <div className="space-y-2">
+        <div className="h-4 bg-gray-200 rounded animate-pulse w-20"></div>
+        <div className="h-3 bg-gray-200 rounded animate-pulse w-16"></div>
+      </div>
+    </TableCell>
+    <TableCell className="px-4">
+      <div className="h-4 bg-gray-200 rounded animate-pulse w-16"></div>
+    </TableCell>
+    <TableCell className="px-4">
+      <div className="h-4 bg-gray-200 rounded animate-pulse w-8"></div>
+    </TableCell>
+    <TableCell className="px-4">
+      <div className="h-6 bg-gray-200 rounded animate-pulse w-16"></div>
+    </TableCell>
+    <TableCell className="px-4">
+      <div className="flex gap-2">
+        <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+        <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+      </div>
+    </TableCell>
+  </TableRow>
+);
+
+// Error Boundary Component
+class ReimburseErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(_: Error) {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('Reimburse Error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Card className="mx-auto max-w-md mt-8">
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <FileText className="h-12 w-12 text-red-500 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold mb-2">Something went wrong</h3>
+              <p className="text-gray-600 mb-4">
+                There was an error loading the reimbursement data.
+              </p>
+              <Button onClick={() => this.setState({ hasError: false })}>
+                Try Again
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+// Main Component
 export default function ReimburseApprovalPage() {
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<ReimburseStatus | 'all'>('all');
   const [selectedReimburse, setSelectedReimburse] = useState<Reimburse | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [showApproveModal, setShowApproveModal] = useState(false);
-  const [showRejectModal, setShowRejectModal] = useState(false);
-  const [reimburseToAction, setReimburseToAction] = useState<Reimburse | null>(null);
-  const [dateRange, setDateRange] = useState({ start: '', end: '' });
-  const [isLoading, setIsLoading] = useState(false);
-  const [lastClickTime, setLastClickTime] = useState(0);
-  const [showFilters, setShowFilters] = useState(false);
-  const [exportFormat, setExportFormat] = useState('excel');
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [itemsPerPage, setItemsPerPage] = useState<number>(10);
+  const [dateRange, setDateRange] = useState<DateRange>({ start: '', end: '' });
+  const [amountRange, setAmountRange] = useState<AmountRange>({ min: '', max: '' });
+  const [categoryFilter, setCategoryFilter] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [lastClickTime, setLastClickTime] = useState<number>(0);
+  const [showFilters, setShowFilters] = useState<boolean>(false);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
   
-  // State untuk form di detail
-  const [rejectionReason, setRejectionReason] = useState('');
-  const [approvalNotes, setApprovalNotes] = useState('');
+  // State untuk form approve/reject
+  const [rejectionReason, setRejectionReason] = useState<string>('');
+  const [approvalNotes, setApprovalNotes] = useState<string>('');
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
-  const [viewingDocument, setViewingDocument] = useState<{name: string, url: string} | null>(null);
+  const [selectedBankAccount, setSelectedBankAccount] = useState<string>('');
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
 
-  // State untuk create new reimburse
-  const [newReimburse, setNewReimburse] = useState({
-    title: '',
-    purpose: '',
-    actualUser: '', // User yang punya pengeluaran
-    items: [] as ReimburseItem[]
-  });
-  const [newItem, setNewItem] = useState({
-    date: '',
-    description: '',
-    category: '',
-    amount: '',
-    tax: ''
-  });
+  const [reimburseData, setReimburseData] = useState<Reimburse[]>([]);
 
-  // Dummy list users
-  const userList = [
-    'Ahmad Wijaya',
-    'Sari Dewi', 
-    'Rina Melati',
-    'Budi Santoso',
-    'David Lee',
-    'Maya Sari'
-  ];
-
-  // Mock data - sekarang ada submittedBy dan actualUser
-  const reimburseData: Reimburse[] = [
-    {
-      id: '1',
-      reimburseNumber: 'REIM-2024-001',
-      title: 'Business Trip Jakarta Meeting Client',
-      purpose: 'Meeting dengan client PT. Maju Jaya untuk presentasi produk baru dan negosiasi kontrak',
-      submittedBy: 'Budi Santoso', // Yang ngajuin
-      actualUser: 'Ahmad Wijaya', // Yang beneran trip
-      submittedDate: '2024-01-20',
-      submittedTime: '14:30',
-      items: [
-        {
-          id: '1-1',
-          date: '2024-01-15',
-          description: 'Tiket pesawat Jakarta-Surabaya kelas ekonomi',
-          category: 'Transportasi',
-          amount: 850000,
-          tax: 0,
-          total: 850000,
-          attachments: ['tiket_pesawat.pdf']
-        },
-        {
-          id: '1-2',
-          date: '2024-01-16',
-          description: 'Hotel 2 malam di Hotel Santika',
-          category: 'Akomodasi',
-          amount: 1200000,
-          tax: 120000,
-          total: 1320000,
-          attachments: ['invoice_hotel.pdf', 'kwitansi_hotel.jpg']
-        }
-      ],
-      totalAmount: 2300000,
-      totalTax: 120000,
-      grandTotal: 2420000,
-      status: 'pending',
-      daysWaiting: 3
-    },
-    {
-      id: '2',
-      reimburseNumber: 'REIM-2024-002',
-      title: 'Pembelian alat kantor dan supplies',
-      purpose: 'Bahan habis pakai dan perlengkapan kantor untuk operasional harian',
-      submittedBy: 'Rina Melati', // Yang ngajuin
-      actualUser: 'Sari Dewi', // Yang beneran beli
-      submittedDate: '2024-01-22',
-      submittedTime: '09:15',
-      items: [
-        {
-          id: '2-1',
-          date: '2024-01-18',
-          description: 'Printer toner dan kertas A4 3 rim',
-          category: 'Bahan Habis Pakai',
-          amount: 750000,
-          tax: 75000,
-          total: 825000,
-          attachments: ['invoice_toner.pdf', 'invoice_kertas.pdf']
-        }
-      ],
-      totalAmount: 1100000,
-      totalTax: 110000,
-      grandTotal: 1210000,
-      status: 'pending',
-      daysWaiting: 1
-    },
-    {
-      id: '3',
-      reimburseNumber: 'REIM-2024-003',
-      title: 'Perbaikan komputer dan maintenance',
-      purpose: 'Service dan perbaikan komputer untuk tim development',
-      submittedBy: 'Budi Santoso', // Manager yang ngajuin
-      actualUser: 'Rina Melati', // Yang beneran service
-      submittedDate: '2024-01-18',
-      submittedTime: '16:45',
-      items: [
-        {
-          id: '3-1',
-          date: '2024-01-15',
-          description: 'Ganti harddisk SSD 500GB',
-          category: 'Perbaikan & Maintenance',
-          amount: 650000,
-          tax: 65000,
-          total: 715000,
-          attachments: ['invoice_ssd.pdf']
-        }
-      ],
-      totalAmount: 650000,
-      totalTax: 65000,
-      grandTotal: 715000,
-      status: 'approved',
-      daysWaiting: 0,
-      approvedBy: 'Budi Santoso',
-      approvedDate: '2024-01-19 11:30',
-      paymentProof: 'bukti_transfer_001.pdf'
+  // Utility functions
+  const handleViewAttachment = useCallback((attachmentPath: string) => {
+    if (!attachmentPath) {
+      toast.error('No attachment available');
+      return;
     }
-  ];
+    
+    const fullUrl = `${window.location.origin}${attachmentPath}`;
+    window.open(fullUrl, '_blank');
+  }, []);
+
+  const handleViewPaymentProof = useCallback((paymentProofPath: string) => {
+    if (!paymentProofPath) {
+      toast.error('No payment proof available');
+      return;
+    }
+    
+    const fullUrl = `${window.location.origin}${paymentProofPath}`;
+    window.open(fullUrl, '_blank');
+  }, []);
+
+  // Debounce search implementation
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+      setCurrentPage(1);
+    }, DEBOUNCE_DELAY);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Get token from auth context
+  const getToken = useCallback((): string => {
+    return localStorage.getItem('token') || '';
+  }, []);
+
+  // Fetch data dari backend
+  const fetchReimbursements = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const token = getToken();
+      const params = new URLSearchParams({
+        status: statusFilter === 'all' ? '' : statusFilter,
+        search: debouncedSearch,
+        page: currentPage.toString(),
+        limit: itemsPerPage.toString()
+      });
+
+      // Add advanced filters jika ada
+      if (amountRange.min) params.append('min_amount', amountRange.min);
+      if (amountRange.max) params.append('max_amount', amountRange.max);
+      if (categoryFilter) params.append('category', categoryFilter);
+      if (dateRange.start) params.append('start_date', dateRange.start);
+      if (dateRange.end) params.append('end_date', dateRange.end);
+
+      const response = await fetch(`/api/approval-reimbursement?${params}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch reimbursements');
+      }
+
+      const data = await response.json();
+      setReimburseData(data.data || []);
+    } catch (error) {
+      console.error('Error fetching reimbursements:', error);
+      toast.error('Failed to load reimbursement data');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [debouncedSearch, statusFilter, currentPage, dateRange, amountRange, categoryFilter, getToken, itemsPerPage]);
+
+  // Fetch reimbursement detail - pakai query parameter
+  const fetchReimbursementDetail = useCallback(async (reimbursementCode: string) => {
+    try {
+      const token = getToken();
+      const response = await fetch(`/api/approval-reimbursement?reimbursement_code=${reimbursementCode}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch reimbursement detail');
+      }
+
+      const data = await response.json();
+      setSelectedReimburse(data.data);
+      setBankAccounts(data.data.bank_accounts || []);
+      // Reset form state
+      setSelectedBankAccount('');
+      setUploadedFiles([]);
+      setRejectionReason('');
+      setApprovalNotes('');
+    } catch (error) {
+      console.error('Error fetching reimbursement detail:', error);
+      toast.error('Failed to load reimbursement details');
+    }
+  }, [getToken]);
+
+  // Handle approve
+  const handleApprove = useCallback(async () => {
+    if (!selectedReimburse) return;
+
+    if (!selectedBankAccount) {
+      toast.error('Please select a bank account');
+      return;
+    }
+
+    if (uploadedFiles.length === 0) {
+      toast.error('Please upload payment proof');
+      return;
+    }
+
+    // Validate file size
+    const oversizedFile = uploadedFiles.find(file => file.size > FILE_UPLOAD_CONFIG.maxSize);
+    if (oversizedFile) {
+      toast.error(`File ${oversizedFile.name} exceeds ${FILE_UPLOAD_CONFIG.maxSizeText} limit`);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const formData = new FormData();
+      const submitData = {
+        reimbursement_code: selectedReimburse.reimbursement_code,
+        status: 'approved',
+        bank_account_code: selectedBankAccount
+      };
+
+      formData.append('data', JSON.stringify(submitData));
+
+      // Add payment proof file
+      if (uploadedFiles[0]) {
+        formData.append('payment_proof', uploadedFiles[0]);
+      }
+
+      const token = getToken();
+      const response = await fetch('/api/approval-reimbursement', {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        toast.success(`Reimburse ${selectedReimburse.reimbursement_code} approved successfully!`);
+        // Refresh data
+        await fetchReimbursements();
+        await fetchReimbursementDetail(selectedReimburse.reimbursement_code);
+      } else {
+        toast.error(`Error: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Error approving reimbursement:', error);
+      toast.error('Error approving reimbursement');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedReimburse, selectedBankAccount, uploadedFiles, getToken, fetchReimbursements, fetchReimbursementDetail]);
+
+  // Handle reject
+  const handleReject = useCallback(async () => {
+    if (!selectedReimburse) return;
+
+    if (!rejectionReason.trim()) {
+      toast.error('Please provide rejection reason');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const formData = new FormData();
+      const submitData = {
+        reimbursement_code: selectedReimburse.reimbursement_code,
+        status: 'rejected',
+        rejection_reason: rejectionReason
+      };
+
+      formData.append('data', JSON.stringify(submitData));
+
+      const token = getToken();
+      const response = await fetch('/api/approval-reimbursement', {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        toast.success(`Reimburse ${selectedReimburse.reimbursement_code} rejected successfully!`);
+        // Refresh data
+        await fetchReimbursements();
+        await fetchReimbursementDetail(selectedReimburse.reimbursement_code);
+      } else {
+        toast.error(`Error: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Error rejecting reimbursement:', error);
+      toast.error('Error rejecting reimbursement');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedReimburse, rejectionReason, getToken, fetchReimbursements, fetchReimbursementDetail]);
+
+  // UseEffect untuk load data
+  useEffect(() => {
+    fetchReimbursements();
+  }, [fetchReimbursements, itemsPerPage]);
 
   // Filter data
-  const filteredReimburse = reimburseData.filter(reimburse => {
-    const matchesSearch = 
-      reimburse.reimburseNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      reimburse.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      reimburse.submittedBy.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      reimburse.actualUser.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesStatus = statusFilter === 'all' || reimburse.status === statusFilter;
-    
-    const matchesDateRange = 
-      (!dateRange.start || reimburse.submittedDate >= dateRange.start) &&
-      (!dateRange.end || reimburse.submittedDate <= dateRange.end);
+  const filteredReimburse = useMemo(() => {
+    return reimburseData.filter(reimburse => {
+      const matchesDateRange = 
+        (!dateRange.start || reimburse.submitted_date >= dateRange.start) &&
+        (!dateRange.end || reimburse.submitted_date <= dateRange.end);
 
-    return matchesSearch && matchesStatus && matchesDateRange;
-  });
+      const matchesAmountRange =
+        (!amountRange.min || reimburse.total_amount >= parseFloat(amountRange.min)) &&
+        (!amountRange.max || reimburse.total_amount <= parseFloat(amountRange.max));
+
+      const matchesCategory = 
+        !categoryFilter || reimburse.category_code === categoryFilter;
+
+      return matchesDateRange && matchesAmountRange && matchesCategory;
+    });
+  }, [reimburseData, dateRange, amountRange, categoryFilter]);
 
   // Pagination
-  const itemsPerPage = 5;
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
   const currentItems = filteredReimburse.slice(indexOfFirstItem, indexOfLastItem);
   const totalPages = Math.ceil(filteredReimburse.length / itemsPerPage);
 
   // Status color
-  const getStatusColor = (status: ReimburseStatus) => {
+  const getStatusColor = useCallback((status: ReimburseStatus) => {
     const colors = {
-      pending: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+      submitted: 'bg-yellow-100 text-yellow-800 border-yellow-200',
       approved: 'bg-green-100 text-green-800 border-green-200',
       rejected: 'bg-red-100 text-red-800 border-red-200'
     };
     return colors[status];
-  };
+  }, []);
 
-  // Row click handler dengan double click
-  const handleRowClick = (reimburse: Reimburse) => {
+  // Row click handler
+  const handleRowClick = useCallback((reimburse: Reimburse) => {
     const currentTime = new Date().getTime();
     const clickGap = currentTime - lastClickTime;
 
-    if (clickGap < 300) { // Double click
+    if (clickGap < DOUBLE_CLICK_DELAY) {
       if (selectedReimburse?.id === reimburse.id) {
         setSelectedReimburse(null);
-        trackAction('detail_closed', { reimburseNumber: reimburse.reimburseNumber });
       }
-    } else { // Single click
-      setSelectedReimburse(reimburse);
-      // Reset form ketika pilih reimburse baru
-      setRejectionReason('');
-      setApprovalNotes('');
-      setUploadedFiles([]);
-      trackAction('detail_opened', { reimburseNumber: reimburse.reimburseNumber });
+    } else {
+      fetchReimbursementDetail(reimburse.reimbursement_code);
     }
     setLastClickTime(currentTime);
-  };
-
-  // Quick actions
-  const handleQuickApprove = (reimburse: Reimburse, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setReimburseToAction(reimburse);
-    setShowApproveModal(true);
-    trackAction('approve_clicked', { reimburseNumber: reimburse.reimburseNumber });
-  };
-
-  const handleQuickReject = (reimburse: Reimburse, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setReimburseToAction(reimburse);
-    setShowRejectModal(true);
-    trackAction('reject_clicked', { reimburseNumber: reimburse.reimburseNumber });
-  };
-
-  // Document viewer
-  const handleViewDocument = (fileName: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const documentUrl = `/documents/${fileName}`;
-    setViewingDocument({ name: fileName, url: documentUrl });
-    trackAction('document_viewed', { fileName });
-  };
+  }, [lastClickTime, selectedReimburse, fetchReimbursementDetail]);
 
   // File upload handler
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
 
     const newFiles = Array.from(files);
-    setUploadedFiles(prev => [...prev, ...newFiles]);
-    trackAction('files_uploaded', { count: newFiles.length });
-  };
+    const validFiles = newFiles.filter(file => file.size <= FILE_UPLOAD_CONFIG.maxSize);
+    const invalidFiles = newFiles.filter(file => file.size > FILE_UPLOAD_CONFIG.maxSize);
 
-  const removeUploadedFile = (index: number) => {
+    if (invalidFiles.length > 0) {
+      toast.error(`Some files exceed ${FILE_UPLOAD_CONFIG.maxSizeText} limit and were not uploaded`);
+    }
+
+    setUploadedFiles(prev => [...prev, ...validFiles]);
+  }, []);
+
+  const removeUploadedFile = useCallback((index: number) => {
     setUploadedFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  // Approval handlers dari detail
-  const handleApproveFromDetail = () => {
-    if (!selectedReimburse) return;
-    
-    if (uploadedFiles.length === 0) {
-      alert('Please upload payment proof before approving');
-      return;
-    }
-
-    setIsLoading(true);
-    setTimeout(() => {
-      trackAction('reimburse_approved_from_detail', {
-        reimburseNumber: selectedReimburse.reimburseNumber,
-        amount: selectedReimburse.grandTotal,
-        notes: approvalNotes,
-        fileCount: uploadedFiles.length,
-        timestamp: new Date().toISOString()
-      });
-      
-      setSelectedReimburse({ 
-        ...selectedReimburse, 
-        status: 'approved',
-        approvedBy: 'Current User',
-        approvedDate: new Date().toLocaleString('id-ID'),
-        paymentProof: uploadedFiles.map(f => f.name).join(', ')
-      });
-      
-      setApprovalNotes('');
-      setUploadedFiles([]);
-      setIsLoading(false);
-      alert(`Reimburse ${selectedReimburse.reimburseNumber} approved!`);
-    }, 1000);
-  };
-
-  const handleRejectFromDetail = () => {
-    if (!selectedReimburse || !rejectionReason.trim()) {
-      alert('Please provide rejection reason');
-      return;
-    }
-
-    setIsLoading(true);
-    setTimeout(() => {
-      trackAction('reimburse_rejected_from_detail', {
-        reimburseNumber: selectedReimburse.reimburseNumber,
-        amount: selectedReimburse.grandTotal,
-        reason: rejectionReason,
-        timestamp: new Date().toISOString()
-      });
-      
-      setSelectedReimburse({ 
-        ...selectedReimburse, 
-        status: 'rejected',
-        rejectionReason: rejectionReason
-      });
-      
-      setRejectionReason('');
-      setIsLoading(false);
-      alert(`Reimburse ${selectedReimburse.reimburseNumber} rejected!`);
-    }, 1000);
-  };
-
-  // Create new reimburse handlers
-  const handleAddItem = () => {
-    if (!newItem.date || !newItem.description || !newItem.category || !newItem.amount) {
-      alert('Please fill all required fields');
-      return;
-    }
-
-    const amount = parseFloat(newItem.amount);
-    const tax = parseFloat(newItem.tax) || 0;
-    const total = amount + tax;
-
-    const item: ReimburseItem = {
-      id: Date.now().toString(),
-      date: newItem.date,
-      description: newItem.description,
-      category: newItem.category,
-      amount: amount,
-      tax: tax,
-      total: total,
-      attachments: []
-    };
-
-    setNewReimburse(prev => ({
-      ...prev,
-      items: [...prev.items, item]
-    }));
-
-    // Reset form
-    setNewItem({
-      date: '',
-      description: '',
-      category: '',
-      amount: '',
-      tax: ''
-    });
-
-    trackAction('item_added', { description: item.description, amount: item.total });
-  };
-
-  const removeItem = (index: number) => {
-    setNewReimburse(prev => ({
-      ...prev,
-      items: prev.items.filter((_, i) => i !== index)
-    }));
-  };
-
-  const handleSubmitReimburse = () => {
-    if (!newReimburse.title || !newReimburse.purpose || !newReimburse.actualUser || newReimburse.items.length === 0) {
-      alert('Please fill all required fields and add at least one item');
-      return;
-    }
-
-    setIsLoading(true);
-    
-    // Generate new reimburse data
-    const totalAmount = newReimburse.items.reduce((sum, item) => sum + item.amount, 0);
-    const totalTax = newReimburse.items.reduce((sum, item) => sum + item.tax, 0);
-    const grandTotal = totalAmount + totalTax;
-
-    const newReimburseData: Reimburse = {
-      id: Date.now().toString(),
-      reimburseNumber: `REIM-2024-${String(reimburseData.length + 1).padStart(3, '0')}`,
-      title: newReimburse.title,
-      purpose: newReimburse.purpose,
-      submittedBy: 'Current User', // Yang login sekarang
-      actualUser: newReimburse.actualUser, // User yang dipilih
-      submittedDate: new Date().toISOString().split('T')[0],
-      submittedTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-      items: newReimburse.items,
-      totalAmount: totalAmount,
-      totalTax: totalTax,
-      grandTotal: grandTotal,
-      status: 'pending',
-      daysWaiting: 0
-    };
-
-    trackAction('reimburse_created', {
-      reimburseNumber: newReimburseData.reimburseNumber,
-      actualUser: newReimburseData.actualUser,
-      itemCount: newReimburseData.items.length,
-      totalAmount: grandTotal
-    });
-
-    // Simulate API call
-    setTimeout(() => {
-      // Dalam real app, ini akan push ke reimburseData
-      alert(`Reimburse ${newReimburseData.reimburseNumber} created successfully for ${newReimburseData.actualUser}!`);
-      
-      // Reset form
-      setNewReimburse({
-        title: '',
-        purpose: '',
-        actualUser: '',
-        items: []
-      });
-      setShowCreateModal(false);
-      setIsLoading(false);
-    }, 1000);
-  };
+  }, []);
 
   // Export handlers
-  const exportToExcel = () => {
+  const exportToCSV = useCallback(() => {
     setIsLoading(true);
-    trackAction('export_excel', {
-      itemCount: filteredReimburse.length,
-      filters: { searchTerm, statusFilter, dateRange }
-    });
+    
+    const data = filteredReimburse.map(r => ({
+      'Reimburse No': r.reimbursement_code,
+      'Title': r.title,
+      'Submitted By': r.submitted_by_user_name,
+      'Submit Date': formatDate(r.submitted_date),
+      'Items': r.items_count,
+      'Total Amount': r.total_amount,
+      'Status': r.status.toUpperCase(),
+      'Days Waiting': r.days_waiting
+    }));
 
-    setTimeout(() => {
-      const data = filteredReimburse.map(r => ({
-        'Reimburse No': r.reimburseNumber,
-        'Title': r.title,
-        'Submitted By': r.submittedBy,
-        'Actual User': r.actualUser,
-        'Submit Date': r.submittedDate,
-        'Items': r.items.length,
-        'Total Amount': r.grandTotal,
-        'Status': r.status.toUpperCase(),
-        'Days Waiting': r.daysWaiting
-      }));
+    const headers = Object.keys(data[0]).join(',');
+    const rows = data.map(row => Object.values(row).join(','));
+    const csvContent = [headers, ...rows].join('\n');
 
-      const headers = Object.keys(data[0]).join(',');
-      const rows = data.map(row => Object.values(row).join(','));
-      const csvContent = [headers, ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `reimburse-approval-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    toast.success('CSV exported successfully!');
+    setIsLoading(false);
+  }, [filteredReimburse]);
 
-      const blob = new Blob([csvContent], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `reimburse-report-${new Date().toISOString().split('T')[0]}.csv`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      setIsLoading(false);
-    }, 1000);
-  };
+  // Clear all filters
+  const clearAllFilters = useCallback(() => {
+    setDateRange({ start: '', end: '' });
+    setAmountRange({ min: '', max: '' });
+    setCategoryFilter('');
+    setShowAdvancedFilters(false);
+    toast.info('All filters cleared');
+  }, []);
 
-  const exportToPDF = (reimburse: Reimburse) => {
-    setIsLoading(true);
-    trackAction('export_pdf_single', {
-      reimburseNumber: reimburse.reimburseNumber,
-      amount: reimburse.grandTotal
-    });
-
-    setTimeout(() => {
-      const pdfContent = `
-        REIMBURSE DETAIL
-        ================
-        Number: ${reimburse.reimburseNumber}
-        Title: ${reimburse.title}
-        Submitted By: ${reimburse.submittedBy}
-        Actual User: ${reimburse.actualUser}
-        Date: ${reimburse.submittedDate}
-        Total: Rp ${reimburse.grandTotal.toLocaleString()}
-        Status: ${reimburse.status.toUpperCase()}
-      `;
-      
-      const blob = new Blob([pdfContent], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${reimburse.reimburseNumber}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      setIsLoading(false);
-    }, 1000);
-  };
-
-  const handleExport = () => {
-    if (exportFormat === 'excel' || exportFormat === 'csv') {
-      exportToExcel();
-    }
-  };
-
-  const Pagination = () => (
+  // Pagination Component
+  const Pagination = useCallback(() => (
     <div className="flex items-center justify-between border-t pt-4">
       <div className="text-sm text-gray-600">
-        Showing {indexOfFirstItem + 1} to {Math.min(indexOfLastItem, filteredReimburse.length)} of {filteredReimburse.length} results
+        Showing {indexOfFirstItem + 1} to {Math.min(indexOfLastItem, filteredReimburse.length)} of {filteredReimburse.length} entries
       </div>
-      <div className="flex gap-2">
-        <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
-        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-          const pageNum = i + 1;
-          return (
-            <Button
-              key={pageNum}
-              variant={currentPage === pageNum ? "default" : "outline"}
-              size="sm"
-              onClick={() => setCurrentPage(pageNum)}
-            >
-              {pageNum}
-            </Button>
-          );
-        })}
-        <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-      </div>
-    </div>
-  );
-
-  return (
-    <div className="container mx-auto p-6 space-y-6">
-      {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold">Approval Reimburse</h1>
-          <p className="text-gray-600 mt-2">Klik 1x untuk lihat detail, 2x row yang sama untuk tutup</p>
-        </div>
-        <div className="flex gap-3">
-          <Button 
-            className="bg-blue-600 hover:bg-blue-700"
-            onClick={() => setShowCreateModal(true)}
+      
+      <div className="flex items-center gap-6">
+        {/* Rows per page */}
+        <div className="flex items-center gap-2 text-sm text-gray-600">
+          <span>Rows per page:</span>
+          <select 
+            value={itemsPerPage}
+            onChange={(e) => {
+              setItemsPerPage(Number(e.target.value));
+              setCurrentPage(1);
+            }}
+            className="border rounded px-2 py-1 text-sm"
           >
-            <Plus className="h-4 w-4 mr-2" />
-            Ajukan Reimburse
+            <option value={5}>5</option>
+            <option value={10}>10</option>
+            <option value={20}>20</option>
+            <option value={50}>50</option>
+          </select>
+        </div>
+
+        {/* Pagination buttons */}
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+            className="h-8 w-8 p-0"
+          >
+            <ChevronLeft className="h-4 w-4" />
           </Button>
           
-          {/* Export Dropdown - CSV Only untuk All */}
-          <div className="flex gap-2">
-            <select
-              value={exportFormat}
-              onChange={(e) => setExportFormat(e.target.value)}
-              className="border rounded-md px-3 py-2 text-sm"
-            >
-              <option value="csv">CSV (All Data)</option>
-            </select>
+          {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+            const pageNum = i + 1;
+            return (
+              <Button
+                key={pageNum}
+                variant={currentPage === pageNum ? "default" : "outline"}
+                size="sm"
+                onClick={() => setCurrentPage(pageNum)}
+                className="h-8 w-8 p-0"
+              >
+                {pageNum}
+              </Button>
+            );
+          })}
+          
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+            className="h-8 w-8 p-0"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+
+        {/* Page info */}
+        <div className="text-sm text-gray-600 min-w-[80px] text-center">
+          Page {currentPage} of {totalPages}
+        </div>
+      </div>
+    </div>
+  ), [currentPage, totalPages, indexOfFirstItem, indexOfLastItem, filteredReimburse.length, itemsPerPage]);
+
+  return (
+    <ReimburseErrorBoundary>
+      <div className="container mx-auto p-6 space-y-6">
+        {/* Header */}
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold">Approval Reimburse</h1>
+            <p className="text-gray-600 mt-2">Klik 1x untuk lihat detail, 2x row yang sama untuk tutup</p>
+          </div>
+          <div className="flex gap-3">
             <Button 
               variant="outline" 
-              onClick={handleExport}
+              onClick={exportToCSV}
               disabled={isLoading || filteredReimburse.length === 0}
             >
               <Download className="h-4 w-4 mr-2" />
-              Export All
+              Export CSV
             </Button>
           </div>
         </div>
-      </div>
 
-      {/* Filters Integrated dengan Table */}
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col sm:flex-row gap-3 justify-between">
-              <div className="flex flex-col sm:flex-row gap-3 flex-1">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                  <Input
-                    placeholder="Search reimburse number, title, or user..."
-                    value={searchTerm}
-                    onChange={(e) => {
-                      setSearchTerm(e.target.value);
-                      setCurrentPage(1);
-                      trackAction('search', { term: e.target.value });
-                    }}
-                    className="pl-10"
-                  />
+        {/* Filters */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col sm:flex-row gap-3 justify-between">
+                <div className="flex flex-col sm:flex-row gap-3 flex-1">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                    <Input
+                      placeholder="Search reimburse number, title, or user..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="pl-10"
+                    />
+                  </div>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as ReimburseStatus | 'all')}
+                    className="border rounded-md px-3 py-2 text-sm"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="submitted">Pending</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
                 </div>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => {
-                    setStatusFilter(e.target.value as ReimburseStatus | 'all');
-                    setCurrentPage(1);
-                    trackAction('status_filter', { status: e.target.value });
-                  }}
-                  className="border rounded-md px-3 py-2 text-sm"
-                >
-                  <option value="all">All Status</option>
-                  <option value="pending">Pending</option>
-                  <option value="approved">Approved</option>
-                  <option value="rejected">Rejected</option>
-                </select>
-              </div>
-              
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowFilters(!showFilters)}
-                className="whitespace-nowrap"
-              >
-                <Filter className="h-4 w-4 mr-2" />
-                {showFilters ? 'Hide Filters' : 'Show Filters'}
-              </Button>
-            </div>
-            
-            {/* Advanced Filters */}
-            {showFilters && (
-              <div className="flex flex-col sm:flex-row gap-3 p-4 border rounded-lg bg-gray-50">
-                <div className="flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-gray-400" />
-                  <span className="text-sm text-gray-600">Date Range:</span>
-                </div>
-                <Input
-                  type="date"
-                  value={dateRange.start}
-                  onChange={(e) => {
-                    setDateRange(prev => ({ ...prev, start: e.target.value }));
-                    trackAction('date_filter_start', { date: e.target.value });
-                  }}
-                  className="text-sm"
-                />
-                <span className="text-sm text-gray-500 self-center">to</span>
-                <Input
-                  type="date"
-                  value={dateRange.end}
-                  onChange={(e) => {
-                    setDateRange(prev => ({ ...prev, end: e.target.value }));
-                    trackAction('date_filter_end', { date: e.target.value });
-                  }}
-                  className="text-sm"
-                />
-                {(dateRange.start || dateRange.end) && (
+                
+                <div className="flex gap-2">
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
-                      setDateRange({ start: '', end: '' });
-                      trackAction('date_filter_cleared', {});
-                    }}
+                    onClick={() => setShowFilters(!showFilters)}
+                    className="whitespace-nowrap"
                   >
-                    Clear
+                    <Filter className="h-4 w-4 mr-2" />
+                    {showFilters ? 'Hide Filters' : 'Show Filters'}
                   </Button>
-                )}
+                  {showFilters && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                      className="whitespace-nowrap"
+                    >
+                      {showAdvancedFilters ? 'Simple Filters' : 'Advanced Filters'}
+                    </Button>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
-        </CardHeader>
+              
+              {/* Filters Section */}
+              {showFilters && (
+                <div className="flex flex-col gap-4 p-4 border rounded-lg bg-gray-50">
+                  {/* Basic Filters */}
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-gray-400" />
+                      <span className="text-sm text-gray-600">Date Range:</span>
+                    </div>
+                    <Input
+                      type="date"
+                      value={dateRange.start}
+                      onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                      className="text-sm"
+                    />
+                    <span className="text-sm text-gray-500 self-center">to</span>
+                    <Input
+                      type="date"
+                      value={dateRange.end}
+                      onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+                      className="text-sm"
+                    />
+                  </div>
 
-        {/* Table dengan padding */}
-        <CardContent className="p-6">
-          {isLoading ? (
-            <div className="flex justify-center items-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                  {/* Advanced Filters */}
+                  {showAdvancedFilters && (
+                    <div className="flex flex-col sm:flex-row gap-3 pt-3 border-t">
+                      <div className="flex items-center gap-2">
+                        <DollarSign className="h-4 w-4 text-gray-400" />
+                        <span className="text-sm text-gray-600">Amount Range:</span>
+                      </div>
+                      <Input
+                        type="number"
+                        placeholder="Min amount"
+                        value={amountRange.min}
+                        onChange={(e) => setAmountRange(prev => ({ ...prev, min: e.target.value }))}
+                        className="text-sm"
+                      />
+                      <span className="text-sm text-gray-500 self-center">to</span>
+                      <Input
+                        type="number"
+                        placeholder="Max amount"
+                        value={amountRange.max}
+                        onChange={(e) => setAmountRange(prev => ({ ...prev, max: e.target.value }))}
+                        className="text-sm"
+                      />
+                      <select
+                        value={categoryFilter}
+                        onChange={(e) => setCategoryFilter(e.target.value)}
+                        className="border rounded-md px-3 py-2 text-sm"
+                      >
+                        <option value="">All Categories</option>
+                        <option value="transport">Transport</option>
+                        <option value="accommodation">Accommodation</option>
+                        <option value="meal">Meal</option>
+                        <option value="equipment">Equipment</option>
+                      </select>
+                    </div>
+                  )}
+
+                  {(dateRange.start || dateRange.end || amountRange.min || amountRange.max || categoryFilter) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={clearAllFilters}
+                      className="self-start"
+                    >
+                      Clear All Filters
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
-          ) : (
-            <>
+          </CardHeader>
+
+          {/* Table */}
+          <CardContent className="p-6">
+            {isLoading && currentItems.length === 0 ? (
+              // Skeleton Loading
               <div className="border rounded-lg overflow-hidden">
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="px-4 w-12">No</TableHead>
                       <TableHead className="px-4">Reimburse No</TableHead>
                       <TableHead className="px-4">Title & Purpose</TableHead>
                       <TableHead className="px-4">Submitted By</TableHead>
-                      <TableHead className="px-4">Actual User</TableHead>
                       <TableHead className="px-4">Amount</TableHead>
                       <TableHead className="px-4">Days</TableHead>
                       <TableHead className="px-4">Status</TableHead>
@@ -703,730 +765,438 @@ export default function ReimburseApprovalPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {currentItems.map((reimburse) => (
-                      <TableRow
-                        key={reimburse.id}
-                        className={`hover:bg-gray-50 cursor-pointer transition-colors ${
-                          selectedReimburse?.id === reimburse.id ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
-                        }`}
-                        onClick={() => handleRowClick(reimburse)}
-                      >
-                        <TableCell className="font-semibold px-4">
-                          {reimburse.reimburseNumber}
-                        </TableCell>
-                        <TableCell className="px-4">
-                          <div className="font-medium">{reimburse.title}</div>
-                          <div className="text-sm text-gray-500 line-clamp-1">{reimburse.purpose}</div>
-                          <div className="flex gap-2 mt-1">
-                            <Badge variant="outline" className="text-xs">
-                              {reimburse.items.length} items
-                            </Badge>
-                            <Badge variant="secondary" className="text-xs">
-                              Rp {reimburse.grandTotal.toLocaleString()}
-                            </Badge>
-                          </div>
-                        </TableCell>
-                        <TableCell className="px-4">
-                          <div className="font-medium">{reimburse.submittedBy}</div>
-                          <div className="text-sm text-gray-500">{reimburse.submittedDate}</div>
-                        </TableCell>
-                        <TableCell className="px-4">
-                          <div className="font-medium">{reimburse.actualUser}</div>
-                        </TableCell>
-                        <TableCell className="font-semibold px-4">
-                          Rp {reimburse.grandTotal.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="px-4">
-                          <div className={`text-sm font-medium ${
-                            reimburse.daysWaiting > 3 ? 'text-red-600' : 'text-gray-600'
-                          }`}>
-                            {reimburse.daysWaiting}d
-                          </div>
-                        </TableCell>
-                        <TableCell className="px-4">
-                          <Badge className={getStatusColor(reimburse.status)}>
-                            {reimburse.status.toUpperCase()}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="px-4">
-                          <div className="flex gap-2">
-                            {/* PDF Export per reimburse */}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8 px-3"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                exportToPDF(reimburse);
-                              }}
-                            >
-                              <FileText className="h-4 w-4" />
-                            </Button>
-                            
-                            {reimburse.status === 'pending' && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 px-3 text-green-600 border-green-600 hover:bg-green-50"
-                                  onClick={(e) => handleQuickApprove(reimburse, e)}
-                                >
-                                  <CheckCircle className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 px-3 text-red-600 border-red-600 hover:bg-red-50"
-                                  onClick={(e) => handleQuickReject(reimburse, e)}
-                                >
-                                  <XCircle className="h-4 w-4" />
-                                </Button>
-                              </>
-                            )}
-                          </div>
-                        </TableCell>
-                      </TableRow>
+                    {Array.from({ length: itemsPerPage }).map((_, index) => (
+                      <ReimburseSkeleton key={index} />
                     ))}
                   </TableBody>
                 </Table>
               </div>
-
-              {filteredReimburse.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
-                  <FileText className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-                  <p>No reimburse found</p>
-                  <p className="text-sm">Try adjusting your search or filters</p>
-                </div>
-              )}
-
-              {filteredReimburse.length > 0 && <Pagination />}
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Selected Reimburse Details */}
-      {selectedReimburse && (
-        <Card>
-          <CardHeader>
-            <div className="flex justify-between items-start">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <FileText className="h-5 w-5" />
-                  {selectedReimburse.reimburseNumber} - {selectedReimburse.title}
-                </CardTitle>
-                <CardDescription>
-                  <div className="flex flex-wrap gap-4 mt-2">
-                    <div className="flex items-center gap-1">
-                      <User className="h-4 w-4 text-gray-400" />
-                      <span>
-                        <strong>Submitted by:</strong> {selectedReimburse.submittedBy} | 
-                        <strong> Actual user:</strong> {selectedReimburse.actualUser}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Calendar className="h-4 w-4 text-gray-400" />
-                      <span>{selectedReimburse.submittedDate} {selectedReimburse.submittedTime}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <DollarSign className="h-4 w-4 text-gray-400" />
-                      <span className="font-semibold">Rp {selectedReimburse.grandTotal.toLocaleString()}</span>
-                    </div>
-                  </div>
-                </CardDescription>
-              </div>
-              <div className="flex gap-2">
-                <Badge className={getStatusColor(selectedReimburse.status)}>
-                  {selectedReimburse.status.toUpperCase()}
-                </Badge>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => exportToPDF(selectedReimburse)}
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  PDF
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {/* Purpose */}
-            <div>
-              <Label className="text-sm font-medium">Purpose</Label>
-              <p className="text-gray-700 mt-1">{selectedReimburse.purpose}</p>
-            </div>
-
-            {/* Items Table dengan document viewer */}
-            <div>
-              <Label className="text-sm font-medium mb-4 block">
-                Detail Pengeluaran ({selectedReimburse.items.length} items)
-              </Label>
-              <div className="border rounded-lg overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="px-4">No</TableHead>
-                      <TableHead className="px-4">Tanggal</TableHead>
-                      <TableHead className="px-4">Keterangan</TableHead>
-                      <TableHead className="px-4">Kategori</TableHead>
-                      <TableHead className="px-4">Amount</TableHead>
-                      <TableHead className="px-4">Tax</TableHead>
-                      <TableHead className="px-4">Total</TableHead>
-                      <TableHead className="px-4">Documents</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {selectedReimburse.items.map((item, index) => (
-                      <TableRow key={item.id}>
-                        <TableCell className="font-medium px-4">{index + 1}</TableCell>
-                        <TableCell className="px-4">{new Date(item.date).toLocaleDateString('id-ID')}</TableCell>
-                        <TableCell className="px-4">
-                          <div className="max-w-xs">
-                            <p className="font-medium">{item.description}</p>
-                          </div>
-                        </TableCell>
-                        <TableCell className="px-4">
-                          <Badge variant="outline">{item.category}</Badge>
-                        </TableCell>
-                        <TableCell className="px-4">Rp {item.amount.toLocaleString()}</TableCell>
-                        <TableCell className="px-4">Rp {item.tax.toLocaleString()}</TableCell>
-                        <TableCell className="font-semibold px-4">Rp {item.total.toLocaleString()}</TableCell>
-                        <TableCell className="px-4">
-                          <div className="flex flex-wrap gap-1 max-w-xs">
-                            {item.attachments.map((file, fileIndex) => (
-                              <Badge 
-                                key={fileIndex} 
-                                variant="secondary" 
-                                className="text-xs cursor-pointer hover:bg-blue-100"
-                                onClick={(e) => handleViewDocument(file, e)}
-                              >
-                                <Eye className="h-3 w-3 mr-1" />
-                                {file}
-                              </Badge>
-                            ))}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </div>
-
-            {/* Summary & Approval Info dalam satu section */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Summary */}
-              <div className="space-y-4 p-4 border rounded-lg">
-                <Label className="text-sm font-medium">Summary</Label>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span>Total Items:</span>
-                    <span className="font-medium">{selectedReimburse.items.length}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span>Total Amount:</span>
-                    <span className="font-medium">Rp {selectedReimburse.totalAmount.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span>Total Tax:</span>
-                    <span className="font-medium">Rp {selectedReimburse.totalTax.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between text-sm border-t pt-2">
-                    <span className="font-semibold">Grand Total:</span>
-                    <span className="font-semibold text-green-600">Rp {selectedReimburse.grandTotal.toLocaleString()}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Approval Info */}
-              <div className="space-y-4 p-4 border rounded-lg">
-                <Label className="text-sm font-medium">Approval Information</Label>
-                {selectedReimburse.approvedBy ? (
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Approved by:</span>
-                      <span className="font-medium">{selectedReimburse.approvedBy}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Approved Date:</span>
-                      <span className="font-medium">{selectedReimburse.approvedDate}</span>
-                    </div>
-                    {selectedReimburse.paymentProof && (
-                      <div className="flex justify-between text-sm">
-                        <span>Payment Proof:</span>
-                        <span className="font-medium text-green-600">{selectedReimburse.paymentProof}</span>
-                      </div>
-                    )}
-                  </div>
-                ) : selectedReimburse.rejectionReason ? (
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Status:</span>
-                      <span className="font-medium text-red-600">Rejected</span>
-                    </div>
-                    <div className="text-sm">
-                      <span className="font-medium">Reason: </span>
-                      <span>{selectedReimburse.rejectionReason}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500">Waiting for approval</p>
-                )}
-              </div>
-            </div>
-
-            {/* Approval/Reject Form untuk status pending */}
-            {selectedReimburse.status === 'pending' && (
-              <div className="space-y-6 p-6 border rounded-lg bg-gray-50">
-                <Label className="text-lg font-medium">Approve / Reject This Reimburse</Label>
-                
-                {/* Approval Section */}
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="approvalNotes" className="text-sm font-medium">
-                      Approval Notes (Optional)
-                    </Label>
-                    <Textarea
-                      id="approvalNotes"
-                      placeholder="Add notes for this approval..."
-                      value={approvalNotes}
-                      onChange={(e) => setApprovalNotes(e.target.value)}
-                      className="mt-1 min-h-[80px]"
-                    />
-                  </div>
-
-                  <div>
-                    <Label htmlFor="fileUpload" className="text-sm font-medium">
-                      Upload Payment Proof *
-                    </Label>
-                    <div className="mt-2">
-                      <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center">
-                        <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
-                        <Label htmlFor="fileUpload" className="cursor-pointer">
-                          <span className="text-blue-600">Click to upload</span> or drag and drop
-                        </Label>
-                        <p className="text-xs text-gray-500 mt-1">PDF, JPG, PNG up to 10MB</p>
-                        <input
-                          id="fileUpload"
-                          type="file"
-                          multiple
-                          className="hidden"
-                          onChange={handleFileUpload}
-                          accept=".pdf,.jpg,.jpeg,.png"
-                        />
-                      </div>
-                      
-                      {/* Uploaded files list */}
-                      {uploadedFiles.length > 0 && (
-                        <div className="mt-3 space-y-2">
-                          {uploadedFiles.map((file, index) => (
-                            <div key={index} className="flex items-center justify-between p-2 border rounded">
-                              <div className="flex items-center gap-2">
-                                <FileText className="h-4 w-4 text-green-600" />
-                                <span className="text-sm">{file.name}</span>
-                              </div>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => removeUploadedFile(index)}
-                                className="h-6 w-6 p-0 text-red-600"
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <Button
-                    className="w-full bg-green-600 hover:bg-green-700"
-                    onClick={handleApproveFromDetail}
-                    disabled={isLoading || uploadedFiles.length === 0}
-                  >
-                    {isLoading ? (
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                    ) : (
-                      <>
-                        <CheckCircle className="h-4 w-4 mr-2" />
-                        Approve Reimburse
-                      </>
-                    )}
-                  </Button>
-                </div>
-
-                {/* Reject Section */}
-                <div className="border-t pt-6 space-y-4">
-                  <div>
-                    <Label htmlFor="rejectionReason" className="text-sm font-medium text-red-600">
-                      Rejection Reason *
-                    </Label>
-                    <Textarea
-                      id="rejectionReason"
-                      placeholder="Enter reason for rejection..."
-                      value={rejectionReason}
-                      onChange={(e) => setRejectionReason(e.target.value)}
-                      className="mt-1 min-h-[80px] border-red-200 focus:border-red-300"
-                    />
-                  </div>
-
-                  <Button
-                    variant="destructive"
-                    className="w-full"
-                    onClick={handleRejectFromDetail}
-                    disabled={isLoading || !rejectionReason.trim()}
-                  >
-                    {isLoading ? (
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                    ) : (
-                      <>
-                        <XCircle className="h-4 w-4 mr-2" />
-                        Reject Reimburse
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Create New Reimburse Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center p-6 border-b">
-              <h3 className="text-lg font-semibold">Ajukan Reimburse Baru</h3>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowCreateModal(false)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-            
-            <div className="p-6 space-y-6">
-              {/* Basic Information */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="title" className="text-sm font-medium">
-                    Judul Reimburse *
-                  </Label>
-                  <Input
-                    id="title"
-                    placeholder="Contoh: Business Trip Jakarta"
-                    value={newReimburse.title}
-                    onChange={(e) => setNewReimburse(prev => ({ ...prev, title: e.target.value }))}
-                    className="mt-1"
-                  />
-                </div>
-                
-                <div>
-                  <Label htmlFor="actualUser" className="text-sm font-medium">
-                    Untuk User *
-                  </Label>
-                  <select
-                    id="actualUser"
-                    value={newReimburse.actualUser}
-                    onChange={(e) => setNewReimburse(prev => ({ ...prev, actualUser: e.target.value }))}
-                    className="w-full border rounded-md px-3 py-2 text-sm mt-1"
-                  >
-                    <option value="">Pilih User</option>
-                    {userList.map(user => (
-                      <option key={user} value={user}>{user}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <Label htmlFor="purpose" className="text-sm font-medium">
-                  Tujuan *
-                </Label>
-                <Textarea
-                  id="purpose"
-                  placeholder="Jelaskan tujuan pengajuan reimburse ini..."
-                  value={newReimburse.purpose}
-                  onChange={(e) => setNewReimburse(prev => ({ ...prev, purpose: e.target.value }))}
-                  className="mt-1 min-h-[80px]"
-                />
-              </div>
-
-              {/* Add Items Section */}
-              <div className="border rounded-lg p-4">
-                <Label className="text-sm font-medium mb-4 block">Tambah Item Pengeluaran</Label>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <Label htmlFor="itemDate" className="text-xs">Tanggal *</Label>
-                    <Input
-                      id="itemDate"
-                      type="date"
-                      value={newItem.date}
-                      onChange={(e) => setNewItem(prev => ({ ...prev, date: e.target.value }))}
-                      className="mt-1 text-sm"
-                    />
-                  </div>
-                  
-                  <div>
-                    <Label htmlFor="itemCategory" className="text-xs">Kategori *</Label>
-                    <select
-                      id="itemCategory"
-                      value={newItem.category}
-                      onChange={(e) => setNewItem(prev => ({ ...prev, category: e.target.value }))}
-                      className="w-full border rounded-md px-3 py-2 text-sm mt-1"
-                    >
-                      <option value="">Pilih Kategori</option>
-                      <option value="Transportasi">Transportasi</option>
-                      <option value="Akomodasi">Akomodasi</option>
-                      <option value="Bahan Habis Pakai">Bahan Habis Pakai</option>
-                      <option value="Perbaikan & Maintenance">Perbaikan & Maintenance</option>
-                      <option value="Training">Training</option>
-                      <option value="Lainnya">Lainnya</option>
-                    </select>
-                  </div>
-                  
-                  <div className="md:col-span-2">
-                    <Label htmlFor="itemDescription" className="text-xs">Keterangan *</Label>
-                    <Input
-                      id="itemDescription"
-                      placeholder="Deskripsi pengeluaran..."
-                      value={newItem.description}
-                      onChange={(e) => setNewItem(prev => ({ ...prev, description: e.target.value }))}
-                      className="mt-1 text-sm"
-                    />
-                  </div>
-                  
-                  <div>
-                    <Label htmlFor="itemAmount" className="text-xs">Amount (Rp) *</Label>
-                    <Input
-                      id="itemAmount"
-                      type="number"
-                      placeholder="0"
-                      value={newItem.amount}
-                      onChange={(e) => setNewItem(prev => ({ ...prev, amount: e.target.value }))}
-                      className="mt-1 text-sm"
-                    />
-                  </div>
-                  
-                  <div>
-                    <Label htmlFor="itemTax" className="text-xs">Tax (Rp)</Label>
-                    <Input
-                      id="itemTax"
-                      type="number"
-                      placeholder="0"
-                      value={newItem.tax}
-                      onChange={(e) => setNewItem(prev => ({ ...prev, tax: e.target.value }))}
-                      className="mt-1 text-sm"
-                    />
-                  </div>
-                </div>
-
-                <Button
-                  onClick={handleAddItem}
-                  className="w-full"
-                  disabled={!newItem.date || !newItem.description || !newItem.category || !newItem.amount}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Tambah Item
-                </Button>
-              </div>
-
-              {/* Items List */}
-              {newReimburse.items.length > 0 && (
+            ) : (
+              <>
                 <div className="border rounded-lg overflow-hidden">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="px-4">Tanggal</TableHead>
-                        <TableHead className="px-4">Keterangan</TableHead>
-                        <TableHead className="px-4">Kategori</TableHead>
+                        <TableHead className="px-4 w-12">No</TableHead>
+                        <TableHead className="px-4">Reimburse No</TableHead>
+                        <TableHead className="px-4">Title & Purpose</TableHead>
+                        <TableHead className="px-4">Submitted By</TableHead>
                         <TableHead className="px-4">Amount</TableHead>
-                        <TableHead className="px-4">Tax</TableHead>
-                        <TableHead className="px-4">Total</TableHead>
-                        <TableHead className="px-4">Action</TableHead>
+                        <TableHead className="px-4">Days</TableHead>
+                        <TableHead className="px-4">Status</TableHead>
+                        <TableHead className="px-4">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {newReimburse.items.map((item, index) => (
-                        <TableRow key={item.id}>
-                          <TableCell className="px-4 text-sm">{new Date(item.date).toLocaleDateString('id-ID')}</TableCell>
-                          <TableCell className="px-4 text-sm">{item.description}</TableCell>
-                          <TableCell className="px-4">
-                            <Badge variant="outline" className="text-xs">{item.category}</Badge>
+                      {currentItems.map((reimburse, index) => (
+                        <TableRow
+                          key={reimburse.id}
+                          className={`hover:bg-gray-50 cursor-pointer transition-colors ${
+                            selectedReimburse?.id === reimburse.id ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
+                          }`}
+                          onClick={() => handleRowClick(reimburse)}
+                        >
+                          <TableCell className="px-4 text-center font-medium">
+                            {(currentPage - 1) * itemsPerPage + index + 1}
                           </TableCell>
-                          <TableCell className="px-4 text-sm">Rp {item.amount.toLocaleString()}</TableCell>
-                          <TableCell className="px-4 text-sm">Rp {item.tax.toLocaleString()}</TableCell>
-                          <TableCell className="px-4 font-semibold text-sm">Rp {item.total.toLocaleString()}</TableCell>
+                          <TableCell className="font-semibold px-4">
+                            {reimburse.reimbursement_code}
+                          </TableCell>
                           <TableCell className="px-4">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removeItem(index)}
-                              className="h-6 w-6 p-0 text-red-600"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
+                            <div className="font-medium">{reimburse.title}</div>
+                            <div className="text-sm text-gray-500 line-clamp-1">{reimburse.notes}</div>
+                            <div className="flex gap-2 mt-1">
+                              <Badge variant="outline" className="text-xs">
+                                {reimburse.items_count} items
+                              </Badge>
+                              <Badge variant="secondary" className="text-xs">
+                                {formatRupiah(reimburse.total_amount)}
+                              </Badge>
+                            </div>
+                          </TableCell>
+                          <TableCell className="px-4">
+                            <div className="font-medium">{reimburse.submitted_by_user_name}</div>
+                            <div className="text-sm text-gray-500">{formatDate(reimburse.submitted_date)}</div>
+                          </TableCell>
+                          <TableCell className="font-semibold px-4">
+                            {formatRupiah(reimburse.total_amount)}
+                          </TableCell>
+                          <TableCell className="px-4">
+                            <div className={`text-sm font-medium ${
+                              reimburse.days_waiting > 3 ? 'text-red-600' : 'text-gray-600'
+                            }`}>
+                              {reimburse.days_waiting}d
+                            </div>
+                          </TableCell>
+                          <TableCell className="px-4">
+                            <Badge className={getStatusColor(reimburse.status)}>
+                              {reimburse.status.toUpperCase()}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="px-4">
+                            <div className="flex gap-2">
+                              {reimburse.status === 'submitted' && (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 px-3 text-green-600 border-green-600 hover:bg-green-50"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      fetchReimbursementDetail(reimburse.reimbursement_code);
+                                    }}
+                                  >
+                                    <CheckCircle className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 px-3 text-red-600 border-red-600 hover:bg-red-50"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      fetchReimbursementDetail(reimburse.reimbursement_code);
+                                    }}
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </Button>
+                                </>
+                              )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
-                  
-                  {/* Total Summary */}
-                  <div className="p-4 border-t bg-gray-50">
-                    <div className="flex justify-between items-center">
-                      <span className="font-semibold">Total: Rp {newReimburse.items.reduce((sum, item) => sum + item.total, 0).toLocaleString()}</span>
-                      <span className="text-sm text-gray-600">{newReimburse.items.length} items</span>
-                    </div>
+                </div>
+
+                {filteredReimburse.length === 0 && !isLoading && (
+                  <div className="text-center py-8 text-gray-500">
+                    <FileText className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+                    <p>No reimburse found</p>
+                    <p className="text-sm">Try adjusting your search or filters</p>
                   </div>
+                )}
+
+                {filteredReimburse.length > 0 && <Pagination />}
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Selected Reimburse Details */}
+        {selectedReimburse && (
+          <Card>
+            <CardHeader>
+              <div className="flex justify-between items-start">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="h-5 w-5" />
+                    {selectedReimburse.reimbursement_code} - {selectedReimburse.title}
+                  </CardTitle>
+                  <CardDescription>
+                    <div className="flex flex-wrap gap-4 mt-2">
+                      <div className="flex items-center gap-1">
+                        <User className="h-4 w-4 text-gray-400" />
+                        <span>
+                          <strong>Submitted by:</strong> {selectedReimburse.submitted_by_user_name} | 
+                          <strong> Created by:</strong> {selectedReimburse.created_by_user_name}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Calendar className="h-4 w-4 text-gray-400" />
+                        <span>{formatDate(selectedReimburse.submitted_date)} {selectedReimburse.submitted_time}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <DollarSign className="h-4 w-4 text-gray-400" />
+                        <span className="font-semibold">{formatRupiah(selectedReimburse.total_amount)}</span>
+                      </div>
+                    </div>
+                  </CardDescription>
+                </div>
+                <div className="flex gap-2">
+                  <Badge className={getStatusColor(selectedReimburse.status)}>
+                    {selectedReimburse.status.toUpperCase()}
+                  </Badge>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Notes */}
+              {selectedReimburse.notes && (
+                <div>
+                  <Label className="text-sm font-medium">Notes</Label>
+                  <p className="text-gray-700 mt-1">{selectedReimburse.notes}</p>
                 </div>
               )}
 
-              {/* Submit Button */}
-              <div className="flex gap-3 pt-4">
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  onClick={() => setShowCreateModal(false)}
-                >
-                  Batal
-                </Button>
-                <Button
-                  className="flex-1 bg-blue-600 hover:bg-blue-700"
-                  onClick={handleSubmitReimburse}
-                  disabled={isLoading || !newReimburse.title || !newReimburse.purpose || !newReimburse.actualUser || newReimburse.items.length === 0}
-                >
-                  {isLoading ? (
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+              {/* Items Table */}
+              <div>
+                <Label className="text-sm font-medium mb-4 block">
+                  Detail Pengeluaran ({selectedReimburse.items.length} items)
+                </Label>
+                <div className="border rounded-lg overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="px-4 w-12">No</TableHead>
+                        <TableHead className="px-4">Tanggal</TableHead>
+                        <TableHead className="px-4">Keterangan</TableHead>
+                        <TableHead className="px-4">Amount</TableHead>
+                        <TableHead className="px-4">Documents</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {selectedReimburse.items.map((item, index) => (
+                        <TableRow key={item.id}>
+                          <TableCell className="font-medium px-4 text-center">{index + 1}</TableCell>
+                          <TableCell className="px-4">{formatDate(item.item_date)}</TableCell>
+                          <TableCell className="px-4">
+                            <div className="max-w-xs">
+                              <p className="font-medium">{item.description}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell className="font-semibold px-4">{formatRupiah(item.amount)}</TableCell>
+                          <TableCell className="px-4">
+                            {item.attachment_path ? (
+                              <Badge 
+                                variant="secondary" 
+                                className="text-xs cursor-pointer hover:bg-blue-100"
+                                onClick={() => handleViewAttachment(item.attachment_path!)}
+                              >
+                                <Eye className="h-3 w-3 mr-1" />
+                                View Attachment
+                              </Badge>
+                            ) : (
+                              <span className="text-gray-400 text-sm">-</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+
+              {/* Summary & Approval Info */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Summary */}
+                <div className="space-y-4 p-4 border rounded-lg">
+                  <Label className="text-sm font-medium">Summary</Label>
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span>Total Items:</span>
+                      <span className="font-medium">{selectedReimburse.items.length}</span>
+                    </div>
+                    <div className="flex justify-between text-sm border-t pt-2">
+                      <span className="font-semibold">Grand Total:</span>
+                      <span className="font-semibold text-green-600">{formatRupiah(selectedReimburse.total_amount)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Approval Info */}
+                <div className="space-y-4 p-4 border rounded-lg">
+                  <Label className="text-sm font-medium">Approval Information</Label>
+                  {selectedReimburse.approved_by_user_name ? (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span>Approved by:</span>
+                        <span className="font-medium">{selectedReimburse.approved_by_user_name}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span>Approved Date:</span>
+                        <span className="font-medium">{selectedReimburse.approved_date}</span>
+                      </div>
+                      {selectedReimburse.bank_account_code && (
+                        <div className="flex justify-between text-sm">
+                          <span>Bank Account:</span>
+                          <span className="font-medium">{selectedReimburse.bank_account_code}</span>
+                        </div>
+                      )}
+                      {selectedReimburse.payment_proof_path && (
+                        <div className="flex justify-between text-sm">
+                          <span>Payment Proof:</span>
+                          <Badge 
+                            variant="secondary" 
+                            className="text-xs cursor-pointer hover:bg-blue-100"
+                            onClick={() => handleViewPaymentProof(selectedReimburse.payment_proof_path!)}
+                          >
+                            <Eye className="h-3 w-3 mr-1" />
+                            View Proof
+                          </Badge>
+                        </div>
+                      )}
+                    </div>
+                  ) : selectedReimburse.rejection_reason ? (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span>Status:</span>
+                        <span className="font-medium text-red-600">Rejected</span>
+                      </div>
+                      <div className="text-sm">
+                        <span className="font-medium">Reason: </span>
+                        <span>{selectedReimburse.rejection_reason}</span>
+                      </div>
+                    </div>
                   ) : (
-                    <>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Ajukan Reimburse
-                    </>
+                    <p className="text-sm text-gray-500">Waiting for approval</p>
                   )}
-                </Button>
+                </div>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* Document Viewer Modal */}
-      {viewingDocument && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden">
-            <div className="flex justify-between items-center p-4 border-b">
-              <h3 className="text-lg font-semibold">{viewingDocument.name}</h3>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setViewingDocument(null)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-            <div className="p-6 h-[70vh] flex items-center justify-center bg-gray-100">
-              <div className="text-center">
-                <FileText className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-600">Document Preview: {viewingDocument.name}</p>
-                <p className="text-sm text-gray-500 mt-2">
-                  In a real application, this would show the actual document
-                </p>
-                <Button 
-                  className="mt-4"
-                  onClick={() => window.open(viewingDocument.url, '_blank')}
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  Download Document
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+              {/* Approval/Reject Form - Hanya tampil jika status submitted */}
+              {selectedReimburse.status === 'submitted' && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Approve / Reject Reimbursement</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      {/* Left Column - Approve Form */}
+                      <div className="space-y-4">
+                        <div>
+                          <Label htmlFor="bankAccount" className="text-sm font-medium">
+                            Select Bank Account *
+                          </Label>
+                          <select
+                            id="bankAccount"
+                            value={selectedBankAccount}
+                            onChange={(e) => setSelectedBankAccount(e.target.value)}
+                            className="w-full border rounded-md px-3 py-2 text-sm mt-1"
+                            required
+                          >
+                            <option value="">Select Bank Account</option>
+                            {bankAccounts.map(bank => (
+                              <option key={bank.bank_account_code} value={bank.bank_account_code}>
+                                {bank.bank_name} - {bank.account_number} ({bank.account_holder})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
 
-      {/* Simple Modals untuk quick actions */}
-      {showApproveModal && reimburseToAction && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-sm w-full p-6">
-            <h3 className="text-lg font-semibold mb-4">Konfirmasi Approve</h3>
-            <p className="text-gray-600 mb-6">
-              Apakah Anda yakin approve <strong>{reimburseToAction.reimburseNumber}</strong>?
-            </p>
-            <div className="flex gap-3">
-              <Button 
-                variant="outline" 
-                className="flex-1" 
-                onClick={() => setShowApproveModal(false)}
-                disabled={isLoading}
-              >
-                Batal
-              </Button>
-              <Button 
-                className="flex-1 bg-green-600 hover:bg-green-700" 
-                onClick={() => {
-                  setIsLoading(true);
-                  setTimeout(() => {
-                    trackAction('reimburse_approved_quick', {
-                      reimburseNumber: reimburseToAction.reimburseNumber
-                    });
-                    alert(`Reimburse ${reimburseToAction.reimburseNumber} approved!`);
-                    setShowApproveModal(false);
-                    setIsLoading(false);
-                  }, 1000);
-                }}
-                disabled={isLoading}
-              >
-                {isLoading ? 'Loading...' : 'Ya, Approve'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+                        <div>
+                          <Label htmlFor="approvalNotes" className="text-sm font-medium">
+                            Approval Notes (Optional)
+                          </Label>
+                          <Textarea
+                            id="approvalNotes"
+                            placeholder="Add notes for this approval..."
+                            value={approvalNotes}
+                            onChange={(e) => setApprovalNotes(e.target.value)}
+                            className="mt-1 min-h-[80px]"
+                          />
+                        </div>
 
-      {showRejectModal && reimburseToAction && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-sm w-full p-6">
-            <h3 className="text-lg font-semibold mb-4">Konfirmasi Reject</h3>
-            <p className="text-gray-600 mb-6">
-              Apakah Anda yakin reject <strong>{reimburseToAction.reimburseNumber}</strong>?
-            </p>
-            <div className="flex gap-3">
-              <Button 
-                variant="outline" 
-                className="flex-1" 
-                onClick={() => setShowRejectModal(false)}
-                disabled={isLoading}
-              >
-                Batal
-              </Button>
-              <Button
-                variant="destructive"
-                className="flex-1"
-                onClick={() => {
-                  setIsLoading(true);
-                  setTimeout(() => {
-                    trackAction('reimburse_rejected_quick', {
-                      reimburseNumber: reimburseToAction.reimburseNumber
-                    });
-                    alert(`Reimburse ${reimburseToAction.reimburseNumber} rejected!`);
-                    setShowRejectModal(false);
-                    setIsLoading(false);
-                  }, 1000);
-                }}
-                disabled={isLoading}
-              >
-                {isLoading ? 'Loading...' : 'Ya, Reject'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+                        <div>
+                          <Label htmlFor="fileUpload" className="text-sm font-medium">
+                            Upload Payment Proof *
+                          </Label>
+                          <div className="mt-2">
+                            <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+                              <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                              <div className="text-center">
+                                <Label htmlFor="fileUpload" className="cursor-pointer">
+                                  <span className="text-blue-600">Click to upload</span> or drag and drop
+                                </Label>
+                              </div>
+                              <p className="text-xs text-gray-500 mt-1 text-center">
+                                PDF, JPG, PNG up to {FILE_UPLOAD_CONFIG.maxSizeText}
+                              </p>
+                              <input
+                                id="fileUpload"
+                                type="file"
+                                multiple
+                                className="hidden"
+                                onChange={handleFileUpload}
+                                accept={FILE_UPLOAD_CONFIG.acceptTypes}
+                              />
+                            </div>
+                            
+                            {uploadedFiles.length > 0 && (
+                              <div className="mt-3 space-y-2">
+                                {uploadedFiles.map((file, index) => (
+                                  <div key={index} className="flex items-center justify-between p-2 border rounded">
+                                    <div className="flex items-center gap-2">
+                                      <FileText className="h-4 w-4 text-green-600" />
+                                      <span className="text-sm">{file.name}</span>
+                                      <span className="text-xs text-gray-500">
+                                        ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                                      </span>
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => removeUploadedFile(index)}
+                                      className="h-6 w-6 p-0 text-red-600"
+                                      disabled={isLoading}
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right Column - Reject Form */}
+                      <div className="space-y-4">
+                        <div>
+                          <Label htmlFor="rejectionReason" className="text-sm font-medium text-red-600">
+                            Rejection Reason *
+                          </Label>
+                          <Textarea
+                            id="rejectionReason"
+                            placeholder="Enter reason for rejection..."
+                            value={rejectionReason}
+                            onChange={(e) => setRejectionReason(e.target.value)}
+                            className="mt-1 min-h-[120px] border-red-200 focus:border-red-300"
+                            required
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons - Sejajar */}
+                    <div className="flex gap-3 pt-4">
+                      <Button
+                        className="flex-1 bg-green-600 hover:bg-green-700"
+                        onClick={handleApprove}
+                        disabled={isLoading || !selectedBankAccount || uploadedFiles.length === 0}
+                      >
+                        {isLoading ? (
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        ) : (
+                          <>
+                            <CheckCircle className="h-4 w-4 mr-2" />
+                            Approve Reimburse
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        className="flex-1"
+                        onClick={handleReject}
+                        disabled={isLoading || !rejectionReason.trim()}
+                      >
+                        {isLoading ? (
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        ) : (
+                          <>
+                            <XCircle className="h-4 w-4 mr-2" />
+                            Reject Reimburse
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </ReimburseErrorBoundary>
   );
 }

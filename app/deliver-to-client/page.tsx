@@ -13,6 +13,8 @@ import { toast } from 'sonner'
 /* -------------------- Types -------------------- */
 type POStatus = 'ready to ship' | 'shipping' | 'completed'
 type DOStatus = 'shipping' | 'delivered'
+// ✅ UPDATE: Tambah SO status type
+type SOStatus = 'submitted' | 'processing' | 'invoicing' | 'completed' | 'cancelled'
 
 interface POItem {
   id: string
@@ -41,6 +43,8 @@ interface PurchaseOrder {
   confirmationMethod?: string
   clientNotes?: string
   receiptProof?: File | null
+  // ✅ UPDATE: Tambah SO status info
+  soStatus?: SOStatus
 }
 
 interface DeliveryOrder {
@@ -59,6 +63,10 @@ interface DeliveryOrder {
   receivedBy?: string
   confirmationMethod?: string
   createdAt: string
+  // ✅ UPDATE: Tambah customer info dari SO
+  customerName?: string
+  customerPhone?: string
+  soStatus?: SOStatus
 }
 
 /* -------------------- API Service -------------------- */
@@ -348,6 +356,7 @@ const generatePDF = (doData: any) => {
             <div class="info-item"><span class="info-label">SO Reference:</span> ${delivery_order.so_code}</div>
             <div class="info-item"><span class="info-label">Customer:</span> ${delivery_order.customer_name}</div>
             <div class="info-item"><span class="info-label">Customer Phone:</span> ${delivery_order.customer_phone || 'N/A'}</div>
+            <div class="info-item"><span class="info-label">SO Status:</span> ${delivery_order.so_status || 'N/A'}</div>
           </div>
           <div>
             <div class="info-item"><span class="info-label">Shipping Date:</span> ${new Date(delivery_order.shipping_date).toLocaleDateString()}</div>
@@ -532,7 +541,9 @@ export default function DeliveryTrackingPage() {
           })) : [],
           status: 'ready to ship',
           // Konversi totalAmount ke number
-          totalAmount: parseInt(po.total_amount?.toString() || '0', 10) || 0
+          totalAmount: parseInt(po.total_amount?.toString() || '0', 10) || 0,
+          // ✅ UPDATE: Tambah SO status info
+          soStatus: po.so_status || 'processing'
         }))
 
         setPoData(transformedPOs)
@@ -612,7 +623,11 @@ export default function DeliveryTrackingPage() {
             receivedDate: doItem.received_date,
             receivedBy: doItem.received_by,
             confirmationMethod: doItem.confirmation_method,
-            createdAt: doItem.created_at
+            createdAt: doItem.created_at,
+            // ✅ UPDATE: Tambah customer info dan SO status
+            customerName: doItem.customer_name,
+            customerPhone: doItem.customer_phone,
+            soStatus: doItem.so_status || 'processing'
           }
         })
 
@@ -671,6 +686,22 @@ export default function DeliveryTrackingPage() {
 
   const shippingDOs = doData.filter(d => d.status === 'shipping')
   const deliveredDOs = doData.filter(d => d.status === 'delivered')
+
+  // ✅ UPDATE: Helper untuk SO status badge
+  const renderSOStatusBadge = (status: SOStatus) => {
+    const colors = {
+      submitted: 'bg-blue-100 text-blue-800',
+      processing: 'bg-yellow-100 text-yellow-800',
+      invoicing: 'bg-purple-100 text-purple-800',
+      completed: 'bg-green-100 text-green-800',
+      cancelled: 'bg-red-100 text-red-800',
+    }
+    return (
+      <Badge className={colors[status] || 'bg-gray-100 text-gray-800'}>
+        {status}
+      </Badge>
+    )
+  }
 
   /* -------------------- Selection helpers -------------------- */
   const toggleSelectPO = (id: string) => setSelectedPOIds(prev => 
@@ -893,7 +924,7 @@ export default function DeliveryTrackingPage() {
       return
     }
 
-    const headers = ['DO Number', 'SO', 'PO Count', 'PO IDs', 'Courier', 'Tracking', 'Status', 'Shipping Date', 'Shipping Cost', 'Received Date', 'Received By', 'Confirmation Method', 'Created At']
+    const headers = ['DO Number', 'SO', 'PO Count', 'PO IDs', 'Courier', 'Tracking', 'Status', 'Shipping Date', 'Shipping Cost', 'Received Date', 'Received By', 'Confirmation Method', 'SO Status', 'Created At']
     const rows = doData.map(d => [
       d.doNumber,
       d.soReference,
@@ -908,6 +939,8 @@ export default function DeliveryTrackingPage() {
       d.receivedDate || '',
       d.receivedBy || '',
       d.confirmationMethod || '',
+      // ✅ UPDATE: Tambah SO status ke CSV export
+      d.soStatus || '',
       d.createdAt || ''
     ])
 
@@ -1112,14 +1145,15 @@ export default function DeliveryTrackingPage() {
                           <TableHead>Customer</TableHead>
                           <TableHead>SO Reference</TableHead>
                           <TableHead>Supplier</TableHead>
-                          <TableHead>Status</TableHead>
+                          <TableHead>PO Status</TableHead>
+                          <TableHead>SO Status</TableHead>
                           <TableHead className="text-right">Total</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {poFiltered.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={7} className="text-center text-sm text-gray-500 py-8">
+                            <TableCell colSpan={8} className="text-center text-sm text-gray-500 py-8">
                               {searchTerm ? 'Tidak ada PO yang sesuai dengan pencarian' : 'Tidak ada PO yang ready untuk delivery'}
                             </TableCell>
                           </TableRow>
@@ -1139,6 +1173,10 @@ export default function DeliveryTrackingPage() {
                               <TableCell className="text-blue-600">{po.soReference}</TableCell>
                               <TableCell>{po.supplier}</TableCell>
                               <TableCell>{renderPOStatusBadge(po.status)}</TableCell>
+                              <TableCell>
+                                {/* ✅ UPDATE: Tampilkan SO status */}
+                                {po.soStatus && renderSOStatusBadge(po.soStatus)}
+                              </TableCell>
                               <TableCell className="text-right">Rp {po.totalAmount.toLocaleString('id-ID')}</TableCell>
                             </TableRow>
                           ))
@@ -1254,6 +1292,14 @@ export default function DeliveryTrackingPage() {
                                     </div>
                                   </div>
                                   <div>
+                                    <div className="font-medium">SO Status:</div>
+                                    <div>
+                                      {poData.find(p => p.id === selectedPOIds[0])?.soStatus && 
+                                        renderSOStatusBadge(poData.find(p => p.id === selectedPOIds[0])!.soStatus!)
+                                      }
+                                    </div>
+                                  </div>
+                                  <div>
                                     <div className="font-medium">Total Amount:</div>
                                     <div className="text-green-600 font-semibold">
                                       Rp {getSelectedPOsTotal().toLocaleString('id-ID')}
@@ -1302,14 +1348,15 @@ export default function DeliveryTrackingPage() {
                           <TableHead>PO Count</TableHead>
                           <TableHead>Courier</TableHead>
                           <TableHead>Tracking</TableHead>
-                          <TableHead>Status</TableHead>
+                          <TableHead>DO Status</TableHead>
+                          <TableHead>SO Status</TableHead>
                           <TableHead>Action</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {shippingDOs.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={7} className="text-center text-sm text-gray-500 py-8">
+                            <TableCell colSpan={8} className="text-center text-sm text-gray-500 py-8">
                               Tidak ada DO dalam status shipping
                             </TableCell>
                           </TableRow>
@@ -1322,6 +1369,10 @@ export default function DeliveryTrackingPage() {
                               <TableCell>{d.courier}</TableCell>
                               <TableCell className="text-blue-600">{d.trackingNumber}</TableCell>
                               <TableCell>{renderDOStatusBadge(d.status)}</TableCell>
+                              <TableCell>
+                                {/* ✅ UPDATE: Tampilkan SO status */}
+                                {d.soStatus && renderSOStatusBadge(d.soStatus)}
+                              </TableCell>
                               <TableCell>
                                 <div className="flex gap-2">
                                   <Button 
@@ -1485,7 +1536,8 @@ export default function DeliveryTrackingPage() {
                           <TableHead>PO Count</TableHead>
                           <TableHead>Courier</TableHead>
                           <TableHead>Tracking</TableHead>
-                          <TableHead>Status</TableHead>
+                          <TableHead>DO Status</TableHead>
+                          <TableHead>SO Status</TableHead>
                           <TableHead>Shipping Cost</TableHead>
                           <TableHead>Action</TableHead>
                         </TableRow>
@@ -1493,7 +1545,7 @@ export default function DeliveryTrackingPage() {
                       <TableBody>
                         {doData.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={8} className="text-center text-sm text-gray-500 py-8">
+                            <TableCell colSpan={9} className="text-center text-sm text-gray-500 py-8">
                               Belum ada DO yang dibuat
                             </TableCell>
                           </TableRow>
@@ -1506,6 +1558,10 @@ export default function DeliveryTrackingPage() {
                               <TableCell>{d.courier}</TableCell>
                               <TableCell className="text-blue-600">{d.trackingNumber}</TableCell>
                               <TableCell>{renderDOStatusBadge(d.status)}</TableCell>
+                              <TableCell>
+                                {/* ✅ UPDATE: Tampilkan SO status */}
+                                {d.soStatus && renderSOStatusBadge(d.soStatus)}
+                              </TableCell>
                               <TableCell>
                                 {d.shippingCost ? `Rp ${d.shippingCost.toLocaleString('id-ID')}` : '-'}
                               </TableCell>

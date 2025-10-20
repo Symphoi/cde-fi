@@ -3,6 +3,20 @@ import { verifyToken } from '@/app/lib/auth';
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 
+// Helper function untuk audit log
+async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
+  try {
+    const auditCode = `AUD-${Date.now()}`;
+    await query(
+      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [auditCode, userCode, userName, action, resourceType, resourceCode, `${resourceType} ${resourceCode}`, notes]
+    );
+  } catch (error) {
+    console.error('Error creating audit log:', error);
+  }
+}
+
 // GET all purchase orders
 export async function GET(request) {
   try {
@@ -231,6 +245,30 @@ export async function POST(request) {
       );
     }
 
+    // ✅ AUTO-UPDATE STATUS SO: Cek apakah ini PO pertama untuk SO ini
+    const existingPOs = await query(
+      `SELECT COUNT(*) as po_count FROM purchase_orders WHERE so_code = ? AND is_deleted = 0`,
+      [so_code]
+    );
+
+    // Jika ini PO pertama (count = 1 karena baru saja dibuat), update SO status ke 'processing'
+    if (existingPOs[0].po_count === 1) {
+      await query(
+        `UPDATE sales_orders SET status = 'processing' WHERE so_code = ? AND is_deleted = 0`,
+        [so_code]
+      );
+      
+      // Audit log untuk update SO status
+      await createAuditLog(
+        decoded.user_code,
+        decoded.name,
+        'update',
+        'sales_order',
+        so_code,
+        'Auto-updated to processing status - first PO created'
+      );
+    }
+
     // HANDLE FILE UPLOADS JIKA ADA
     if (files.length > 0) {
       for (let file of files) {
@@ -264,18 +302,22 @@ export async function POST(request) {
       }
     }
 
-    // Audit log
-    await query(
-      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes)
-       VALUES (?, ?, ?, 'create', 'purchase_order', ?, ?, ?)`,
-      [`AUD-${Date.now()}`, decoded.user_code, decoded.name, poCode, `Purchase Order ${poCode}`, 'Created new purchase order']
+    // Audit log untuk PO creation
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'create',
+      'purchase_order',
+      poCode,
+      'Created new purchase order'
     );
 
     return Response.json({
       success: true,
       message: `Purchase order created successfully${files.length > 0 ? ' with ' + files.length + ' files' : ''}`,
       po_code: poCode,
-      files_uploaded: files.length
+      files_uploaded: files.length,
+      so_updated: existingPOs[0].po_count === 1 // Tambah info bahwa SO di-update
     });
 
   } catch (error) {
@@ -355,18 +397,13 @@ export async function PATCH(request) {
     }
 
     // Audit log
-    await query(
-      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes)
-       VALUES (?, ?, ?, ?, 'purchase_order', ?, ?, ?)`,
-      [
-        `AUD-${Date.now()}`,
-        decoded.user_code,
-        decoded.name,
-        auditAction,
-        po_code,
-        `Purchase Order ${po_code}`,
-        `${auditAction === 'reject' ? 'Rejected' : 'Approved'} purchase order${notes ? ': ' + notes : ''}`
-      ]
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      auditAction,
+      'purchase_order',
+      po_code,
+      `${auditAction === 'reject' ? 'Rejected' : 'Approved'} purchase order${notes ? ': ' + notes : ''}`
     );
 
     return Response.json({
@@ -523,10 +560,13 @@ export async function PUT(request) {
     }
 
     // Audit log
-    await query(
-      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes)
-       VALUES (?, ?, ?, 'pay', 'payment', ?, ?, ?)`,
-      [`AUD-${Date.now()}`, decoded.user_code, decoded.name, paymentCode, `Payment ${paymentCode}`, `Payment created for PO ${po_code}`]
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'pay',
+      'payment',
+      paymentCode,
+      `Payment created for PO ${po_code}`
     );
 
     return Response.json({
