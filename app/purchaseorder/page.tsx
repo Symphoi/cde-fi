@@ -661,7 +661,6 @@ export default function PurchaseOrderPage() {
       cancelled: 'bg-red-100 text-red-800',
       
       // PO Status
-      submitted: 'bg-blue-100 text-blue-800',
       approved_spv: 'bg-green-100 text-green-800',
       approved_finance: 'bg-purple-100 text-purple-800',
       paid: 'bg-indigo-100 text-indigo-800',
@@ -669,7 +668,6 @@ export default function PurchaseOrderPage() {
       
       // Payment Status
       pending: 'bg-yellow-100 text-yellow-800',
-      paid: 'bg-green-100 text-green-800',
       failed: 'bg-red-100 text-red-800'
     }
     return colors[status as keyof typeof colors] || 'bg-gray-100 text-gray-800'
@@ -1373,11 +1371,15 @@ export default function PurchaseOrderPage() {
                                     <Upload className="h-4 w-4 mr-2" />
                                     Upload Invoice
                                     <input
-                                      ref={el => fileInputRefs.current[form.id] = el!}
-                                      type="file"
-                                      className="hidden"
-                                      onChange={(e) => handleInvoiceUpload(form.id, e)}
-                                      accept=".pdf,.jpg,.jpeg,.png"
+                                     ref={el => {
+    if (el) {
+      fileInputRefs.current[form.id] = el;
+    }
+  }}
+  type="file"
+  className="hidden"
+  onChange={(e) => handleInvoiceUpload(form.id, e)}
+  accept=".pdf,.jpg,.jpeg,.png"
                                     />
                                   </Button>
                                 )}

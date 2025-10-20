@@ -13,9 +13,9 @@ export async function GET(request) {
     const action = searchParams.get('action');
     const status = searchParams.get('status') || 'all';
     const search = searchParams.get('search') || '';
-    const ca_code = searchParams.get('ca_code'); // ✅ TAMBAH INI
+    const ca_code = searchParams.get('ca_code');
 
-    // ✅ HANDLE SINGLE CA DETAIL - TAMBAH SEBELUM DROPDOWNS
+    // ✅ HANDLE SINGLE CA DETAIL
     if (ca_code) {
       const sql = `
         SELECT ca_code, employee_name, department, purpose, total_amount, 
@@ -32,9 +32,21 @@ export async function GET(request) {
         return Response.json({ error: 'Cash Advance tidak ditemukan' }, { status: 404 });
       }
 
+      // ✅ GET TRANSACTIONS FOR THIS CA
+      const transactionsSql = `
+        SELECT id, transaction_date, description, amount, category, created_at
+        FROM ca_transactions 
+        WHERE ca_code = ? AND is_deleted = 0
+        ORDER BY transaction_date DESC
+      `;
+      const transactions = await query(transactionsSql, [ca_code]);
+
       return Response.json({
         success: true,
-        data: result[0] // ✅ RETURN SINGLE OBJECT, BUKAN ARRAY
+        data: {
+          ...result[0],
+          transactions: transactions || []
+        }
       });
     }
 
@@ -57,7 +69,7 @@ export async function GET(request) {
       });
     }
 
-    // Handle get cash advances list (existing code)
+    // Handle get cash advances list
     let sql = `
       SELECT ca_code, employee_name, department, purpose, total_amount, 
              used_amount, remaining_amount, status, request_date, project_code,
@@ -83,19 +95,23 @@ export async function GET(request) {
 
     const cashAdvances = await query(sql, params);
 
-    // Get stats
+    // ✅ UPDATED STATS - TAMBAH COMPLETED & REJECTED
     const statsResult = await query(`
       SELECT 
         COUNT(*) as total,
         SUM(CASE WHEN status = 'submitted' THEN 1 ELSE 0 END) as pending,
         SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
         SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
         COALESCE(SUM(total_amount), 0) as total_amount
       FROM cash_advances 
       WHERE created_by = ? AND is_deleted = 0
     `, [decoded.user_code]);
 
-    const stats = statsResult[0] || { pending: 0, approved: 0, active: 0, total_amount: 0 };
+    const stats = statsResult[0] || { 
+      pending: 0, approved: 0, active: 0, completed: 0, rejected: 0, total_amount: 0 
+    };
 
     return Response.json({
       success: true,
@@ -104,6 +120,8 @@ export async function GET(request) {
         pending: stats.pending || 0,
         approved: stats.approved || 0,
         active: stats.active || 0,
+        completed: stats.completed || 0,
+        rejected: stats.rejected || 0,
         totalAmount: stats.total_amount || 0
       },
       currentUser: {

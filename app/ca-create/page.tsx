@@ -5,8 +5,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Search, Plus, FileText, Calendar, User, DollarSign, ChevronLeft, ChevronRight, Eye, Loader2, Save, X } from 'lucide-react'
+import { Search, Plus, FileText, Calendar, User, DollarSign, ChevronLeft, ChevronRight, Eye, Loader2, Save, X, CheckCircle, XCircle } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { Calendar as CalendarComponent } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { format } from "date-fns"
 
 interface CashAdvance {
   ca_code: string
@@ -19,6 +22,15 @@ interface CashAdvance {
   status: string
   request_date: string
   project_code?: string
+}
+
+interface Transaction {
+  id: number
+  transaction_date: string
+  description: string
+  amount: number | string
+  category: string
+  created_at: string
 }
 
 interface CashAdvanceDetail {
@@ -38,12 +50,13 @@ interface CashAdvanceDetail {
   approved_by_finance?: string
   approved_date_spv?: string
   approved_date_finance?: string
+  transactions: Transaction[]
 }
 
 interface CashAdvanceForm {
   purpose: string
   total_amount: number
-  request_date: string
+  request_date: Date | undefined
   project_code?: string
 }
 
@@ -52,7 +65,7 @@ interface Project {
   name: string
 }
 
-// Format currency to Rupiah - handle both number and string
+// Format currency to Rupiah
 const formatRupiah = (amount: number | string | null | undefined) => {
   const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
   
@@ -66,7 +79,7 @@ const formatRupiah = (amount: number | string | null | undefined) => {
   }).format(numAmount as number);
 };
 
-// Format date from "2025-10-19T17:00:00.000Z" to "2025-10-20"
+// Format date display
 const formatDateDisplay = (dateString: string) => {
   if (!dateString) return '-';
   try {
@@ -86,7 +99,7 @@ const formatDateDisplay = (dateString: string) => {
 export default function CashAdvancePage() {
   const [activeTab, setActiveTab] = useState<'create' | 'history'>('create')
   const [searchTerm, setSearchTerm] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | 'submitted' | 'approved'  | 'rejected' | 'active'  | 'in_settlement'   | 'completed'>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'submitted' | 'approved' | 'rejected' | 'active' | 'in_settlement' | 'completed'>('all')
   const [currentPage, setCurrentPage] = useState(1)
   const [cashAdvances, setCashAdvances] = useState<CashAdvance[]>([])
   const [selectedCA, setSelectedCA] = useState<CashAdvanceDetail | null>(null)
@@ -97,15 +110,17 @@ export default function CashAdvancePage() {
   const [stats, setStats] = useState({ 
     pending: 0, 
     approved: 0, 
-    active: 0, 
+    active: 0,
+    completed: 0,
+    rejected: 0,
     totalAmount: 0 
   })
   
-  // Form state
+  // Form state dengan Date object untuk shadcn Calendar
   const [form, setForm] = useState<CashAdvanceForm>({
     purpose: '',
     total_amount: 0,
-    request_date: new Date().toISOString().split('T')[0],
+    request_date: new Date(),
     project_code: ''
   })
 
@@ -132,7 +147,6 @@ export default function CashAdvancePage() {
       console.error('Error fetching dropdown data:', error)
     }
 
-
     setSelectedCA(null);
   }
 
@@ -157,6 +171,8 @@ export default function CashAdvancePage() {
           pending: parseInt(statsData.pending) || 0,
           approved: parseInt(statsData.approved) || 0,
           active: parseInt(statsData.active) || 0,
+          completed: parseInt(statsData.completed) || 0,
+          rejected: parseInt(statsData.rejected) || 0,
           totalAmount: parseFloat(statsData.totalAmount) || 0
         })
         
@@ -183,7 +199,6 @@ export default function CashAdvancePage() {
       if (response.ok) {
         const result = await response.json()
         if (result.success) {
-          // FIX: Ambil element pertama dari array
           setSelectedCA(result.data)
         }
       }
@@ -203,16 +218,26 @@ export default function CashAdvancePage() {
   }
 
   const handleCreateCA = async () => {
+    if (!form.request_date) {
+      alert('Request Date harus diisi');
+      return;
+    }
+
     setLoading(true)
     try {
       const token = localStorage.getItem('token')
+      const submitData = {
+        ...form,
+        request_date: format(form.request_date, 'yyyy-MM-dd') // Format untuk backend
+      }
+
       const response = await fetch('/api/ca-create', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(form)
+        body: JSON.stringify(submitData)
       })
 
       const result = await response.json()
@@ -221,7 +246,7 @@ export default function CashAdvancePage() {
         setForm({
           purpose: '',
           total_amount: 0,
-          request_date: new Date().toISOString().split('T')[0],
+          request_date: new Date(),
           project_code: ''
         })
         setActiveTab('history')
@@ -233,33 +258,6 @@ export default function CashAdvancePage() {
       alert('Gagal membuat Cash Advance')
     } finally {
       setLoading(false)
-    }
-  }
-
-  const handleSubmitCA = async (ca_code: string) => {
-    try {
-      const token = localStorage.getItem('token')
-      const response = await fetch('/api/ca-create', {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ ca_code, action: 'submit' })
-      })
-
-      const result = await response.json()
-      if (result.success) {
-        alert('Cash Advance berhasil disubmit')
-        fetchMyCashAdvances()
-        if (selectedCA) {
-          fetchCADetail(selectedCA.ca_code)
-        }
-      } else {
-        alert(result.error || 'Gagal submit Cash Advance')
-      }
-    } catch (error) {
-      alert('Gagal submit Cash Advance')
     }
   }
 
@@ -393,11 +391,25 @@ export default function CashAdvancePage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium mb-2 block">Request Date *</label>
-                  <Input
-                    type="date"
-                    value={form.request_date}
-                    onChange={(e) => setForm(prev => ({ ...prev, request_date: e.target.value }))}
-                  />
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start text-left font-normal"
+                      >
+                        <Calendar className="mr-2 h-4 w-4" />
+                        {form.request_date ? format(form.request_date, "PPP") : "Pilih tanggal"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0">
+                      <CalendarComponent
+                        mode="single"
+                        selected={form.request_date}
+                        onSelect={(date) => setForm(prev => ({ ...prev, request_date: date }))}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-2 block">Project (Optional)</label>
@@ -430,7 +442,7 @@ export default function CashAdvancePage() {
                   onClick={() => setForm({
                     purpose: '',
                     total_amount: 0,
-                    request_date: new Date().toISOString().split('T')[0],
+                    request_date: new Date(),
                     project_code: ''
                   })}
                 >
@@ -444,8 +456,8 @@ export default function CashAdvancePage() {
 
         {activeTab === 'history' && (
           <>
-            {/* Statistics Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {/* Statistics Cards - DITAMBAH COMPLETED & REJECTED */}
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
               <Card className="bg-white border-blue-200">
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between">
@@ -460,7 +472,6 @@ export default function CashAdvancePage() {
                 </CardContent>
               </Card>
 
-             
               <Card className="bg-white border-green-200">
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between">
@@ -479,11 +490,39 @@ export default function CashAdvancePage() {
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between">
                     <div>
+                      <p className="text-sm font-medium text-gray-600">Completed</p>
+                      <p className="text-2xl font-bold text-gray-900">{stats.completed}</p>
+                    </div>
+                    <div className="p-3 bg-purple-100 rounded-full">
+                      <CheckCircle className="h-6 w-6 text-purple-600" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white border-red-200">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-600">Rejected</p>
+                      <p className="text-2xl font-bold text-gray-900">{stats.rejected}</p>
+                    </div>
+                    <div className="p-3 bg-red-100 rounded-full">
+                      <XCircle className="h-6 w-6 text-red-600" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white border-yellow-200">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
                       <p className="text-sm font-medium text-gray-600">Total Amount</p>
                       <p className="text-2xl font-bold text-gray-900">{formatRupiah(stats.totalAmount)}</p>
                     </div>
-                    <div className="p-3 bg-purple-100 rounded-full">
-                      <DollarSign className="h-6 w-6 text-purple-600" />
+                    <div className="p-3 bg-yellow-100 rounded-full">
+                      <DollarSign className="h-6 w-6 text-yellow-600" />
                     </div>
                   </div>
                 </CardContent>
@@ -510,19 +549,18 @@ export default function CashAdvancePage() {
                     <select
                       value={statusFilter}
                       onChange={(e) => {
-                        setStatusFilter(e.target.value as 'all' | 'submitted' | 'approved'  | 'rejected' | 'active'  | 'in_settlement'   | 'completed' )
+                        setStatusFilter(e.target.value as 'all' | 'submitted' | 'approved' | 'rejected' | 'active' | 'in_settlement' | 'completed')
                         setCurrentPage(1)
                       }}
                       className="border rounded-md px-3 py-2 text-sm"
                     >  
-
                       <option value="all">Semua Status</option>
                       <option value="submitted">Menunggu Approval</option>
                       <option value="approved">Disetujui</option>
-                      <option value="rejected">ditolak</option>
+                      <option value="rejected">Ditolak</option>
                       <option value="active">Aktif</option>
                       <option value="completed">Completed</option>
-                      <option value="settlement">In Settlement</option>
+                      <option value="in_settlement">In Settlement</option>
                     </select>
                   </div>
                   
@@ -601,8 +639,6 @@ export default function CashAdvancePage() {
                                   )}
                                   Detail
                                 </Button>
-                                
-                                
                               </div>
                             </TableCell>
                           </TableRow>
@@ -637,7 +673,7 @@ export default function CashAdvancePage() {
               </CardContent>
             </Card>
 
-            {/* Detail Panel */}
+            {/* Detail Panel - TRANSACTIONS LANGSUNG TAMPIL */}
             {selectedCA && (
               <Card className="border-blue-200 border-2">
                 <CardHeader className="bg-blue-50 border-b border-blue-100">
@@ -695,19 +731,47 @@ export default function CashAdvancePage() {
                     </div>
                   </div>
 
-                  {/* Actions */}
-                  <div className="mt-6 pt-6 border-t">
-                    <div className="flex gap-2">
-                      {(selectedCA.status !== 'submitted' && selectedCA.status !== 'rejected') && (
-                        <Button 
-                          variant="outline"
-                          className="border-blue-600 text-blue-600 hover:bg-blue-50"
-                        >
-                          Lihat Transactions
-                        </Button>
+                  {/* TRANSACTIONS SECTION - LANGSUNG TAMPIL TANPA TOMBOL */}
+                  {(selectedCA.status !== 'draft' && selectedCA.status !== 'submitted' && selectedCA.status !== 'rejected') && (
+                    <div className="mt-8 pt-6 border-t">
+                      <h3 className="text-lg font-semibold mb-4">Transactions</h3>
+                      {selectedCA.transactions && selectedCA.transactions.length > 0 ? (
+                        <div className="overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Date</TableHead>
+                                <TableHead>Description</TableHead>
+                                <TableHead>Category</TableHead>
+                                <TableHead className="text-right">Amount</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {selectedCA.transactions.map((transaction) => (
+                                <TableRow key={transaction.id}>
+                                  <TableCell>{formatDateDisplay(transaction.transaction_date)}</TableCell>
+                                  <TableCell>{transaction.description}</TableCell>
+                                  <TableCell>
+                                    <Badge variant="outline" className="bg-gray-100">
+                                      {transaction.category}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="text-right font-semibold">
+                                    {formatRupiah(transaction.amount)}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      ) : (
+                        <div className="text-center py-8 border rounded-lg bg-gray-50">
+                          <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                          <p className="text-gray-500">Belum ada transaksi untuk Cash Advance ini</p>
+                        </div>
                       )}
                     </div>
-                  </div>
+                  )}
                 </CardContent>
               </Card>
             )}
