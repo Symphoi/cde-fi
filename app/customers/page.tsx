@@ -8,31 +8,34 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { Search, Plus, Edit, Trash2, RefreshCw, Building, Check, X, Loader2, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
+import { Search, Plus, Edit, Trash2, RefreshCw, Users, Check, X, Loader2, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 
 // Types
-interface Company {
+interface Customer {
   id: number
-  company_code: string
+  customer_code: string
   name: string
-  description?: string
-  address?: string
-  phone?: string
-  email?: string
-  tax_id?: string
-  status: 'active' | 'inactive'
+  contact_person: string
+  phone: string
+  email: string
+  address: string
+  billing_address: string
+  shipping_address: string
+  is_active: boolean
   created_at: string
 }
 
-interface CompanyFormData {
-  company_code: string
+interface CustomerFormData {
+  customer_code: string
   name: string
-  description: string
-  address: string
+  contact_person: string
   phone: string
   email: string
-  tax_id: string
+  address: string
+  billing_address: string
+  shipping_address: string
+  is_active: boolean
 }
 
 interface PaginationInfo {
@@ -43,7 +46,7 @@ interface PaginationInfo {
 }
 
 // API Service
-class CompanyService {
+class CustomerService {
   private static async fetchWithAuth(url: string, options: RequestInit = {}) {
     const token = localStorage.getItem('token');
     if (!token) {
@@ -61,44 +64,15 @@ class CompanyService {
       },
     });
 
-    return this.handleResponse(response);
-  }
-
-  private static async handleResponse(response: Response) {
-    const contentType = response.headers.get('content-type');
-    
-    if (contentType && contentType.includes('text/html')) {
-      const text = await response.text();
-      console.error('HTML Response received:', text.substring(0, 500));
-      
-      if (response.status === 401) {
-        toast.error('Session expired. Please login again.');
-        window.location.href = '/login';
-        throw new Error('Unauthorized - Please login again');
-      }
-      
-      if (response.status === 404) {
-        throw new Error('API endpoint not found. Please check the URL.');
-      }
-      
-      throw new Error(`Server error: Received HTML instead of JSON (Status: ${response.status})`);
-    }
-    
     if (!response.ok) {
-      try {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-      } catch (jsonError) {
-        const errorText = await response.text();
-        throw new Error(errorText || `HTTP error! status: ${response.status}`);
-      }
+      const errorText = await response.text();
+      throw new Error(errorText || `HTTP error! status: ${response.status}`);
     }
     
     return response.json();
   }
 
-  // Get all companies with pagination
-  static async getCompanies(filters: {
+  static async getCustomers(filters: {
     search?: string;
     status?: string;
     page?: number;
@@ -110,40 +84,32 @@ class CompanyService {
     params.append('page', String(filters.page || 1));
     params.append('limit', String(filters.limit || 10));
 
-    return this.fetchWithAuth(`/api/companies?${params}`);
+    return this.fetchWithAuth(`/api/customers?${params}`);
   }
 
-  // Create company
-  static async createCompany(data: CompanyFormData) {
-    return this.fetchWithAuth('/api/companies', {
+  static async createCustomer(data: CustomerFormData) {
+    return this.fetchWithAuth('/api/customers', {
       method: 'POST',
       body: JSON.stringify(data)
     });
   }
 
-  // Update company
-  static async updateCompany(data: CompanyFormData & { id: number }) {
-    return this.fetchWithAuth('/api/companies', {
+  static async updateCustomer(data: CustomerFormData & { id: number }) {
+    return this.fetchWithAuth('/api/customers', {
       method: 'PUT',
       body: JSON.stringify(data)
     });
   }
 
-  // Delete company
-  static async deleteCompany(id: number) {
-    return this.fetchWithAuth(`/api/companies?id=${id}`, {
+  static async deleteCustomer(id: number) {
+    return this.fetchWithAuth(`/api/customers?id=${id}`, {
       method: 'DELETE'
     });
   }
-
-  // Generate company code
-  static async generateCompanyCode() {
-    return this.fetchWithAuth('/api/companies/generate-code');
-  }
 }
 
-export default function CompaniesPage() {
-  const [companies, setCompanies] = useState<Company[]>([])
+export default function CustomersPage() {
+  const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -159,26 +125,28 @@ export default function CompaniesPage() {
 
   // Form state
   const [showForm, setShowForm] = useState(false)
-  const [editingCompany, setEditingCompany] = useState<Company | null>(null)
-  const [formData, setFormData] = useState<CompanyFormData>({
-    company_code: '',
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
+  const [formData, setFormData] = useState<CustomerFormData>({
+    customer_code: '',
     name: '',
-    description: '',
-    address: '',
+    contact_person: '',
     phone: '',
     email: '',
-    tax_id: ''
+    address: '',
+    billing_address: '',
+    shipping_address: '',
+    is_active: true
   })
 
   // Delete confirmation modal
   const [showDeleteModal, setShowDeleteModal] = useState(false)
-  const [companyToDelete, setCompanyToDelete] = useState<Company | null>(null)
+  const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null)
 
   // Fetch data dengan pagination
-  const fetchCompanies = async (page: number = pagination.page) => {
+  const fetchCustomers = async (page: number = pagination.page) => {
     try {
       setLoading(true)
-      const response = await CompanyService.getCompanies({
+      const response = await CustomerService.getCustomers({
         search: searchTerm,
         status: statusFilter,
         page: page,
@@ -186,134 +154,109 @@ export default function CompaniesPage() {
       })
 
       if (response.success) {
-        setCompanies(response.data)
+        setCustomers(response.data)
         setPagination(response.pagination)
       }
     } catch (error: any) {
-      console.error('Error fetching companies:', error)
-      toast.error(error.message || 'Failed to load companies')
+      console.error('Error fetching customers:', error)
+      toast.error(error.message || 'Failed to load customers')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchCompanies(1)
+    fetchCustomers(1)
   }, [searchTerm, statusFilter])
 
-  // Generate unique company code
-  const generateCompanyCode = async () => {
-    try {
-      const response = await CompanyService.generateCompanyCode()
-      if (response.success && response.data) {
-        setFormData(prev => ({ ...prev, company_code: response.data.code }))
-        toast.success('Company code generated successfully')
-      }
-    } catch (error: any) {
-      console.error('Error generating company code:', error)
-      // Fallback manual generation
-      const randomSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const companyCode = `COMP${randomSuffix}`;
-      setFormData(prev => ({ ...prev, company_code: companyCode }))
-      toast.success('Company code generated successfully')
-    }
-  }
-
-  // Input validation functions - SAMA DENGAN SUPPLIER
-  const validateEmail = (email: string): boolean => {
-    if (!email) return true // Empty email is allowed
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-    return emailRegex.test(email)
-  }
-
-  const validatePhone = (phone: string): boolean => {
-    if (!phone) return true // Empty phone is allowed
-    const phoneRegex = /^[\+]?[0-9\s\-\(\)]{8,20}$/
-    return phoneRegex.test(phone.replace(/\s/g, ''))
-  }
-
-  const validateName = (value: string): boolean => {
-    return /^[a-zA-Z0-9\s\-\&\.\,\(\)]+$/.test(value)
-  }
-
-  const validateTaxId = (value: string): boolean => {
-    return /^[0-9\.\-\s]+$/.test(value)
+  // Generate unique customer code
+  const generateCustomerCode = () => {
+    const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const customerCode = `CUST${randomSuffix}`;
+    setFormData(prev => ({ ...prev, customer_code: customerCode }))
+    toast.success('Customer code generated successfully')
   }
 
   // Pagination handlers
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= pagination.totalPages) {
-      fetchCompanies(newPage)
+      fetchCustomers(newPage)
     }
   }
 
   const handleLimitChange = (newLimit: number) => {
     setPagination(prev => ({ ...prev, limit: newLimit, page: 1 }))
-    setTimeout(() => fetchCompanies(1), 0)
+    setTimeout(() => fetchCustomers(1), 0)
   }
 
   // Form handlers
   const handleCreateNew = () => {
-    setEditingCompany(null)
+    setEditingCustomer(null)
     setFormData({
-      company_code: '',
+      customer_code: '',
       name: '',
-      description: '',
-      address: '',
+      contact_person: '',
       phone: '',
       email: '',
-      tax_id: ''
+      address: '',
+      billing_address: '',
+      shipping_address: '',
+      is_active: true
     })
     setShowForm(true)
   }
 
-  const handleEdit = (company: Company) => {
-    setEditingCompany(company)
+  const handleEdit = (customer: Customer) => {
+    setEditingCustomer(customer)
     setFormData({
-      company_code: company.company_code,
-      name: company.name,
-      description: company.description || '',
-      address: company.address || '',
-      phone: company.phone || '',
-      email: company.email || '',
-      tax_id: company.tax_id || ''
+      customer_code: customer.customer_code,
+      name: customer.name,
+      contact_person: customer.contact_person || '',
+      phone: customer.phone || '',
+      email: customer.email || '',
+      address: customer.address || '',
+      billing_address: customer.billing_address || '',
+      shipping_address: customer.shipping_address || '',
+      is_active: customer.is_active
     })
     setShowForm(true)
   }
 
-  const updateFormField = (field: keyof CompanyFormData, value: string) => {
+  const updateFormField = (field: keyof CustomerFormData, value: string | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }))
   }
 
+  // Email validation
+  const validateEmail = (email: string) => {
+    if (!email) return true // Empty email is allowed
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    return emailRegex.test(email)
+  }
+
+  // Phone validation
+  const validatePhone = (phone: string) => {
+    if (!phone) return true // Empty phone is allowed
+    const phoneRegex = /^[\+]?[0-9\s\-\(\)]{8,20}$/
+    return phoneRegex.test(phone.replace(/\s/g, ''))
+  }
+
   const submitForm = async () => {
-    // Required field validation
-    if (!formData.company_code.trim()) {
-      toast.error('Company code is required')
+    if (!formData.customer_code.trim()) {
+      toast.error('Customer code is required')
       return
     }
     if (!formData.name.trim()) {
-      toast.error('Company name is required')
-      return
-    }
-    if (!formData.tax_id.trim()) {
-      toast.error('Tax ID is required')
-      return
-    }
-    if (!formData.address.trim()) {
-      toast.error('Address is required')
-      return
-    }
-    if (!formData.description.trim()) {
-      toast.error('Description is required')
+      toast.error('Customer name is required')
       return
     }
 
-    // Format validation - SAMA DENGAN SUPPLIER
+    // Validate email
     if (formData.email && !validateEmail(formData.email)) {
       toast.error('Please enter a valid email address')
       return
     }
 
+    // Validate phone
     if (formData.phone && !validatePhone(formData.phone)) {
       toast.error('Please enter a valid phone number')
       return
@@ -322,23 +265,23 @@ export default function CompaniesPage() {
     try {
       setSubmitting(true)
       
-      if (editingCompany) {
-        const result = await CompanyService.updateCompany({
+      if (editingCustomer) {
+        const result = await CustomerService.updateCustomer({
           ...formData,
-          id: editingCompany.id
+          id: editingCustomer.id
         })
-        toast.success(result.message || 'Company updated successfully')
+        toast.success(result.message || 'Customer updated successfully')
       } else {
-        const result = await CompanyService.createCompany(formData)
-        toast.success(result.message || 'Company created successfully')
+        const result = await CustomerService.createCustomer(formData)
+        toast.success(result.message || 'Customer created successfully')
       }
 
       setShowForm(false)
-      setEditingCompany(null)
-      await fetchCompanies()
+      setEditingCustomer(null)
+      await fetchCustomers()
     } catch (error: any) {
-      console.error('Error saving company:', error)
-      toast.error(error.message || 'Failed to save company')
+      console.error('Error saving customer:', error)
+      toast.error(error.message || 'Failed to save customer')
     } finally {
       setSubmitting(false)
     }
@@ -346,28 +289,28 @@ export default function CompaniesPage() {
 
   const closeForm = () => {
     setShowForm(false)
-    setEditingCompany(null)
+    setEditingCustomer(null)
     setSubmitting(false)
   }
 
-  const handleDeleteClick = (company: Company) => {
-    setCompanyToDelete(company)
+  const handleDeleteClick = (customer: Customer) => {
+    setCustomerToDelete(customer)
     setShowDeleteModal(true)
   }
 
   const handleDeleteConfirm = async () => {
-    if (!companyToDelete) return
+    if (!customerToDelete) return
 
     try {
       setLoading(true)
-      const result = await CompanyService.deleteCompany(companyToDelete.id)
-      toast.success(result.message || 'Company deleted successfully')
+      const result = await CustomerService.deleteCustomer(customerToDelete.id)
+      toast.success(result.message || 'Customer deleted successfully')
       setShowDeleteModal(false)
-      setCompanyToDelete(null)
-      fetchCompanies()
+      setCustomerToDelete(null)
+      fetchCustomers()
     } catch (error: any) {
-      console.error('Error deleting company:', error)
-      toast.error(error.message || 'Failed to delete company')
+      console.error('Error deleting customer:', error)
+      toast.error(error.message || 'Failed to delete customer')
     } finally {
       setLoading(false)
     }
@@ -375,38 +318,29 @@ export default function CompaniesPage() {
 
   const handleDeleteCancel = () => {
     setShowDeleteModal(false)
-    setCompanyToDelete(null)
+    setCustomerToDelete(null)
   }
 
-  const toggleStatus = async (company: Company) => {
+  const toggleStatus = async (customer: Customer) => {
     try {
       setLoading(true)
-      const updateData = {
-        id: company.id,
-        company_code: company.company_code,
-        name: company.name,
-        description: company.description || '',
-        address: company.address || '',
-        phone: company.phone || '',
-        email: company.email || '',
-        tax_id: company.tax_id || '',
-        status: company.status === 'active' ? 'inactive' : 'active'
-      }
-      
-      await CompanyService.updateCompany(updateData)
-      toast.success(`Company ${company.status === 'active' ? 'deactivated' : 'activated'}`)
-      fetchCompanies()
+      await CustomerService.updateCustomer({
+        ...customer,
+        is_active: !customer.is_active
+      })
+      toast.success(`Customer ${!customer.is_active ? 'activated' : 'deactivated'}`)
+      fetchCustomers()
     } catch (error: any) {
-      console.error('Error updating company status:', error)
-      toast.error(error.message || 'Failed to update company status')
+      console.error('Error updating customer status:', error)
+      toast.error(error.message || 'Failed to update customer status')
     } finally {
       setLoading(false)
     }
   }
 
   // Status badge
-  const getStatusBadge = (status: 'active' | 'inactive') => {
-    return status === 'active' ? (
+  const getStatusBadge = (isActive: boolean) => {
+    return isActive ? (
       <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">
         <Check className="h-3 w-3 mr-1" />
         Active
@@ -425,7 +359,7 @@ export default function CompaniesPage() {
       <div className="text-sm text-gray-600">
         Showing {((pagination.page - 1) * pagination.limit) + 1} to{' '}
         {Math.min(pagination.page * pagination.limit, pagination.total)} of{' '}
-        {pagination.total} companies
+        {pagination.total} customers
       </div>
       
       <div className="flex items-center gap-4">
@@ -474,14 +408,14 @@ export default function CompaniesPage() {
 
   // Delete Confirmation Modal
   const DeleteConfirmationModal = () => {
-    if (!showDeleteModal || !companyToDelete) return null
+    if (!showDeleteModal || !customerToDelete) return null
 
     return (
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
         <div className="bg-white rounded-lg max-w-md w-full p-6">
           <h3 className="text-lg font-semibold mb-4">Confirm Delete</h3>
           <div className="text-gray-600 mb-6">
-            Are you sure you want to delete company <strong>{companyToDelete.name}</strong> ({companyToDelete.company_code})?
+            Are you sure you want to delete customer <strong>{customerToDelete.name}</strong> ({customerToDelete.customer_code})?
             This action cannot be undone.
           </div>
           <div className="flex gap-3">
@@ -517,21 +451,21 @@ export default function CompaniesPage() {
               <div>
                 <CardTitle className="flex items-center gap-3 text-2xl font-bold text-gray-900">
                   <div className="p-2 bg-blue-100 rounded-lg">
-                    <Building className="h-6 w-6 text-blue-600" />
+                    <Users className="h-6 w-6 text-blue-600" />
                   </div>
-                  Companies
+                  Customers
                 </CardTitle>
-                <p className="text-gray-600 mt-2">Manage your company profiles</p>
+                <p className="text-gray-600 mt-2">Manage your customers</p>
               </div>
               
               <div className="flex gap-2">
                 <Button onClick={handleCreateNew} className="bg-blue-600 hover:bg-blue-700 text-white">
                   <Plus className="h-4 w-4 mr-2" />
-                  Add Company
+                  Add Customer
                 </Button>
                 <Button 
                   variant="outline" 
-                  onClick={() => fetchCompanies()}
+                  onClick={() => fetchCustomers()}
                   disabled={loading}
                 >
                   <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
@@ -545,7 +479,7 @@ export default function CompaniesPage() {
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <Input
-                  placeholder="Search companies..."
+                  placeholder="Search customers..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
@@ -565,13 +499,13 @@ export default function CompaniesPage() {
           </CardHeader>
         </Card>
 
-        {/* Companies Table - TANPA SPACE DI ATAS */}
+        {/* Customers Table */}
         <Card className="bg-white border shadow-sm rounded-lg">
           <CardContent className="p-0">
             {loading ? (
               <div className="flex flex-col items-center justify-center py-12">
                 <Loader2 className="h-8 w-8 animate-spin text-blue-600 mb-4" />
-                <p className="text-gray-600">Loading companies...</p>
+                <p className="text-gray-600">Loading customers...</p>
               </div>
             ) : (
               <>
@@ -579,71 +513,79 @@ export default function CompaniesPage() {
                   <TableHeader className="bg-gray-50">
                     <TableRow>
                       <TableHead className="w-12 text-center font-semibold text-gray-900">No</TableHead>
-                      <TableHead className="w-32 font-semibold text-gray-900">Company Code</TableHead>
+                      <TableHead className="w-32 font-semibold text-gray-900">Customer Code</TableHead>
                       <TableHead className="min-w-40 font-semibold text-gray-900">Name</TableHead>
-                      <TableHead className="min-w-48 font-semibold text-gray-900">Email</TableHead>
+                      <TableHead className="min-w-32 font-semibold text-gray-900">Contact Person</TableHead>
+                      <TableHead className="min-w-32 font-semibold text-gray-900">Email</TableHead>
                       <TableHead className="min-w-32 font-semibold text-gray-900">Phone</TableHead>
-                      <TableHead className="min-w-40 font-semibold text-gray-900">Tax ID</TableHead>
+                      <TableHead className="min-w-48 font-semibold text-gray-900">Address</TableHead>
                       <TableHead className="w-24 text-center font-semibold text-gray-900">Status</TableHead>
                       <TableHead className="w-28 text-center font-semibold text-gray-900">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {companies.length === 0 ? (
+                    {customers.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="text-center py-12">
+                        <TableCell colSpan={9} className="text-center py-12">
                           <div className="flex flex-col items-center justify-center text-gray-500">
-                            <Building className="h-12 w-12 mb-4 text-gray-300" />
-                            <p className="text-lg font-medium mb-2">No companies found</p>
+                            <Users className="h-12 w-12 mb-4 text-gray-300" />
+                            <p className="text-lg font-medium mb-2">No customers found</p>
                             <Button onClick={handleCreateNew} size="sm">
                               <Plus className="h-4 w-4 mr-2" />
-                              Add Company
+                              Add Customer
                             </Button>
                           </div>
                         </TableCell>
                       </TableRow>
                     ) : (
-                      companies.map((company, index) => (
-                        <TableRow key={company.id} className="hover:bg-gray-50/50">
+                      customers.map((customer, index) => (
+                        <TableRow key={customer.id} className="hover:bg-gray-50/50">
                           <TableCell className="text-center text-gray-600 font-medium">
                             {(pagination.page - 1) * pagination.limit + index + 1}
                           </TableCell>
                           <TableCell>
                             <span className="font-semibold text-blue-600">
-                              {company.company_code}
+                              {customer.customer_code}
                             </span>
                           </TableCell>
-                          <TableCell className="font-medium text-gray-900 max-w-[160px] truncate">
-                            {company.name}
+                          <TableCell className="font-medium text-gray-900">
+                            {customer.name}
                           </TableCell>
-                          <TableCell className="max-w-[200px] truncate">
-                            {company.email ? (
-                              <span className="text-gray-600 text-sm">{company.email}</span>
+                          <TableCell>
+                            {customer.contact_person ? (
+                              <span className="text-gray-600">{customer.contact_person}</span>
                             ) : (
-                              <span className="text-gray-400 text-sm">-</span>
+                              <span className="text-gray-400">-</span>
                             )}
                           </TableCell>
                           <TableCell>
-                            {company.phone ? (
-                              <span className="text-gray-600 text-sm">{company.phone}</span>
+                            {customer.email ? (
+                              <span className="text-gray-600">{customer.email}</span>
                             ) : (
-                              <span className="text-gray-400 text-sm">-</span>
+                              <span className="text-gray-400">-</span>
                             )}
                           </TableCell>
-                          <TableCell className="max-w-[160px] truncate">
-                            {company.tax_id ? (
-                              <span className="text-gray-600 text-sm">{company.tax_id}</span>
+                          <TableCell>
+                            {customer.phone ? (
+                              <span className="text-gray-600">{customer.phone}</span>
+                            ) : (
+                              <span className="text-gray-400">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="max-w-[200px]">
+                            {customer.address ? (
+                              <span className="text-gray-600 text-sm">{customer.address}</span>
                             ) : (
                               <span className="text-gray-400 text-sm">-</span>
                             )}
                           </TableCell>
                           <TableCell className="text-center">
-                            {getStatusBadge(company.status)}
+                            {getStatusBadge(customer.is_active)}
                           </TableCell>
                           <TableCell className="text-center">
                             <div className="flex gap-1 justify-center">
                               <Button
-                                onClick={() => handleEdit(company)}
+                                onClick={() => handleEdit(customer)}
                                 size="sm"
                                 variant="outline"
                                 className="h-8 w-8 p-0 border-gray-300 hover:bg-gray-50"
@@ -652,18 +594,18 @@ export default function CompaniesPage() {
                                 <Edit className="h-3 w-3" />
                               </Button>
                               <Button
-                                onClick={() => toggleStatus(company)}
+                                onClick={() => toggleStatus(customer)}
                                 size="sm"
                                 variant="outline"
                                 className={`h-8 w-8 p-0 border-gray-300 hover:bg-gray-50 ${
-                                  company.status === 'active' ? 'text-orange-600' : 'text-green-600'
+                                  customer.is_active ? 'text-orange-600' : 'text-green-600'
                                 }`}
-                                title={company.status === 'active' ? 'Deactivate' : 'Activate'}
+                                title={customer.is_active ? 'Deactivate' : 'Activate'}
                               >
-                                {company.status === 'active' ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
+                                {customer.is_active ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
                               </Button>
                               <Button
-                                onClick={() => handleDeleteClick(company)}
+                                onClick={() => handleDeleteClick(customer)}
                                 size="sm"
                                 variant="outline"
                                 className="h-8 w-8 p-0 text-red-600 hover:text-red-700 border-gray-300 hover:bg-gray-50"
@@ -680,42 +622,42 @@ export default function CompaniesPage() {
                 </Table>
                 
                 {/* Pagination Controls */}
-                {companies.length > 0 && <PaginationControls />}
+                {customers.length > 0 && <PaginationControls />}
               </>
             )}
           </CardContent>
         </Card>
 
-        {/* Company Form - Below Table */}
+        {/* Customer Form - Below Table */}
         {showForm && (
           <Card className="bg-white border shadow-sm rounded-lg">
             <CardHeader>
               <CardTitle className="text-lg font-semibold">
-                {editingCompany ? 'Edit Company' : 'Add New Company'}
+                {editingCustomer ? 'Edit Customer' : 'Add New Customer'}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Company Code */}
+                  {/* Customer Code */}
                   <div className="space-y-2">
-                    <Label htmlFor="company_code" className="text-sm font-medium">
-                      Company Code *
+                    <Label htmlFor="customer_code" className="text-sm font-medium">
+                      Customer Code *
                     </Label>
                     <div className="flex gap-2">
                       <Input
-                        id="company_code"
-                        value={formData.company_code}
-                        onChange={(e) => updateFormField('company_code', e.target.value.toUpperCase())}
-                        placeholder="COMP001"
-                        disabled={!!editingCompany || submitting}
+                        id="customer_code"
+                        value={formData.customer_code}
+                        onChange={(e) => updateFormField('customer_code', e.target.value.toUpperCase())}
+                        placeholder="CUST001"
+                        disabled={!!editingCustomer || submitting}
                         className="flex-1"
                       />
-                      {!editingCompany && (
+                      {!editingCustomer && (
                         <Button
                           type="button"
                           variant="outline"
-                          onClick={generateCompanyCode}
+                          onClick={generateCustomerCode}
                           disabled={submitting}
                           className="whitespace-nowrap"
                         >
@@ -724,42 +666,42 @@ export default function CompaniesPage() {
                         </Button>
                       )}
                     </div>
-                    {editingCompany && (
+                    {editingCustomer && (
                       <p className="text-xs text-gray-500 mt-1">
-                        Company code cannot be changed
+                        Customer code cannot be changed
                       </p>
                     )}
                   </div>
 
-                  {/* Company Name */}
+                  {/* Customer Name */}
                   <div className="space-y-2">
                     <Label htmlFor="name" className="text-sm font-medium">
-                      Company Name *
+                      Customer Name *
                     </Label>
                     <Input
                       id="name"
                       value={formData.name}
                       onChange={(e) => updateFormField('name', e.target.value)}
-                      placeholder="PT Example Company"
+                      placeholder="PT Example Customer"
                       disabled={submitting}
                     />
                   </div>
 
-                  {/* Tax ID */}
+                  {/* Contact Person */}
                   <div className="space-y-2">
-                    <Label htmlFor="tax_id" className="text-sm font-medium">
-                      Tax ID *
+                    <Label htmlFor="contact_person" className="text-sm font-medium">
+                      Contact Person
                     </Label>
                     <Input
-                      id="tax_id"
-                      value={formData.tax_id}
-                      onChange={(e) => updateFormField('tax_id', e.target.value)}
-                      placeholder="12.345.678.9-012.345"
+                      id="contact_person"
+                      value={formData.contact_person}
+                      onChange={(e) => updateFormField('contact_person', e.target.value)}
+                      placeholder="John Doe"
                       disabled={submitting}
                     />
                   </div>
 
-                  {/* Phone - SAMA DENGAN SUPPLIER */}
+                  {/* Phone */}
                   <div className="space-y-2">
                     <Label htmlFor="phone" className="text-sm font-medium">
                       Phone
@@ -778,7 +720,7 @@ export default function CompaniesPage() {
                     )}
                   </div>
 
-                  {/* Email - SAMA DENGAN SUPPLIER */}
+                  {/* Email */}
                   <div className="space-y-2">
                     <Label htmlFor="email" className="text-sm font-medium">
                       Email
@@ -788,7 +730,7 @@ export default function CompaniesPage() {
                       type="email"
                       value={formData.email}
                       onChange={(e) => updateFormField('email', e.target.value)}
-                      placeholder="company@example.com"
+                      placeholder="customer@example.com"
                       disabled={submitting}
                       className={formData.email && !validateEmail(formData.email) ? 'border-red-500' : ''}
                     />
@@ -800,30 +742,61 @@ export default function CompaniesPage() {
                   {/* Address */}
                   <div className="md:col-span-2 space-y-2">
                     <Label htmlFor="address" className="text-sm font-medium">
-                      Address *
+                      Address
                     </Label>
-                    <Input
+                    <Textarea
                       id="address"
                       value={formData.address}
                       onChange={(e) => updateFormField('address', e.target.value)}
-                      placeholder="Street address"
+                      placeholder="Customer address..."
+                      rows={2}
                       disabled={submitting}
                     />
                   </div>
 
-                  {/* Description */}
+                  {/* Billing Address */}
                   <div className="md:col-span-2 space-y-2">
-                    <Label htmlFor="description" className="text-sm font-medium">
-                      Description *
+                    <Label htmlFor="billing_address" className="text-sm font-medium">
+                      Billing Address
                     </Label>
                     <Textarea
-                      id="description"
-                      value={formData.description}
-                      onChange={(e) => updateFormField('description', e.target.value)}
-                      placeholder="Company description..."
-                      rows={3}
+                      id="billing_address"
+                      value={formData.billing_address}
+                      onChange={(e) => updateFormField('billing_address', e.target.value)}
+                      placeholder="Billing address for invoices..."
+                      rows={2}
                       disabled={submitting}
                     />
+                  </div>
+
+                  {/* Shipping Address */}
+                  <div className="md:col-span-2 space-y-2">
+                    <Label htmlFor="shipping_address" className="text-sm font-medium">
+                      Shipping Address
+                    </Label>
+                    <Textarea
+                      id="shipping_address"
+                      value={formData.shipping_address}
+                      onChange={(e) => updateFormField('shipping_address', e.target.value)}
+                      placeholder="Shipping address for deliveries..."
+                      rows={2}
+                      disabled={submitting}
+                    />
+                  </div>
+
+                  {/* Status */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="is_active"
+                      checked={formData.is_active}
+                      onChange={(e) => updateFormField('is_active', e.target.checked)}
+                      disabled={submitting}
+                      className="rounded border-gray-300"
+                    />
+                    <Label htmlFor="is_active" className="text-sm font-medium">
+                      Active
+                    </Label>
                   </div>
                 </div>
 
@@ -836,10 +809,10 @@ export default function CompaniesPage() {
                     {submitting ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        {editingCompany ? 'Updating...' : 'Creating...'}
+                        {editingCustomer ? 'Updating...' : 'Creating...'}
                       </>
                     ) : (
-                      editingCompany ? 'Update Company' : 'Create Company'
+                      editingCustomer ? 'Update Customer' : 'Create Customer'
                     )}
                   </Button>
                   <Button 

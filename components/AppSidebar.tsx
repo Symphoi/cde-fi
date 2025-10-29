@@ -6,27 +6,23 @@ import { usePathname } from "next/navigation";
 import { useSidebar } from "./SidebarContext";
 
 // Import icons dari lucide-react
-import { 
-  LayoutDashboard, 
-  Calendar, 
-  User, 
-  List, 
-  Table,
-  FileText,
-  PieChart,
-  Box,
-  Plug,
+import {
+  LayoutDashboard,
   ChevronDown,
   MoreHorizontal,
   DollarSign,
   Wallet,
-  ReceiptCent,
-  Receipt,
   Banknote,
   ScrollText,
-  Briefcase,
-  BriefcaseBusinessIcon,
-  Settings
+  Settings,
+  Building,
+  Package,
+  Users,
+  Shield,
+  CreditCard,
+  FolderTree,
+  UserRound,
+  UserPlus,
 } from "lucide-react";
 
 type NavItem = {
@@ -42,8 +38,10 @@ const navItems: NavItem[] = [
     name: "Dashboard",
     subItems: [
       {
-        name: "Dashboard", path: "/dashboard", pro: false 
-      }
+        name: "Dashboard",
+        path: "/dashboard",
+        pro: false,
+      },
     ],
   },
   //  SIDE BAR TRANSACTIONS
@@ -52,19 +50,29 @@ const navItems: NavItem[] = [
     name: "Transactions",
     subItems: [
       {
-        name: "Create Sales Order", path: "/salesorder", pro: false 
+        name: "Create Sales Order",
+        path: "/salesorder",
+        pro: false,
       },
       {
-        name: "Create Purchase Order", path: "/purchaseorder", pro: false 
+        name: "Create Purchase Order",
+        path: "/purchaseorder",
+        pro: false,
       },
       {
-        name: "Approval Purchase Order", path: "/approval-transactions", pro: false 
+        name: "Approval Purchase Order",
+        path: "/approval-transactions",
+        pro: false,
       },
       {
-        name: "Deliver to Client", path: "/deliver-to-client", pro: false 
+        name: "Deliver to Client",
+        path: "/deliver-to-client",
+        pro: false,
       },
       {
-        name: "Invoice & Payment", path: "/invoice-payment", pro: false 
+        name: "Invoice & Payment",
+        path: "/invoice-payment",
+        pro: false,
       },
     ],
   },
@@ -73,55 +81,85 @@ const navItems: NavItem[] = [
     icon: <Wallet className="w-5 h-5" />,
     name: "Cash Advance",
     subItems: [
-      {
-        name: "Create CA", path: "/ca-create", pro: false 
-      },
-      {
-        name: "Create Transactions CA", path: "/ca-transactions", pro: false 
-      },
-      {
-        name: "Approval CA", path: "/ca-approval", pro: false 
-      },
-      {
-        name: "Refund CA", path: "/ca-refund", pro: false 
-      },
+      { name: "Create CA",path: "/ca-create", pro: false },
+      { name: "Create Transactions CA", path: "/ca-transactions", pro: false },
+      { name: "Approval CA", path: "/ca-approval", pro: false },
+      { name: "Refund CA", path: "/ca-refund", pro: false },
     ],
   },
-  // SIDE BAR Reimburse 
-  // create category
-  // create tax
-  // create company
+  // SIDE BAR Reimburse
   {
     icon: <ScrollText className="w-5 h-5" />,
     name: "Reimbursement",
     subItems: [
-      {
-        name: "Create Reimburse", path: "/reimburse-create", pro: false 
-      },
-      {
-        name: "Approval Reimburse", path: "/reimburse-approval", pro: false 
-      }
+      { name: "Create Reimburse", path: "/reimburse-create", pro: false },
+      { name: "Approval Reimburse", path: "/reimburse-approval", pro: false },
     ],
   },
-  
+  {
+    icon: <Banknote className="w-5 h-5" />,
+    name: "Accounting",
+    subItems: [
+      { name: "Kas & Bank", path: "/manual-Rekonsile", pro: false },
+      { name: "Bank Rekonsile", path: "/manual-Rekonsile", pro: false },
+      { name: "Manual Journal", path: "/manual-Rekonsile", pro: false },
+    ],
+  },
 ];
 
 const othersItems: NavItem[] = [
   {
-    icon: <Settings className="w-5 h-5" />,
-    name: "Settings",
+    icon: <Building className="w-5 h-5" />,
+    name: "Company Setup",
+    subItems: [
+      { name: "Companies", path: "/companies", pro: false },
+    ],
+  },
+  {
+    icon: <UserRound className="w-5 h-5" />,
+    name: "Customers Setup",
+    subItems: [
+      { name: "Customers", path: "/customers", pro: false },
+    ],
+  },
+   {
+    icon: <UserPlus className="w-5 h-5" />,
+    name: "Suppliers Setup",
+    subItems: [
+      { name: "Suppliers", path: "/suppliers", pro: false },
+    ],
+  },
+  {
+    icon: <Package className="w-5 h-5" />,
+    name: "Products ",
+    subItems: [
+      { name: "Products", path: "/products", pro: false },
+      { name: "Product Categories", path: "/product-categories", pro: false },
+    ],
+  },
+  {
+    icon: <Banknote className="w-5 h-5" />,
+    name: "Accounting Setup",
+    subItems: [
+
+      { name: "Bank Account", path: "/bank-accounts", pro: false },
+      { name: "Taxes", path: "/taxes", pro: false },
+      { name: "Account", path: "/chart-of-account", pro: false },
+      { name: "Account Mapping", path: "/chart-of-Mapping", pro: false },
+    ],
+  },
+  {
+    icon: <Shield className="w-5 h-5" />,
+    name: "System Settings", 
     subItems: [
       { name: "RBAC", path: "/rbac", pro: false },
       { name: "Projects", path: "/projects", pro: false },
-      { name: "Companies", path: "/companies", pro: false },
-      { name: "Taxes", path: "/taxes", pro: false },
-      { name: "Bank Account", path: "/bank-accounts", pro: false },
-      { name: "Reimbursement Categories ", path: "/reimbursement-categories", pro: false },
-      
+      { name: "Reimbursement Categories", path: "/reimbursement-categories", pro: false },
     ],
-  }
+  },
 ];
 
+// Kode component tetap sama...
 const AppSidebar: React.FC = () => {
   const { isExpanded, isMobileOpen, isHovered, setIsHovered } = useSidebar();
   const pathname = usePathname();
@@ -392,7 +430,7 @@ const AppSidebar: React.FC = () => {
                 }`}
               >
                 {isExpanded || isHovered || isMobileOpen ? (
-                  "Others"
+                  "Settings"
                 ) : (
                   <MoreHorizontal className="w-5 h-5" />
                 )}

@@ -34,6 +34,25 @@ async function createAuditLog(userCode, userName, action, resourceType, resource
   }
 }
 
+// Helper function untuk cek item coverage SO
+async function checkSOItemCoverage(soCode) {
+  const uncoveredItems = await query(
+    `SELECT 
+      soi.product_code,
+      soi.product_name,
+      soi.quantity as so_quantity,
+      COALESCE(SUM(poi.quantity), 0) as po_quantity
+    FROM sales_order_items soi
+    LEFT JOIN purchase_order_items poi ON soi.product_code = poi.product_code
+    LEFT JOIN purchase_orders po ON poi.po_code = po.po_code AND po.so_code = soi.so_code
+    WHERE soi.so_code = ? AND soi.is_deleted = 0
+    GROUP BY soi.product_code, soi.product_name, soi.quantity
+    HAVING so_quantity > po_quantity`,
+    [soCode]
+  );
+  return uncoveredItems;
+}
+
 // GET - Handle semua GET requests (ready-pos & delivery-orders)
 export async function GET(request) {
   try {
@@ -47,12 +66,10 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action');
     
-    // Jika action = 'ready-pos', return POs ready for delivery
     if (action === 'ready-pos') {
       return await handleGetReadyPOs(request, decoded);
     }
 
-    // Default: get all delivery orders
     return await handleGetDeliveryOrders(request, decoded);
 
   } catch (error) {
@@ -86,7 +103,6 @@ async function handleGetReadyPOs(request, decoded) {
     params.push(searchTerm, searchTerm, searchTerm, searchTerm);
   }
 
-  // Get total count
   const countQuery = `
     SELECT COUNT(*) as total 
     FROM purchase_orders po
@@ -96,7 +112,6 @@ async function handleGetReadyPOs(request, decoded) {
   const countResult = await query(countQuery, params);
   const total = countResult[0]?.total || 0;
 
-  // Get purchase orders ready for delivery
   const poQuery = `
     SELECT 
       po.po_code,
@@ -129,7 +144,6 @@ async function handleGetReadyPOs(request, decoded) {
   params.push(parseInt(limit), offset);
   const purchaseOrders = await query(poQuery, params);
 
-  // Get items for each purchase order
   for (let po of purchaseOrders) {
     const items = await query(
       `SELECT 
@@ -183,7 +197,6 @@ async function handleGetDeliveryOrders(request, decoded) {
     params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
   }
 
-  // Get total count
   const countQuery = `
     SELECT COUNT(*) as total 
     FROM delivery_orders do
@@ -193,7 +206,6 @@ async function handleGetDeliveryOrders(request, decoded) {
   const countResult = await query(countQuery, params);
   const total = countResult[0]?.total || 0;
 
-  // Get delivery orders
   const deliveryOrdersQuery = `
     SELECT 
       do.id,
@@ -265,7 +277,6 @@ export async function POST(request) {
       notes = null
     } = doData;
 
-    // Validation
     if (!so_code || !purchase_order_codes || !Array.isArray(purchase_order_codes) || purchase_order_codes.length === 0) {
       return Response.json(
         { success: false, error: 'SO code and purchase order codes are required' },
@@ -280,7 +291,6 @@ export async function POST(request) {
       );
     }
 
-    // Validate POs
     const placeholders = purchase_order_codes.map(() => '?').join(',');
     const poCheck = await query(
       `SELECT po_code, status, do_status, so_code 
@@ -312,18 +322,15 @@ export async function POST(request) {
       );
     }
 
-    // Generate DO code
     const countResult = await query('SELECT COUNT(*) as count FROM delivery_orders WHERE YEAR(created_at) = YEAR(CURDATE())');
     const doCode = `DO-${new Date().getFullYear()}-${String(countResult[0].count + 1).padStart(4, '0')}`;
 
-    // Handle file upload
     const shippingProofFile = formData.get('shipping_proof');
     let shippingProofPath = null;
     if (shippingProofFile && shippingProofFile.size > 0) {
       shippingProofPath = await saveFile(shippingProofFile, 'shipping_proof');
     }
 
-    // Insert delivery order
     await query(
       `INSERT INTO delivery_orders 
        (do_code, so_code, purchase_order_codes, courier, tracking_number, 
@@ -335,7 +342,6 @@ export async function POST(request) {
       ]
     );
 
-    // Update PO statuses
     await query(
       `UPDATE purchase_orders 
        SET do_status = 'created', do_code = ?, delivery_date = ?
@@ -343,7 +349,6 @@ export async function POST(request) {
       [doCode, shipping_date, ...purchase_order_codes]
     );
 
-    // Audit log
     await createAuditLog(
       decoded.user_code,
       decoded.name,
@@ -372,11 +377,16 @@ export async function POST(request) {
 
 // PATCH - Mark delivery order as delivered
 export async function PATCH(request) {
+  const connection = await pool.getConnection();
+  
   try {
+    await connection.beginTransaction();
+
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     const decoded = verifyToken(token);
     
     if (!decoded) {
+      await connection.rollback();
       return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -384,6 +394,7 @@ export async function PATCH(request) {
     const dataField = formData.get('data');
     
     if (!dataField) {
+      await connection.rollback();
       return Response.json({ success: false, error: 'Missing data field' }, { status: 400 });
     }
 
@@ -396,8 +407,8 @@ export async function PATCH(request) {
       notes = ''
     } = doData;
 
-    // Validation
     if (!do_code || !received_date || !received_by) {
+      await connection.rollback();
       return Response.json(
         { success: false, error: 'DO code, received date, and received by are required' },
         { status: 400 }
@@ -406,34 +417,36 @@ export async function PATCH(request) {
 
     const podFile = formData.get('proof_of_delivery');
     if (!podFile || podFile.size === 0) {
+      await connection.rollback();
       return Response.json(
         { success: false, error: 'Proof of delivery file is required' },
         { status: 400 }
       );
     }
 
-    // Check if DO exists and is in shipping status
-    const doCheck = await query(
+    const doCheck = await connection.execute(
       'SELECT * FROM delivery_orders WHERE do_code = ? AND is_deleted = 0',
       [do_code]
     );
 
-    if (doCheck.length === 0) {
+    if (doCheck[0].length === 0) {
+      await connection.rollback();
       return Response.json({ success: false, error: 'Delivery order not found' }, { status: 404 });
     }
 
-    if (doCheck[0].status !== 'shipping') {
+    const doItem = doCheck[0][0];
+
+    if (doItem.status !== 'shipping') {
+      await connection.rollback();
       return Response.json(
         { success: false, error: 'Only shipping delivery orders can be marked as delivered' },
         { status: 400 }
       );
     }
 
-    // Handle POD file upload
     const podFilePath = await saveFile(podFile, 'proof_of_delivery');
 
-    // Update delivery order
-    await query(
+    await connection.execute(
       `UPDATE delivery_orders 
        SET status = 'delivered', 
            proof_of_delivery = ?, 
@@ -445,25 +458,21 @@ export async function PATCH(request) {
       [podFilePath, received_date, received_by, confirmation_method, notes, do_code]
     );
 
-    // FIX: Parse purchase_order_codes dengan error handling yang benar
     let poCodes = [];
     try {
-      const purchaseOrderCodes = doCheck[0].purchase_order_codes;
+      const purchaseOrderCodes = doItem.purchase_order_codes;
       if (purchaseOrderCodes) {
-        // Coba parse sebagai JSON
         const parsed = JSON.parse(purchaseOrderCodes);
         poCodes = Array.isArray(parsed) ? parsed : [purchaseOrderCodes];
       }
     } catch (error) {
-      // Jika parsing gagal, treat sebagai single PO code
-      console.warn('Failed to parse purchase_order_codes as JSON, treating as single PO:', doCheck[0].purchase_order_codes);
-      poCodes = [doCheck[0].purchase_order_codes];
+      console.warn('Failed to parse purchase_order_codes as JSON, treating as single PO:', doItem.purchase_order_codes);
+      poCodes = [doItem.purchase_order_codes];
     }
 
-    // Update related purchase orders
     if (poCodes.length > 0) {
       const placeholders = poCodes.map(() => '?').join(',');
-      await query(
+      await connection.execute(
         `UPDATE purchase_orders 
          SET do_status = 'delivered'
          WHERE po_code IN (${placeholders}) AND is_deleted = 0`,
@@ -471,34 +480,41 @@ export async function PATCH(request) {
       );
     }
 
-    // ✅ AUTO-UPDATE STATUS SO: Cek apakah semua PO di SO ini sudah delivered
-    const allPOsDelivered = await query(
+    // ✅ VALIDASI LENGKAP: Cek semua PO delivered DAN semua items ter-cover
+    const allPOsDelivered = await connection.execute(
       `SELECT COUNT(*) as pending_count 
        FROM purchase_orders 
        WHERE so_code = ? AND is_deleted = 0 
        AND (do_status != 'delivered' OR do_status IS NULL)`,
-      [doCheck[0].so_code]
+      [doItem.so_code]
     );
 
-    // Jika semua PO sudah delivered, update SO status ke 'invoicing'
-    if (allPOsDelivered[0].pending_count === 0) {
-      await query(
-        `UPDATE sales_orders SET status = 'invoicing' WHERE so_code = ? AND is_deleted = 0`,
-        [doCheck[0].so_code]
-      );
+    const pendingPOCount = allPOsDelivered[0][0].pending_count;
+
+    if (pendingPOCount === 0) {
+      // Cek apakah semua items di SO sudah ter-cover PO yang delivered
+      const uncoveredItems = await checkSOItemCoverage(doItem.so_code);
       
-      // Audit log
-      await createAuditLog(
-        decoded.user_code,
-        decoded.name,
-        'update',
-        'sales_order',
-        doCheck[0].so_code,
-        'Auto-updated to invoicing status - all POs delivered'
-      );
+      if (uncoveredItems.length === 0) {
+        // ✅ SEMUA CONDITIONS TERPENUHI: Update SO ke ready_to_invoice
+        await connection.execute(
+          `UPDATE sales_orders SET status = 'ready_to_invoice' WHERE so_code = ? AND is_deleted = 0`,
+          [doItem.so_code]
+        );
+        
+        await createAuditLog(
+          decoded.user_code,
+          decoded.name,
+          'update',
+          'sales_order',
+          doItem.so_code,
+          'Auto-updated to ready_to_invoice status - all POs delivered and items covered'
+        );
+      } else {
+        console.log(`SO ${doItem.so_code} has uncovered items:`, uncoveredItems);
+      }
     }
 
-    // Audit log untuk DO
     await createAuditLog(
       decoded.user_code,
       decoded.name,
@@ -508,19 +524,24 @@ export async function PATCH(request) {
       `Marked as delivered. Received by: ${received_by}`
     );
 
+    await connection.commit();
+
     return Response.json({
       success: true,
       message: 'Delivery order marked as delivered successfully',
       po_count: poCodes.length,
-      so_updated: allPOsDelivered[0].pending_count === 0 // Info apakah SO di-update
+      so_updated: pendingPOCount === 0
     });
 
   } catch (error) {
+    await connection.rollback();
     console.error('PATCH delivery order error:', error);
     return Response.json(
       { success: false, error: error.message || 'Internal server error' },
       { status: 500 }
     );
+  } finally {
+    connection.release();
   }
 }
 
@@ -540,7 +561,6 @@ export async function PUT(request) {
       return Response.json({ success: false, error: 'DO code is required' }, { status: 400 });
     }
 
-    // Get delivery order with all related data
     const deliveryOrder = await query(
       `SELECT 
         do.*,
@@ -563,7 +583,6 @@ export async function PUT(request) {
 
     const doItem = deliveryOrder[0];
     
-    // FIX: Parse purchase_order_codes dengan error handling yang benar
     let poCodes = [];
     try {
       if (doItem.purchase_order_codes) {
@@ -575,7 +594,6 @@ export async function PUT(request) {
       poCodes = doItem.purchase_order_codes ? [doItem.purchase_order_codes] : [];
     }
 
-    // Get PO details
     let relatedPOs = [];
     if (poCodes.length > 0) {
       const placeholders = poCodes.map(() => '?').join(',');

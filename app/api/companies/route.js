@@ -15,7 +15,55 @@ async function createAuditLog(userCode, userName, action, resourceType, resource
   }
 }
 
-// GET - Get all companies with pagination and search
+// Handle generate company code
+async function handleGenerateCode() {
+  try {
+    let isUnique = false;
+    let companyCode = '';
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    // Generate unique company code
+    while (!isUnique && attempts < maxAttempts) {
+      const randomSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
+      companyCode = `COMP${randomSuffix}`;
+      
+      // Check if code already exists
+      const existingCompany = await query(
+        'SELECT company_code FROM companies WHERE company_code = ? AND is_deleted = 0',
+        [companyCode]
+      );
+      
+      if (existingCompany.length === 0) {
+        isUnique = true;
+      }
+      
+      attempts++;
+    }
+
+    if (!isUnique) {
+      return Response.json(
+        { success: false, error: 'Failed to generate unique company code' },
+        { status: 500 }
+      );
+    }
+
+    return Response.json({
+      success: true,
+      data: { code: companyCode },
+      message: 'Company code generated successfully'
+    });
+
+  } catch (error) {
+    console.error('Generate company code error:', error);
+    return Response.json(
+      { success: false, error: 'Failed to generate company code' },
+      { status: 500 }
+    );
+  }
+}
+
+// GET - Handle semua GET requests (companies list DAN generate-code)
 export async function GET(request) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -25,26 +73,41 @@ export async function GET(request) {
       return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    // CEK JIKA INI REQUEST UNTUK GENERATE CODE
+    const url = new URL(request.url);
+    if (url.pathname === '/api/companies/generate-code') {
+      return handleGenerateCode();
+    }
+
+    // JIKA BUKAN, PROSES GET COMPANIES BIASA
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search') || '';
     const page = searchParams.get('page') || '1';
     const limit = searchParams.get('limit') || '10';
-    const show_inactive = searchParams.get('show_inactive') === 'true';
+    const status = searchParams.get('status') || '';
+    const sortBy = searchParams.get('sortBy') || 'created_at';
+    const sortOrder = searchParams.get('sortOrder') || 'desc';
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let whereClause = 'WHERE is_deleted = 0';
     let params = [];
 
-    if (!show_inactive) {
-      whereClause += ' AND is_active = 1';
-    }
-
     if (search) {
-      whereClause += ' AND (company_code LIKE ? OR name LIKE ? OR description LIKE ? OR email LIKE ?)';
+      whereClause += ' AND (company_code LIKE ? OR name LIKE ? OR legal_name LIKE ? OR email LIKE ?)';
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
+
+    if (status) {
+      whereClause += ' AND status = ?';
+      params.push(status);
+    }
+
+    // Validate sort column untuk prevent SQL injection
+    const validSortColumns = ['company_code', 'name', 'created_at', 'status'];
+    const safeSortBy = validSortColumns.includes(sortBy) ? sortBy : 'created_at';
+    const safeSortOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
     // Get total count
     const countQuery = `
@@ -55,27 +118,35 @@ export async function GET(request) {
     const countResult = await query(countQuery, params);
     const total = countResult[0]?.total || 0;
 
-    // Get companies - FIXED: ORDER BY dan parameter placement
-    const companyQuery = `
+    // Get companies
+    const companiesQuery = `
       SELECT 
         id,
         company_code,
         name,
+        legal_name,
         description,
+        industry,
         address,
+        city,
+        state,
+        postal_code,
+        country,
         phone,
         email,
-        is_active,
-        created_at
+        website,
+        tax_id,
+        status,
+        created_at,
+        updated_at
       FROM companies 
       ${whereClause}
-      ORDER BY name
+      ORDER BY ${safeSortBy} ${safeSortOrder}
       LIMIT ? OFFSET ?
     `;
 
-    // FIXED: Push limit dan offset ke params array
     const queryParams = [...params, parseInt(limit), offset];
-    const companies = await query(companyQuery, queryParams);
+    const companies = await query(companiesQuery, queryParams);
 
     return Response.json({
       success: true,
@@ -91,7 +162,7 @@ export async function GET(request) {
   } catch (error) {
     console.error('GET companies error:', error);
     return Response.json(
-      { success: false, error: error.message || 'Internal server error' },
+      { success: false, error: 'Internal server error' },
       { status: 500 }
     );
   }
@@ -111,10 +182,19 @@ export async function POST(request) {
     const {
       company_code,
       name,
+      legal_name = '',
       description = '',
+      industry = '',
       address = '',
+      city = '',
+      state = '',
+      postal_code = '',
+      country = 'Indonesia',
       phone = '',
-      email = ''
+      email = '',
+      website = '',
+      tax_id = '',
+      status = 'active'
     } = companyData;
 
     // Validation
@@ -141,9 +221,13 @@ export async function POST(request) {
     // Insert company
     await query(
       `INSERT INTO companies 
-       (company_code, name, description, address, phone, email) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [company_code, name, description, address, phone, email]
+       (company_code, name, legal_name, description, industry, address, city, state, postal_code, country, phone, email, website, tax_id, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        company_code, name, legal_name, description, industry, 
+        address, city, state, postal_code, country, 
+        phone, email, website, tax_id, status
+      ]
     );
 
     // Audit log
@@ -153,7 +237,7 @@ export async function POST(request) {
       'create',
       'company',
       company_code,
-      `Created new company: ${name}`
+      `Created company: ${name}`
     );
 
     return Response.json({
@@ -183,27 +267,36 @@ export async function PUT(request) {
 
     const companyData = await request.json();
     const {
+      id,
       company_code,
       name,
+      legal_name = '',
       description = '',
+      industry = '',
       address = '',
+      city = '',
+      state = '',
+      postal_code = '',
+      country = 'Indonesia',
       phone = '',
       email = '',
-      is_active = true
+      website = '',
+      tax_id = '',
+      status = 'active'
     } = companyData;
 
     // Validation
-    if (!company_code || !name) {
+    if (!id || !company_code || !name) {
       return Response.json(
-        { success: false, error: 'Company code and name are required' },
+        { success: false, error: 'Company ID, code and name are required' },
         { status: 400 }
       );
     }
 
     // Check if company exists
     const existingCompany = await query(
-      'SELECT company_code FROM companies WHERE company_code = ? AND is_deleted = 0',
-      [company_code]
+      'SELECT company_code FROM companies WHERE id = ? AND is_deleted = 0',
+      [id]
     );
 
     if (existingCompany.length === 0) {
@@ -213,12 +306,31 @@ export async function PUT(request) {
       );
     }
 
+    // Check if company code already exists (for other companies)
+    const existingCode = await query(
+      'SELECT company_code FROM companies WHERE company_code = ? AND id != ? AND is_deleted = 0',
+      [company_code, id]
+    );
+
+    if (existingCode.length > 0) {
+      return Response.json(
+        { success: false, error: 'Company code already exists for another company' },
+        { status: 400 }
+      );
+    }
+
     // Update company
     await query(
       `UPDATE companies 
-       SET name = ?, description = ?, address = ?, phone = ?, email = ?, is_active = ?
-       WHERE company_code = ? AND is_deleted = 0`,
-      [name, description, address, phone, email, is_active ? 1 : 0, company_code]
+       SET company_code = ?, name = ?, legal_name = ?, description = ?, industry = ?, 
+           address = ?, city = ?, state = ?, postal_code = ?, country = ?, 
+           phone = ?, email = ?, website = ?, tax_id = ?, status = ?, updated_at = NOW()
+       WHERE id = ? AND is_deleted = 0`,
+      [
+        company_code, name, legal_name, description, industry,
+        address, city, state, postal_code, country,
+        phone, email, website, tax_id, status, id
+      ]
     );
 
     // Audit log
@@ -238,6 +350,71 @@ export async function PUT(request) {
 
   } catch (error) {
     console.error('PUT company error:', error);
+    return Response.json(
+      { success: false, error: error.message || 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE - Soft delete company
+export async function DELETE(request) {
+  try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+
+    if (!id) {
+      return Response.json(
+        { success: false, error: 'Company ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // Check if company exists
+    const existingCompany = await query(
+      'SELECT company_code, name FROM companies WHERE id = ? AND is_deleted = 0',
+      [id]
+    );
+
+    if (existingCompany.length === 0) {
+      return Response.json(
+        { success: false, error: 'Company not found' },
+        { status: 404 }
+      );
+    }
+
+    const company = existingCompany[0];
+
+    // Soft delete company
+    await query(
+      'UPDATE companies SET is_deleted = 1, deleted_at = NOW() WHERE id = ?',
+      [id]
+    );
+
+    // Audit log
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'delete',
+      'company',
+      company.company_code,
+      `Deleted company: ${company.name}`
+    );
+
+    return Response.json({
+      success: true,
+      message: 'Company deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('DELETE company error:', error);
     return Response.json(
       { success: false, error: error.message || 'Internal server error' },
       { status: 500 }
