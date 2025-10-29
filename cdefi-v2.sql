@@ -11,7 +11,7 @@
  Target Server Version : 80043 (8.0.43-0ubuntu0.24.04.2)
  File Encoding         : 65001
 
- Date: 29/10/2025 22:44:30
+ Date: 30/10/2025 00:56:43
 */
 
 SET NAMES utf8mb4;
@@ -36,6 +36,13 @@ CREATE TABLE `accounting_periods` (
 ) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of accounting_periods
+-- ----------------------------
+BEGIN;
+INSERT INTO `accounting_periods` (`id`, `period_code`, `period_name`, `start_date`, `end_date`, `status`, `is_fiscal_year`, `created_at`, `updated_at`) VALUES (1, '2024-01', 'Januari 2024', '2024-01-01', '2024-01-31', 'open', 0, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+COMMIT;
+
+-- ----------------------------
 -- Table structure for accounting_rules
 -- ----------------------------
 DROP TABLE IF EXISTS `accounting_rules`;
@@ -53,6 +60,18 @@ CREATE TABLE `accounting_rules` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `rule_code` (`rule_code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of accounting_rules
+-- ----------------------------
+BEGIN;
+INSERT INTO `accounting_rules` (`id`, `rule_code`, `rule_name`, `transaction_type`, `debit_account_code`, `credit_account_code`, `description`, `is_active`, `created_at`, `updated_at`) VALUES (1, 'RULE001', 'Penjualan Kredit', 'sales', '1130', '4100', NULL, 1, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `accounting_rules` (`id`, `rule_code`, `rule_name`, `transaction_type`, `debit_account_code`, `credit_account_code`, `description`, `is_active`, `created_at`, `updated_at`) VALUES (2, 'RULE002', 'Pembelian Kredit', 'purchase', '5100', '2110', NULL, 1, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `accounting_rules` (`id`, `rule_code`, `rule_name`, `transaction_type`, `debit_account_code`, `credit_account_code`, `description`, `is_active`, `created_at`, `updated_at`) VALUES (3, 'RULE003', 'Penerimaan Kas', 'receipt', '1110', '1130', NULL, 1, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `accounting_rules` (`id`, `rule_code`, `rule_name`, `transaction_type`, `debit_account_code`, `credit_account_code`, `description`, `is_active`, `created_at`, `updated_at`) VALUES (4, 'RULE004', 'Pengeluaran Kas', 'payment', '2110', '1110', NULL, 1, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `accounting_rules` (`id`, `rule_code`, `rule_name`, `transaction_type`, `debit_account_code`, `credit_account_code`, `description`, `is_active`, `created_at`, `updated_at`) VALUES (5, 'RULE005', 'Cash Advance', 'cash_advance', '1130', '1110', NULL, 1, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `accounting_rules` (`id`, `rule_code`, `rule_name`, `transaction_type`, `debit_account_code`, `credit_account_code`, `description`, `is_active`, `created_at`, `updated_at`) VALUES (6, 'RULE006', 'Reimbursement', 'reimbursement', '5100', '1110', NULL, 1, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+COMMIT;
 
 -- ----------------------------
 -- Table structure for accounts_payable
@@ -76,6 +95,12 @@ CREATE TABLE `accounts_payable` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of accounts_payable
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for accounts_receivable
 -- ----------------------------
 DROP TABLE IF EXISTS `accounts_receivable`;
@@ -97,6 +122,12 @@ CREATE TABLE `accounts_receivable` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of accounts_receivable
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for ap_payments
 -- ----------------------------
 DROP TABLE IF EXISTS `ap_payments`;
@@ -114,6 +145,12 @@ CREATE TABLE `ap_payments` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of ap_payments
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for ar_payments
 -- ----------------------------
 DROP TABLE IF EXISTS `ar_payments`;
@@ -129,6 +166,12 @@ CREATE TABLE `ar_payments` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `payment_code` (`payment_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of ar_payments
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for audit_logs
@@ -154,6 +197,12 @@ CREATE TABLE `audit_logs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of audit_logs
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for bank_accounts
 -- ----------------------------
 DROP TABLE IF EXISTS `bank_accounts`;
@@ -174,7 +223,16 @@ CREATE TABLE `bank_accounts` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `account_code` (`account_code`),
   UNIQUE KEY `account_number` (`account_number`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of bank_accounts
+-- ----------------------------
+BEGIN;
+INSERT INTO `bank_accounts` (`id`, `account_code`, `bank_name`, `account_number`, `account_holder`, `branch`, `currency`, `description`, `is_active`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (1, 'BNK439', 'BCA', '4360135611111111', 'DAEROBI ', '', 'IDR', 'BANK BCA', 1, 0, NULL, '2025-10-29 23:01:01', '2025-10-29 23:01:01');
+INSERT INTO `bank_accounts` (`id`, `account_code`, `bank_name`, `account_number`, `account_holder`, `branch`, `currency`, `description`, `is_active`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (2, 'BNK600', 'BNI', '11111', 'DAEROBI', '', 'IDR', 'BANK BNI', 1, 0, NULL, '2025-10-29 23:06:28', '2025-10-29 23:06:28');
+INSERT INTO `bank_accounts` (`id`, `account_code`, `bank_name`, `account_number`, `account_holder`, `branch`, `currency`, `description`, `is_active`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (3, 'BNK565', 'MANDIRI', '43601355555611', 'MANDIRI ME', '', 'IDR', 'BANK MANDIRI', 1, 0, NULL, '2025-10-29 23:07:25', '2025-10-29 23:07:25');
+COMMIT;
 
 -- ----------------------------
 -- Table structure for bank_reconciliations
@@ -193,6 +251,12 @@ CREATE TABLE `bank_reconciliations` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `reconciliation_code` (`reconciliation_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of bank_reconciliations
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for ca_settlements
@@ -221,6 +285,12 @@ CREATE TABLE `ca_settlements` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of ca_settlements
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for ca_transactions
 -- ----------------------------
 DROP TABLE IF EXISTS `ca_transactions`;
@@ -243,6 +313,12 @@ CREATE TABLE `ca_transactions` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `transaction_code` (`transaction_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of ca_transactions
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for cash_advances
@@ -280,6 +356,12 @@ CREATE TABLE `cash_advances` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of cash_advances
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for chart_of_accounts
 -- ----------------------------
 DROP TABLE IF EXISTS `chart_of_accounts`;
@@ -297,6 +379,36 @@ CREATE TABLE `chart_of_accounts` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `account_code` (`account_code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=25 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of chart_of_accounts
+-- ----------------------------
+BEGIN;
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (1, '1000', 'Aset', 'asset', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (2, '1100', 'Aset Lancar', 'asset', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (3, '1110', 'Kas', 'asset', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (4, '1120', 'Bank', 'asset', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (5, '1130', 'Piutang Usaha', 'asset', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (6, '1200', 'Aset Tetap', 'asset', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (7, '1210', 'Peralatan', 'asset', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (8, '2000', 'Kewajiban', 'liability', NULL, 'credit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (9, '2100', 'Kewajiban Lancar', 'liability', NULL, 'credit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (10, '2110', 'Hutang Usaha', 'liability', NULL, 'credit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (11, '3000', 'Ekuitas', 'equity', NULL, 'credit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (12, '3100', 'Modal', 'equity', NULL, 'credit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (13, '3200', 'Laba Ditahan', 'equity', NULL, 'credit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (14, '4000', 'Pendapatan', 'revenue', NULL, 'credit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (15, '4100', 'Pendapatan Penjualan', 'revenue', NULL, 'credit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (16, '5000', 'Beban', 'expense', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (17, '5100', 'Beban Operasional', 'expense', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (18, '5110', 'Beban Gaji', 'expense', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (19, '5120', 'Beban Sewa', 'expense', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (20, '5130', 'Beban Transportasi', 'expense', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (21, '5140', 'Beban Akomodasi', 'expense', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (22, '5150', 'Beban Makanan', 'expense', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (23, '5160', 'Beban Entertainment', 'expense', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+INSERT INTO `chart_of_accounts` (`id`, `account_code`, `account_name`, `account_type`, `parent_account_code`, `normal_balance`, `is_active`, `description`, `created_at`, `updated_at`) VALUES (24, '5170', 'Beban Perlengkapan Kantor', 'expense', NULL, 'debit', 1, NULL, '2025-10-29 16:34:36', '2025-10-29 16:34:36');
+COMMIT;
 
 -- ----------------------------
 -- Table structure for companies
@@ -328,7 +440,14 @@ CREATE TABLE `companies` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `company_code` (`company_code`),
   UNIQUE KEY `name` (`name`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of companies
+-- ----------------------------
+BEGIN;
+INSERT INTO `companies` (`id`, `company_code`, `name`, `legal_name`, `description`, `industry`, `address`, `city`, `state`, `postal_code`, `country`, `phone`, `email`, `website`, `tax_id`, `logo`, `status`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`, `is_active`) VALUES (1, 'COMP24VQ74', 'PT DIVA SINERGI ADIPRADANA', NULL, '', NULL, '', '', '', '', 'Indonesia', '0895327069923', 'daerobbi14@gmail.com', '', '43134141', NULL, 'active', 0, NULL, '2025-10-30 00:11:43', '2025-10-30 00:11:43', 1);
+COMMIT;
 
 -- ----------------------------
 -- Table structure for customer_payments
@@ -358,6 +477,12 @@ CREATE TABLE `customer_payments` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of customer_payments
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for customers
 -- ----------------------------
 DROP TABLE IF EXISTS `customers`;
@@ -381,6 +506,13 @@ CREATE TABLE `customers` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `customer_code` (`customer_code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of customers
+-- ----------------------------
+BEGIN;
+INSERT INTO `customers` (`id`, `customer_code`, `customer_name`, `customer_type`, `phone`, `email`, `billing_address`, `shipping_address`, `tax_id`, `credit_limit`, `payment_terms`, `status`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (1, 'CUST001', 'PT Customer Contoh', 'company', '021-123456', 'customer@example.com', NULL, NULL, NULL, 0.00, 30, 'active', 0, NULL, '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+COMMIT;
 
 -- ----------------------------
 -- Table structure for delivery_orders
@@ -410,6 +542,12 @@ CREATE TABLE `delivery_orders` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of delivery_orders
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for financial_reports
 -- ----------------------------
 DROP TABLE IF EXISTS `financial_reports`;
@@ -424,6 +562,12 @@ CREATE TABLE `financial_reports` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `report_code` (`report_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of financial_reports
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for journal_entries
@@ -449,6 +593,12 @@ CREATE TABLE `journal_entries` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of journal_entries
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for journal_items
 -- ----------------------------
 DROP TABLE IF EXISTS `journal_items`;
@@ -466,6 +616,12 @@ CREATE TABLE `journal_items` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of journal_items
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for numbering_sequences
 -- ----------------------------
 DROP TABLE IF EXISTS `numbering_sequences`;
@@ -480,6 +636,21 @@ CREATE TABLE `numbering_sequences` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `sequence_code` (`sequence_code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of numbering_sequences
+-- ----------------------------
+BEGIN;
+INSERT INTO `numbering_sequences` (`id`, `sequence_code`, `prefix`, `next_number`, `description`, `created_at`, `updated_at`) VALUES (1, 'SO', 'SO', 1001, 'Sales Order', '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+INSERT INTO `numbering_sequences` (`id`, `sequence_code`, `prefix`, `next_number`, `description`, `created_at`, `updated_at`) VALUES (2, 'PO', 'PO', 1001, 'Purchase Order', '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+INSERT INTO `numbering_sequences` (`id`, `sequence_code`, `prefix`, `next_number`, `description`, `created_at`, `updated_at`) VALUES (3, 'INV', 'INV', 1001, 'Invoice', '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+INSERT INTO `numbering_sequences` (`id`, `sequence_code`, `prefix`, `next_number`, `description`, `created_at`, `updated_at`) VALUES (4, 'PAY', 'PAY', 1001, 'Payment', '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+INSERT INTO `numbering_sequences` (`id`, `sequence_code`, `prefix`, `next_number`, `description`, `created_at`, `updated_at`) VALUES (5, 'CA', 'CA', 1001, 'Cash Advance', '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+INSERT INTO `numbering_sequences` (`id`, `sequence_code`, `prefix`, `next_number`, `description`, `created_at`, `updated_at`) VALUES (6, 'REIMB', 'REIMB', 1001, 'Reimbursement', '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+INSERT INTO `numbering_sequences` (`id`, `sequence_code`, `prefix`, `next_number`, `description`, `created_at`, `updated_at`) VALUES (7, 'AR', 'AR', 1001, 'Accounts Receivable', '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+INSERT INTO `numbering_sequences` (`id`, `sequence_code`, `prefix`, `next_number`, `description`, `created_at`, `updated_at`) VALUES (8, 'AP', 'AP', 1001, 'Accounts Payable', '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+INSERT INTO `numbering_sequences` (`id`, `sequence_code`, `prefix`, `next_number`, `description`, `created_at`, `updated_at`) VALUES (9, 'JNL', 'JNL', 1001, 'Journal Entry', '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+COMMIT;
 
 -- ----------------------------
 -- Table structure for permissions
@@ -502,6 +673,12 @@ CREATE TABLE `permissions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of permissions
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for products
 -- ----------------------------
 DROP TABLE IF EXISTS `products`;
@@ -521,6 +698,14 @@ CREATE TABLE `products` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `product_code` (`product_code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of products
+-- ----------------------------
+BEGIN;
+INSERT INTO `products` (`id`, `product_code`, `product_name`, `description`, `category`, `unit_price`, `cost_price`, `is_active`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (1, 'PROD001', 'Product Contoh 1', NULL, NULL, 100000.00, 80000.00, 1, 0, NULL, '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+INSERT INTO `products` (`id`, `product_code`, `product_name`, `description`, `category`, `unit_price`, `cost_price`, `is_active`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (2, 'PROD002', 'Product Contoh 2', NULL, NULL, 150000.00, 120000.00, 1, 0, NULL, '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+COMMIT;
 
 -- ----------------------------
 -- Table structure for projects
@@ -545,6 +730,12 @@ CREATE TABLE `projects` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of projects
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for purchase_order_attachments
 -- ----------------------------
 DROP TABLE IF EXISTS `purchase_order_attachments`;
@@ -562,6 +753,12 @@ CREATE TABLE `purchase_order_attachments` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `payment_doc_code` (`payment_doc_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of purchase_order_attachments
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for purchase_order_items
@@ -584,6 +781,12 @@ CREATE TABLE `purchase_order_items` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `po_item_code` (`po_item_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of purchase_order_items
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for purchase_order_payments
@@ -612,6 +815,12 @@ CREATE TABLE `purchase_order_payments` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `payment_code` (`payment_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of purchase_order_payments
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for purchase_orders
@@ -666,6 +875,12 @@ CREATE TABLE `purchase_orders` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of purchase_orders
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for recurring_entries
 -- ----------------------------
 DROP TABLE IF EXISTS `recurring_entries`;
@@ -685,6 +900,12 @@ CREATE TABLE `recurring_entries` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of recurring_entries
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for reimbursement_categories
 -- ----------------------------
 DROP TABLE IF EXISTS `reimbursement_categories`;
@@ -700,6 +921,12 @@ CREATE TABLE `reimbursement_categories` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `category_code` (`category_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- ----------------------------
+-- Records of reimbursement_categories
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for reimbursement_items
@@ -719,6 +946,12 @@ CREATE TABLE `reimbursement_items` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `item_code` (`item_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- ----------------------------
+-- Records of reimbursement_items
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for reimbursements
@@ -754,6 +987,12 @@ CREATE TABLE `reimbursements` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- ----------------------------
+-- Records of reimbursements
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for role_permissions
 -- ----------------------------
 DROP TABLE IF EXISTS `role_permissions`;
@@ -769,6 +1008,12 @@ CREATE TABLE `role_permissions` (
   UNIQUE KEY `role_permission_code` (`role_permission_code`),
   UNIQUE KEY `unique_role_permission` (`role_code`,`permission_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of role_permissions
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for roles
@@ -789,6 +1034,12 @@ CREATE TABLE `roles` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of roles
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for sales_order_attachments
 -- ----------------------------
 DROP TABLE IF EXISTS `sales_order_attachments`;
@@ -807,6 +1058,12 @@ CREATE TABLE `sales_order_attachments` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `attachment_code` (`attachment_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of sales_order_attachments
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for sales_order_items
@@ -830,6 +1087,12 @@ CREATE TABLE `sales_order_items` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of sales_order_items
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for sales_order_taxes
 -- ----------------------------
 DROP TABLE IF EXISTS `sales_order_taxes`;
@@ -846,6 +1109,12 @@ CREATE TABLE `sales_order_taxes` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `so_tax_code` (`so_tax_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of sales_order_taxes
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for sales_orders
@@ -884,6 +1153,12 @@ CREATE TABLE `sales_orders` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of sales_orders
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for suppliers
 -- ----------------------------
 DROP TABLE IF EXISTS `suppliers`;
@@ -909,6 +1184,13 @@ CREATE TABLE `suppliers` (
 ) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of suppliers
+-- ----------------------------
+BEGIN;
+INSERT INTO `suppliers` (`id`, `supplier_code`, `supplier_name`, `contact_person`, `phone`, `email`, `address`, `tax_id`, `bank_name`, `account_number`, `payment_terms`, `status`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (1, 'SUPP001', 'PT Supplier Contoh', NULL, '021-654321', 'supplier@example.com', NULL, NULL, NULL, NULL, 30, 'active', 0, NULL, '2025-10-29 16:58:25', '2025-10-29 16:58:25');
+COMMIT;
+
+-- ----------------------------
 -- Table structure for tax_types
 -- ----------------------------
 DROP TABLE IF EXISTS `tax_types`;
@@ -926,7 +1208,17 @@ CREATE TABLE `tax_types` (
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `tax_code` (`tax_code`)
-) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of tax_types
+-- ----------------------------
+BEGIN;
+INSERT INTO `tax_types` (`id`, `tax_code`, `name`, `description`, `tax_rate`, `tax_type`, `is_active`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (1, 'PPN', 'PPN 11%', 'Pajak Pertambahan Nilai', 11.00, 'vat', 1, 0, NULL, '2025-10-29 16:59:27', '2025-10-29 16:59:27');
+INSERT INTO `tax_types` (`id`, `tax_code`, `name`, `description`, `tax_rate`, `tax_type`, `is_active`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (2, 'PPH23', 'PPh 23%', 'Pajak Penghasilan Pasal 23', 23.00, 'pph', 1, 0, NULL, '2025-10-29 16:59:27', '2025-10-29 16:59:27');
+INSERT INTO `tax_types` (`id`, `tax_code`, `name`, `description`, `tax_rate`, `tax_type`, `is_active`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (3, 'PPH4', 'PPh 4(2)%', 'Pajak Penghasilan Pasal 4 ayat 2', 4.00, 'pph', 1, 0, NULL, '2025-10-29 16:59:27', '2025-10-29 16:59:27');
+INSERT INTO `tax_types` (`id`, `tax_code`, `name`, `description`, `tax_rate`, `tax_type`, `is_active`, `is_deleted`, `deleted_at`, `created_at`, `updated_at`) VALUES (4, 'TAX001', 'TAX001', '', 11.00, 'other', 1, 0, NULL, '2025-10-29 23:50:32', '2025-10-29 23:50:32');
+COMMIT;
 
 -- ----------------------------
 -- Table structure for trial_balance
@@ -949,6 +1241,12 @@ CREATE TABLE `trial_balance` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------
+-- Records of trial_balance
+-- ----------------------------
+BEGIN;
+COMMIT;
+
+-- ----------------------------
 -- Table structure for user_roles
 -- ----------------------------
 DROP TABLE IF EXISTS `user_roles`;
@@ -964,6 +1262,12 @@ CREATE TABLE `user_roles` (
   UNIQUE KEY `user_role_code` (`user_role_code`),
   UNIQUE KEY `unique_user_role` (`user_code`,`role_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of user_roles
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 -- ----------------------------
 -- Table structure for users
@@ -987,5 +1291,11 @@ CREATE TABLE `users` (
   UNIQUE KEY `user_code` (`user_code`),
   UNIQUE KEY `email` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------
+-- Records of users
+-- ----------------------------
+BEGIN;
+COMMIT;
 
 SET FOREIGN_KEY_CHECKS = 1;
