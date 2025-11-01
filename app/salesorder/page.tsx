@@ -1078,6 +1078,8 @@ export default function SalesOrderPage() {
         </div>
       </div>
     );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50/30">
       <div className="max-w-[99vw] mx-auto p-4 space-y-6">
