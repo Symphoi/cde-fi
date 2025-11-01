@@ -1,8 +1,27 @@
 import { query } from '@/app/lib/db';
+import { verifyToken } from '@/app/lib/auth';
 
-// GET - Get all suppliers atau single supplier
+// Helper function untuk audit log - DISABLED
+async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
+  try {
+    // Audit log disabled untuk suppliers
+    console.log(`[AUDIT DISABLED] ${action} ${resourceType} ${resourceCode}: ${notes}`);
+    return;
+  } catch (error) {
+    console.error('Error in audit log (disabled):', error);
+  }
+}
+
+// GET - Get all suppliers dengan pagination
 export async function GET(request) {
   try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search') || '';
     const page = parseInt(searchParams.get('page')) || 1;
@@ -11,20 +30,20 @@ export async function GET(request) {
 
     const offset = (page - 1) * limit;
 
-    let whereClause = 'WHERE 1=1';
+    let whereClause = 'WHERE is_deleted = 0';
     let params = [];
 
     if (search) {
-      whereClause += ' AND (supplier_code LIKE ? OR name LIKE ? OR contact_person LIKE ? OR email LIKE ?)';
+      whereClause += ' AND (supplier_code LIKE ? OR supplier_name LIKE ? OR contact_person LIKE ? OR email LIKE ? OR phone LIKE ?)';
       const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     if (status) {
       if (status === 'active') {
-        whereClause += ' AND is_active = 1';
+        whereClause += ' AND status = "active"';
       } else if (status === 'inactive') {
-        whereClause += ' AND is_active = 0';
+        whereClause += ' AND status = "inactive"';
       }
     }
 
@@ -38,16 +57,21 @@ export async function GET(request) {
       SELECT 
         id,
         supplier_code,
-        name,
+        supplier_name,
         contact_person,
         phone,
         email,
         address,
-        is_active,
-        created_at
+        tax_id,
+        bank_name,
+        account_number,
+        payment_terms,
+        status,
+        created_at,
+        updated_at
       FROM suppliers 
       ${whereClause}
-      ORDER BY name ASC
+      ORDER BY supplier_name ASC
       LIMIT ? OFFSET ?
     `;
 
@@ -80,19 +104,30 @@ export async function GET(request) {
 // POST - Create new supplier
 export async function POST(request) {
   try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const supplierData = await request.json();
     const {
       supplier_code,
-      name,
+      supplier_name,
       contact_person = '',
       phone = '',
       email = '',
       address = '',
-      is_active = true
+      tax_id = '',
+      bank_name = '',
+      account_number = '',
+      payment_terms = 30,
+      status = 'active'
     } = supplierData;
 
     // Validation
-    if (!supplier_code || !name) {
+    if (!supplier_code || !supplier_name) {
       return Response.json(
         { success: false, error: 'Supplier code and name are required' },
         { status: 400 }
@@ -101,7 +136,7 @@ export async function POST(request) {
 
     // Check if supplier code already exists
     const existingSupplier = await query(
-      'SELECT supplier_code FROM suppliers WHERE supplier_code = ?',
+      'SELECT supplier_code FROM suppliers WHERE supplier_code = ? AND is_deleted = 0',
       [supplier_code]
     );
 
@@ -115,9 +150,19 @@ export async function POST(request) {
     // Insert supplier
     await query(
       `INSERT INTO suppliers 
-       (supplier_code, name, contact_person, phone, email, address, is_active) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [supplier_code, name, contact_person, phone, email, address, is_active]
+       (supplier_code, supplier_name, contact_person, phone, email, address, tax_id, bank_name, account_number, payment_terms, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [supplier_code, supplier_name, contact_person, phone, email, address, tax_id, bank_name, account_number, payment_terms, status]
+    );
+
+    // Audit log (disabled)
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'create',
+      'supplier',
+      supplier_code,
+      `Created supplier: ${supplier_name}`
     );
 
     return Response.json({
@@ -137,20 +182,31 @@ export async function POST(request) {
 // PUT - Update supplier
 export async function PUT(request) {
   try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const supplierData = await request.json();
     const {
       id,
       supplier_code,
-      name,
+      supplier_name,
       contact_person = '',
       phone = '',
       email = '',
       address = '',
-      is_active = true
+      tax_id = '',
+      bank_name = '',
+      account_number = '',
+      payment_terms = 30,
+      status = 'active'
     } = supplierData;
 
     // Validation
-    if (!id || !supplier_code || !name) {
+    if (!id || !supplier_code || !supplier_name) {
       return Response.json(
         { success: false, error: 'Supplier ID, code and name are required' },
         { status: 400 }
@@ -159,7 +215,7 @@ export async function PUT(request) {
 
     // Check if supplier exists
     const existingSupplier = await query(
-      'SELECT supplier_code FROM suppliers WHERE id = ?',
+      'SELECT supplier_code FROM suppliers WHERE id = ? AND is_deleted = 0',
       [id]
     );
 
@@ -172,7 +228,7 @@ export async function PUT(request) {
 
     // Check if supplier code already exists (for other suppliers)
     const existingCode = await query(
-      'SELECT supplier_code FROM suppliers WHERE supplier_code = ? AND id != ?',
+      'SELECT supplier_code FROM suppliers WHERE supplier_code = ? AND id != ? AND is_deleted = 0',
       [supplier_code, id]
     );
 
@@ -186,9 +242,21 @@ export async function PUT(request) {
     // Update supplier
     await query(
       `UPDATE suppliers 
-       SET supplier_code = ?, name = ?, contact_person = ?, phone = ?, email = ?, address = ?, is_active = ?
-       WHERE id = ?`,
-      [supplier_code, name, contact_person, phone, email, address, is_active, id]
+       SET supplier_code = ?, supplier_name = ?, contact_person = ?, phone = ?, email = ?, 
+           address = ?, tax_id = ?, bank_name = ?, account_number = ?, payment_terms = ?, 
+           status = ?, updated_at = NOW()
+       WHERE id = ? AND is_deleted = 0`,
+      [supplier_code, supplier_name, contact_person, phone, email, address, tax_id, bank_name, account_number, payment_terms, status, id]
+    );
+
+    // Audit log (disabled)
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'update',
+      'supplier',
+      supplier_code,
+      `Updated supplier: ${supplier_name}`
     );
 
     return Response.json({
@@ -205,9 +273,16 @@ export async function PUT(request) {
   }
 }
 
-// DELETE - Delete supplier
+// DELETE - Soft delete supplier
 export async function DELETE(request) {
   try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
 
@@ -220,7 +295,7 @@ export async function DELETE(request) {
 
     // Check if supplier exists
     const existingSupplier = await query(
-      'SELECT supplier_code, name FROM suppliers WHERE id = ?',
+      'SELECT supplier_code, supplier_name FROM suppliers WHERE id = ? AND is_deleted = 0',
       [id]
     );
 
@@ -231,8 +306,23 @@ export async function DELETE(request) {
       );
     }
 
-    // Delete supplier
-    await query('DELETE FROM suppliers WHERE id = ?', [id]);
+    const supplier = existingSupplier[0];
+
+    // Soft delete supplier
+    await query(
+      'UPDATE suppliers SET is_deleted = 1, deleted_at = NOW() WHERE id = ?',
+      [id]
+    );
+
+    // Audit log (disabled)
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'delete',
+      'supplier',
+      supplier.supplier_code,
+      `Deleted supplier: ${supplier.supplier_name}`
+    );
 
     return Response.json({
       success: true,

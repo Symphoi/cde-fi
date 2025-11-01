@@ -17,6 +17,37 @@ async function createAuditLog(userCode, userName, action, resourceType, resource
   }
 }
 
+// Helper untuk generate code dengan numbering_sequences
+async function generateCode(sequenceCode, prefix) {
+  try {
+    // Get next number
+    const sequence = await query(
+      'SELECT next_number FROM numbering_sequences WHERE sequence_code = ?',
+      [sequenceCode]
+    );
+    
+    if (sequence.length === 0) {
+      throw new Error(`Sequence ${sequenceCode} not found`);
+    }
+    
+    const nextNumber = sequence[0].next_number;
+    const code = `${prefix}${String(nextNumber).padStart(4, '0')}`;
+    
+    // Update next number
+    await query(
+      'UPDATE numbering_sequences SET next_number = next_number + 1 WHERE sequence_code = ?',
+      [sequenceCode]
+    );
+    
+    return code;
+  } catch (error) {
+    console.error('Error generating code:', error);
+    // Fallback ke method lama
+    const countResult = await query(`SELECT COUNT(*) as count FROM purchase_orders`);
+    return `${prefix}-${new Date().getFullYear()}-${String(countResult[0].count + 1).padStart(4, '0')}`;
+  }
+}
+
 // GET all purchase orders
 export async function GET(request) {
   try {
@@ -106,13 +137,19 @@ export async function GET(request) {
       const payments = await query(
         `SELECT 
           payment_code,
+          po_code,
+          so_code,
+          so_reference,
+          supplier_name,
           amount,
           payment_date,
           payment_method,
           bank_name,
           account_number,
           reference_number,
-          status
+          notes,
+          status,
+          created_at
          FROM purchase_order_payments 
          WHERE po_code = ? AND is_deleted = FALSE`,
         [po.po_code]
@@ -212,9 +249,8 @@ export async function POST(request) {
       );
     }
 
-    // Generate PO code
-    const countResult = await query('SELECT COUNT(*) as count FROM purchase_orders');
-    const poCode = `PO-${new Date().getFullYear()}-${String(countResult[0].count + 1).padStart(4, '0')}`;
+    // Generate PO code menggunakan numbering_sequences
+    const poCode = await generateCode('PO', 'PO');
 
     // Calculate total amount
     const totalAmount = items.reduce((sum, item) => sum + (item.purchase_price * item.quantity), 0);
@@ -226,7 +262,7 @@ export async function POST(request) {
         total_amount, notes, priority, customer_ref, status, submitted_by, submitted_date, submitted_time) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?, CURDATE(), CURTIME())`,
       [
-        poCode, so_code, so_reference, supplier_name, supplier_contact, supplier_bank,
+        poCode, so_code, so_reference || so_code, supplier_name, supplier_contact, supplier_bank,
         totalAmount, notes, priority, customer_ref, decoded.name
       ]
     );
@@ -487,9 +523,8 @@ export async function PUT(request) {
       );
     }
 
-    // Generate payment code
-    const countResult = await query('SELECT COUNT(*) as count FROM purchase_order_payments');
-    const paymentCode = `PAY-${new Date().getFullYear()}-${String(countResult[0].count + 1).padStart(4, '0')}`;
+    // Generate payment code menggunakan numbering_sequences
+    const paymentCode = await generateCode('PAY', 'PAY');
 
     // Insert payment
     await query(
@@ -545,9 +580,8 @@ export async function PUT(request) {
       }
     }
 
-    // FIX: Update temporary attachments - tanpa subquery dengan LIMIT
+    // Update temporary attachments
     if (files.length > 0) {
-      // Cara 1: Update berdasarkan timestamp terbaru
       await query(
         `UPDATE purchase_order_attachments 
          SET payment_code = ? 
@@ -606,7 +640,7 @@ export async function OPTIONS(request) {
     let params = [];
 
     if (search) {
-      whereClause += ' AND (so.so_code LIKE ? OR so.customer_name LIKE ? OR so.so_reference LIKE ?)';
+      whereClause += ' AND (so.so_code LIKE ? OR so.customer_name LIKE ? OR so.customer_phone LIKE ?)';
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm, searchTerm);
     }

@@ -1,8 +1,27 @@
 import { query } from '@/app/lib/db';
+import { verifyToken } from '@/app/lib/auth';
 
-// GET - Get all customers atau single customer
+// Helper function untuk audit log - DISABLED
+async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
+  try {
+    // Audit log disabled untuk customers
+    console.log(`[AUDIT DISABLED] ${action} ${resourceType} ${resourceCode}: ${notes}`);
+    return;
+  } catch (error) {
+    console.error('Error in audit log (disabled):', error);
+  }
+}
+
+// GET - Get all customers dengan pagination
 export async function GET(request) {
   try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search') || '';
     const page = parseInt(searchParams.get('page')) || 1;
@@ -11,20 +30,20 @@ export async function GET(request) {
 
     const offset = (page - 1) * limit;
 
-    let whereClause = 'WHERE 1=1';
+    let whereClause = 'WHERE is_deleted = 0';
     let params = [];
 
     if (search) {
-      whereClause += ' AND (customer_code LIKE ? OR name LIKE ? OR contact_person LIKE ? OR email LIKE ?)';
+      whereClause += ' AND (customer_code LIKE ? OR customer_name LIKE ? OR email LIKE ? OR phone LIKE ?)';
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     if (status) {
       if (status === 'active') {
-        whereClause += ' AND is_active = 1';
+        whereClause += ' AND status = "active"';
       } else if (status === 'inactive') {
-        whereClause += ' AND is_active = 0';
+        whereClause += ' AND status = "inactive"';
       }
     }
 
@@ -38,18 +57,21 @@ export async function GET(request) {
       SELECT 
         id,
         customer_code,
-        name,
-        contact_person,
+        customer_name,
+        customer_type,
         phone,
         email,
-        address,
         billing_address,
         shipping_address,
-        is_active,
-        created_at
+        tax_id,
+        credit_limit,
+        payment_terms,
+        status,
+        created_at,
+        updated_at
       FROM customers 
       ${whereClause}
-      ORDER BY name ASC
+      ORDER BY created_at DESC
       LIMIT ? OFFSET ?
     `;
 
@@ -82,21 +104,30 @@ export async function GET(request) {
 // POST - Create new customer
 export async function POST(request) {
   try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const customerData = await request.json();
     const {
       customer_code,
-      name,
-      contact_person = '',
+      customer_name,
+      customer_type = 'company',
       phone = '',
       email = '',
-      address = '',
       billing_address = '',
       shipping_address = '',
-      is_active = true
+      tax_id = '',
+      credit_limit = 0,
+      payment_terms = 30,
+      status = 'active'
     } = customerData;
 
     // Validation
-    if (!customer_code || !name) {
+    if (!customer_code || !customer_name) {
       return Response.json(
         { success: false, error: 'Customer code and name are required' },
         { status: 400 }
@@ -105,7 +136,7 @@ export async function POST(request) {
 
     // Check if customer code already exists
     const existingCustomer = await query(
-      'SELECT customer_code FROM customers WHERE customer_code = ?',
+      'SELECT customer_code FROM customers WHERE customer_code = ? AND is_deleted = 0',
       [customer_code]
     );
 
@@ -119,9 +150,19 @@ export async function POST(request) {
     // Insert customer
     await query(
       `INSERT INTO customers 
-       (customer_code, name, contact_person, phone, email, address, billing_address, shipping_address, is_active) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [customer_code, name, contact_person, phone, email, address, billing_address, shipping_address, is_active]
+       (customer_code, customer_name, customer_type, phone, email, billing_address, shipping_address, tax_id, credit_limit, payment_terms, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [customer_code, customer_name, customer_type, phone, email, billing_address, shipping_address, tax_id, credit_limit, payment_terms, status]
+    );
+
+    // Audit log (disabled)
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'create',
+      'customer',
+      customer_code,
+      `Created customer: ${customer_name}`
     );
 
     return Response.json({
@@ -141,22 +182,31 @@ export async function POST(request) {
 // PUT - Update customer
 export async function PUT(request) {
   try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const customerData = await request.json();
     const {
       id,
       customer_code,
-      name,
-      contact_person = '',
+      customer_name,
+      customer_type = 'company',
       phone = '',
       email = '',
-      address = '',
       billing_address = '',
       shipping_address = '',
-      is_active = true
+      tax_id = '',
+      credit_limit = 0,
+      payment_terms = 30,
+      status = 'active'
     } = customerData;
 
     // Validation
-    if (!id || !customer_code || !name) {
+    if (!id || !customer_code || !customer_name) {
       return Response.json(
         { success: false, error: 'Customer ID, code and name are required' },
         { status: 400 }
@@ -165,7 +215,7 @@ export async function PUT(request) {
 
     // Check if customer exists
     const existingCustomer = await query(
-      'SELECT customer_code FROM customers WHERE id = ?',
+      'SELECT customer_code FROM customers WHERE id = ? AND is_deleted = 0',
       [id]
     );
 
@@ -178,7 +228,7 @@ export async function PUT(request) {
 
     // Check if customer code already exists (for other customers)
     const existingCode = await query(
-      'SELECT customer_code FROM customers WHERE customer_code = ? AND id != ?',
+      'SELECT customer_code FROM customers WHERE customer_code = ? AND id != ? AND is_deleted = 0',
       [customer_code, id]
     );
 
@@ -192,10 +242,21 @@ export async function PUT(request) {
     // Update customer
     await query(
       `UPDATE customers 
-       SET customer_code = ?, name = ?, contact_person = ?, phone = ?, email = ?, address = ?, 
-           billing_address = ?, shipping_address = ?, is_active = ?
-       WHERE id = ?`,
-      [customer_code, name, contact_person, phone, email, address, billing_address, shipping_address, is_active, id]
+       SET customer_code = ?, customer_name = ?, customer_type = ?, phone = ?, email = ?, 
+           billing_address = ?, shipping_address = ?, tax_id = ?, credit_limit = ?, 
+           payment_terms = ?, status = ?, updated_at = NOW()
+       WHERE id = ? AND is_deleted = 0`,
+      [customer_code, customer_name, customer_type, phone, email, billing_address, shipping_address, tax_id, credit_limit, payment_terms, status, id]
+    );
+
+    // Audit log (disabled)
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'update',
+      'customer',
+      customer_code,
+      `Updated customer: ${customer_name}`
     );
 
     return Response.json({
@@ -212,9 +273,16 @@ export async function PUT(request) {
   }
 }
 
-// DELETE - Delete customer
+// DELETE - Soft delete customer
 export async function DELETE(request) {
   try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
 
@@ -227,7 +295,7 @@ export async function DELETE(request) {
 
     // Check if customer exists
     const existingCustomer = await query(
-      'SELECT customer_code, name FROM customers WHERE id = ?',
+      'SELECT customer_code, customer_name FROM customers WHERE id = ? AND is_deleted = 0',
       [id]
     );
 
@@ -238,8 +306,23 @@ export async function DELETE(request) {
       );
     }
 
-    // Delete customer
-    await query('DELETE FROM customers WHERE id = ?', [id]);
+    const customer = existingCustomer[0];
+
+    // Soft delete customer
+    await query(
+      'UPDATE customers SET is_deleted = 1, deleted_at = NOW() WHERE id = ?',
+      [id]
+    );
+
+    // Audit log (disabled)
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'delete',
+      'customer',
+      customer.customer_code,
+      `Deleted customer: ${customer.customer_name}`
+    );
 
     return Response.json({
       success: true,

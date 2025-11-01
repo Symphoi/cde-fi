@@ -12,12 +12,21 @@ import { Search, Plus, Edit, Trash2, RefreshCw, Folder, Calendar, DollarSign, Bu
 import { toast } from 'sonner'
 
 // Types
+interface Company {
+  company_code: string
+  name: string
+  legal_name?: string
+  description?: string
+}
+
 interface Project {
   id: number
   project_code: string
   name: string
   description: string
   client_name: string
+  company_code: string
+  company_name: string
   start_date: string | null
   end_date: string | null
   budget: number | null
@@ -31,6 +40,7 @@ interface ProjectFormData {
   name: string
   description: string
   client_name: string
+  company_code: string
   start_date: string
   end_date: string
   budget: string
@@ -44,7 +54,7 @@ interface PaginationInfo {
   totalPages: number
 }
 
-// API Service - IMPROVED VERSION
+// API Service
 class ProjectService {
   private static async fetchWithAuth(url: string, options: RequestInit = {}) {
     const token = localStorage.getItem('token');
@@ -123,6 +133,7 @@ class ProjectService {
         name: data.name,
         description: data.description,
         client_name: data.client_name,
+        company_code: data.company_code,
         start_date: data.start_date || null,
         end_date: data.end_date || null,
         budget: data.budget ? parseFloat(data.budget) : null
@@ -139,6 +150,7 @@ class ProjectService {
         name: data.name,
         description: data.description,
         client_name: data.client_name,
+        company_code: data.company_code,
         start_date: data.start_date || null,
         end_date: data.end_date || null,
         budget: data.budget ? parseFloat(data.budget) : null,
@@ -157,6 +169,7 @@ class ProjectService {
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([])
+  const [companies, setCompanies] = useState<Company[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -178,11 +191,34 @@ export default function ProjectsPage() {
     name: '',
     description: '',
     client_name: '',
+    company_code: '',
     start_date: '',
     end_date: '',
     budget: '',
     status: 'active'
   })
+
+  // Fetch companies
+  const fetchCompanies = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('/api/companies', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setCompanies(data.data);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching companies:', error);
+    }
+  }
 
   // Fetch data dengan pagination
   const fetchProjects = async (page: number = pagination.page) => {
@@ -209,6 +245,7 @@ export default function ProjectsPage() {
 
   useEffect(() => {
     fetchProjects(1)
+    fetchCompanies()
   }, [searchTerm, statusFilter])
 
   // Pagination handlers
@@ -231,6 +268,7 @@ export default function ProjectsPage() {
       name: '',
       description: '',
       client_name: '',
+      company_code: '',
       start_date: '',
       end_date: '',
       budget: '',
@@ -246,6 +284,7 @@ export default function ProjectsPage() {
       name: project.name,
       description: project.description || '',
       client_name: project.client_name || '',
+      company_code: project.company_code || '',
       start_date: project.start_date || '',
       end_date: project.end_date || '',
       budget: project.budget ? project.budget.toString() : '',
@@ -435,7 +474,7 @@ export default function ProjectsPage() {
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <Input
-                  placeholder="Search project code, name, or client..."
+                  placeholder="Search project code, name, client, or company..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
@@ -474,6 +513,7 @@ export default function ProjectsPage() {
                       <TableHead>Project Code</TableHead>
                       <TableHead>Project Name</TableHead>
                       <TableHead>Client</TableHead>
+                      <TableHead>Company</TableHead>
                       <TableHead>Start Date</TableHead>
                       <TableHead>End Date</TableHead>
                       <TableHead>Budget</TableHead>
@@ -484,7 +524,7 @@ export default function ProjectsPage() {
                   <TableBody>
                     {projects.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center py-12">
+                        <TableCell colSpan={10} className="text-center py-12">
                           <div className="flex flex-col items-center justify-center text-gray-500">
                             <Folder className="h-12 w-12 mb-4 text-gray-300" />
                             <p className="text-lg font-medium mb-2">No projects found</p>
@@ -516,6 +556,9 @@ export default function ProjectsPage() {
                           </TableCell>
                           <TableCell>
                             {project.client_name || '-'}
+                          </TableCell>
+                          <TableCell>
+                            {project.company_name || '-'}
                           </TableCell>
                           <TableCell>
                             {formatDate(project.start_date)}
@@ -620,17 +663,39 @@ export default function ProjectsPage() {
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="client_name" className="text-sm font-medium">
-                    Client Name
-                  </Label>
-                  <Input
-                    id="client_name"
-                    value={formData.client_name}
-                    onChange={(e) => updateFormField('client_name', e.target.value)}
-                    placeholder="Client Company Name"
-                    disabled={submitting}
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="client_name" className="text-sm font-medium">
+                      Client Name
+                    </Label>
+                    <Input
+                      id="client_name"
+                      value={formData.client_name}
+                      onChange={(e) => updateFormField('client_name', e.target.value)}
+                      placeholder="Client Company Name"
+                      disabled={submitting}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="company_code" className="text-sm font-medium">
+                      Company
+                    </Label>
+                    <select
+                      id="company_code"
+                      value={formData.company_code}
+                      onChange={(e) => updateFormField('company_code', e.target.value)}
+                      disabled={submitting}
+                      className="w-full border rounded px-3 py-2"
+                    >
+                      <option value="">Select Company</option>
+                      {companies.map(company => (
+                        <option key={company.company_code} value={company.company_code}>
+                          {company.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

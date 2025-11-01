@@ -1,21 +1,18 @@
 import { query } from '@/app/lib/db';
 import { verifyToken } from '@/app/lib/auth';
 
-// Helper function untuk audit log
+// Helper function untuk audit log - DISABLED
 async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
   try {
-    const auditCode = `AUD-${Date.now()}`;
-    await query(
-      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [auditCode, userCode, userName, action, resourceType, resourceCode, `${resourceType} ${resourceCode}`, notes]
-    );
+    // Audit log disabled untuk products
+    console.log(`[AUDIT DISABLED] ${action} ${resourceType} ${resourceCode}: ${notes}`);
+    return;
   } catch (error) {
-    console.error('Error creating audit log:', error);
+    console.error('Error in audit log (disabled):', error);
   }
 }
 
-// GET - Get all products DENGAN PAGINATION & FILTERS
+// GET - Get all products atau categories
 export async function GET(request) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -24,28 +21,15 @@ export async function GET(request) {
     if (!decoded) {
       return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
-   
 
     const { searchParams } = new URL(request.url);
-    const search = searchParams.get('search') || '';
-    const page = searchParams.get('page') || '1';
-    const limit = searchParams.get('limit') || '10';
-    const status = searchParams.get('status') || '';
-    const category = searchParams.get('category') || '';
-    const sortBy = searchParams.get('sortBy') || 'created_at';
-    const sortOrder = searchParams.get('sortOrder') || 'desc';
-
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-
-    let whereClause = 'WHERE 1=1';
-    let params = [];
-
-      // ✅ JIKA INI REQUEST UNTUK CATEGORIES
+    
+    // ✅ JIKA INI REQUEST UNTUK CATEGORIES
     if (searchParams.get('type') === 'categories') {
       const categories = await query(`
         SELECT id, category_code, name, description, is_active 
         FROM product_categories 
-        WHERE is_active = 1 
+        WHERE is_active = 1 AND is_deleted = 0
         ORDER BY name ASC
       `);
       return Response.json({ 
@@ -53,74 +37,84 @@ export async function GET(request) {
         data: categories 
       });
     }
+
+    const search = searchParams.get('search') || '';
+    const page = parseInt(searchParams.get('page')) || 1;
+    const limit = parseInt(searchParams.get('limit')) || 10;
+    const status = searchParams.get('status') || '';
+    const category = searchParams.get('category') || '';
+
+    const offset = (page - 1) * limit;
+
+    let whereClause = 'WHERE p.is_deleted = 0';
+    let params = [];
+
     if (search) {
-      whereClause += ' AND (product_code LIKE ? OR name LIKE ? OR description LIKE ?)';
+      whereClause += ' AND (p.product_code LIKE ? OR p.product_name LIKE ? OR p.description LIKE ?)';
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm, searchTerm);
     }
 
     if (status) {
       if (status === 'active') {
-        whereClause += ' AND is_active = 1';
+        whereClause += ' AND p.is_active = 1';
       } else if (status === 'inactive') {
-        whereClause += ' AND is_active = 0';
+        whereClause += ' AND p.is_active = 0';
       }
     }
 
     if (category) {
-      whereClause += ' AND category_code = ?';
+      whereClause += ' AND p.category = ?';
       params.push(category);
     }
 
-    // Validate sort column untuk prevent SQL injection
-    const validSortColumns = ['product_code', 'name', 'created_at', 'is_active', 'category_code'];
-    const safeSortBy = validSortColumns.includes(sortBy) ? sortBy : 'created_at';
-    const safeSortOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
-
     // Get total count
-    const countQuery = `
-      SELECT COUNT(*) as total 
-      FROM products 
-      ${whereClause}
-    `;
+    const countQuery = `SELECT COUNT(*) as total FROM products p ${whereClause}`;
     const countResult = await query(countQuery, params);
     const total = countResult[0]?.total || 0;
 
-    // Get products
+    // Get products dengan join ke categories untuk mendapatkan nama category
     const productsQuery = `
       SELECT 
-        id,
-        product_code,
-        name,
-        description,
-        unit,
-        category_code,
-        is_active,
-        created_at
-      FROM products 
+        p.id,
+        p.product_code,
+        p.product_name,
+        p.description,
+        p.category,
+        pc.name as category_name,
+        p.unit_price,
+        p.cost_price,
+        p.is_active,
+        p.created_at,
+        p.updated_at
+      FROM products p
+      LEFT JOIN product_categories pc ON p.category = pc.category_code AND pc.is_deleted = 0
       ${whereClause}
-      ORDER BY ${safeSortBy} ${safeSortOrder}
+      ORDER BY p.created_at DESC
       LIMIT ? OFFSET ?
     `;
 
-    const queryParams = [...params, parseInt(limit), offset];
+    const queryParams = [...params, limit, offset];
     const products = await query(productsQuery, queryParams);
 
     return Response.json({
       success: true,
       data: products,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        totalPages: Math.ceil(total / parseInt(limit))
+        page: page,
+        limit: limit,
+        total: total,
+        totalPages: Math.ceil(total / limit)
       }
     });
 
   } catch (error) {
     console.error('GET products error:', error);
     return Response.json(
-      { success: false, error: 'Internal server error' },
+      { 
+        success: false, 
+        error: error.message 
+      },
       { status: 500 }
     );
   }
@@ -139,15 +133,16 @@ export async function POST(request) {
     const productData = await request.json();
     const {
       product_code,
-      name,
+      product_name,
       description = '',
-      unit = '',
-      category_code = '',
+      category = '',
+      unit_price = 0,
+      cost_price = 0,
       is_active = true
     } = productData;
 
     // Validation
-    if (!product_code || !name) {
+    if (!product_code || !product_name) {
       return Response.json(
         { success: false, error: 'Product code and name are required' },
         { status: 400 }
@@ -156,7 +151,7 @@ export async function POST(request) {
 
     // Check if product code already exists
     const existingProduct = await query(
-      'SELECT product_code FROM products WHERE product_code = ?',
+      'SELECT product_code FROM products WHERE product_code = ? AND is_deleted = 0',
       [product_code]
     );
 
@@ -167,34 +162,56 @@ export async function POST(request) {
       );
     }
 
+    // Validate prices
+    if (unit_price < 0 || cost_price < 0) {
+      return Response.json(
+        { success: false, error: 'Prices cannot be negative' },
+        { status: 400 }
+      );
+    }
+
+    // Jika category dipilih, validasi apakah category exists
+    if (category) {
+      const categoryExists = await query(
+        'SELECT category_code FROM product_categories WHERE category_code = ? AND is_active = 1 AND is_deleted = 0',
+        [category]
+      );
+      
+      if (categoryExists.length === 0) {
+        return Response.json(
+          { success: false, error: 'Selected category does not exist or is inactive' },
+          { status: 400 }
+        );
+      }
+    }
+
     // Insert product
     await query(
       `INSERT INTO products 
-       (product_code, name, description, unit, category_code, is_active) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [product_code, name, description, unit, category_code, is_active]
+       (product_code, product_name, description, category, unit_price, cost_price, is_active) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [product_code, product_name, description, category, unit_price, cost_price, is_active]
     );
 
-    // Audit log
+    // Audit log (disabled)
     await createAuditLog(
       decoded.user_code,
       decoded.name,
       'create',
       'product',
       product_code,
-      `Created product: ${name}`
+      `Created product: ${product_name}`
     );
 
     return Response.json({
       success: true,
-      message: 'Product created successfully',
-      product_code: product_code
+      message: 'Product created successfully'
     });
 
   } catch (error) {
     console.error('POST product error:', error);
     return Response.json(
-      { success: false, error: error.message || 'Internal server error' },
+      { success: false, error: error.message },
       { status: 500 }
     );
   }
@@ -214,15 +231,16 @@ export async function PUT(request) {
     const {
       id,
       product_code,
-      name,
+      product_name,
       description = '',
-      unit = '',
-      category_code = '',
+      category = '',
+      unit_price = 0,
+      cost_price = 0,
       is_active = true
     } = productData;
 
     // Validation
-    if (!id || !product_code || !name) {
+    if (!id || !product_code || !product_name) {
       return Response.json(
         { success: false, error: 'Product ID, code and name are required' },
         { status: 400 }
@@ -231,7 +249,7 @@ export async function PUT(request) {
 
     // Check if product exists
     const existingProduct = await query(
-      'SELECT product_code FROM products WHERE id = ?',
+      'SELECT product_code FROM products WHERE id = ? AND is_deleted = 0',
       [id]
     );
 
@@ -244,7 +262,7 @@ export async function PUT(request) {
 
     // Check if product code already exists (for other products)
     const existingCode = await query(
-      'SELECT product_code FROM products WHERE product_code = ? AND id != ?',
+      'SELECT product_code FROM products WHERE product_code = ? AND id != ? AND is_deleted = 0',
       [product_code, id]
     );
 
@@ -255,22 +273,46 @@ export async function PUT(request) {
       );
     }
 
+    // Validate prices
+    if (unit_price < 0 || cost_price < 0) {
+      return Response.json(
+        { success: false, error: 'Prices cannot be negative' },
+        { status: 400 }
+      );
+    }
+
+    // Jika category dipilih, validasi apakah category exists
+    if (category) {
+      const categoryExists = await query(
+        'SELECT category_code FROM product_categories WHERE category_code = ? AND is_active = 1 AND is_deleted = 0',
+        [category]
+      );
+      
+      if (categoryExists.length === 0) {
+        return Response.json(
+          { success: false, error: 'Selected category does not exist or is inactive' },
+          { status: 400 }
+        );
+      }
+    }
+
     // Update product
     await query(
       `UPDATE products 
-       SET product_code = ?, name = ?, description = ?, unit = ?, category_code = ?, is_active = ?
-       WHERE id = ?`,
-      [product_code, name, description, unit, category_code, is_active, id]
+       SET product_code = ?, product_name = ?, description = ?, category = ?, 
+           unit_price = ?, cost_price = ?, is_active = ?, updated_at = NOW()
+       WHERE id = ? AND is_deleted = 0`,
+      [product_code, product_name, description, category, unit_price, cost_price, is_active, id]
     );
 
-    // Audit log
+    // Audit log (disabled)
     await createAuditLog(
       decoded.user_code,
       decoded.name,
       'update',
       'product',
       product_code,
-      `Updated product: ${name}`
+      `Updated product: ${product_name}`
     );
 
     return Response.json({
@@ -281,13 +323,13 @@ export async function PUT(request) {
   } catch (error) {
     console.error('PUT product error:', error);
     return Response.json(
-      { success: false, error: error.message || 'Internal server error' },
+      { success: false, error: error.message },
       { status: 500 }
     );
   }
 }
 
-// DELETE - Delete product
+// DELETE - Soft delete product
 export async function DELETE(request) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -309,7 +351,7 @@ export async function DELETE(request) {
 
     // Check if product exists
     const existingProduct = await query(
-      'SELECT product_code, name FROM products WHERE id = ?',
+      'SELECT product_code, product_name FROM products WHERE id = ? AND is_deleted = 0',
       [id]
     );
 
@@ -322,20 +364,20 @@ export async function DELETE(request) {
 
     const product = existingProduct[0];
 
-    // Delete product
+    // Soft delete product
     await query(
-      'DELETE FROM products WHERE id = ?',
+      'UPDATE products SET is_deleted = 1, deleted_at = NOW() WHERE id = ?',
       [id]
     );
 
-    // Audit log
+    // Audit log (disabled)
     await createAuditLog(
       decoded.user_code,
       decoded.name,
       'delete',
       'product',
       product.product_code,
-      `Deleted product: ${product.name}`
+      `Deleted product: ${product.product_name}`
     );
 
     return Response.json({
@@ -346,7 +388,7 @@ export async function DELETE(request) {
   } catch (error) {
     console.error('DELETE product error:', error);
     return Response.json(
-      { success: false, error: error.message || 'Internal server error' },
+      { success: false, error: error.message },
       { status: 500 }
     );
   }

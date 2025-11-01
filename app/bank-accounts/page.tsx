@@ -8,42 +8,57 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { Search, Plus, Edit, CreditCard, Building, User, Check, X, Loader2, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { Search, Plus, Edit, CreditCard, Building, User, Check, X, Loader2, ChevronLeft, ChevronRight, RefreshCw, Trash2, Calendar } from 'lucide-react'
 import { toast } from 'sonner'
 
 // Types
 interface BankAccount {
-  id: number
-  account_code: string
-  bank_name: string
-  account_number: string
-  account_holder: string
-  branch: string
-  currency: string
-  description: string
-  is_active: boolean
-  created_at: string
-}
-
-interface BankFormData {
-  account_code: string
-  bank_name: string
-  account_number: string
-  account_holder: string
-  branch: string
-  description: string
+  id: string;
+  account_code: string;
+  bank_name: string;
+  account_number: string;
+  account_holder: string;
+  branch?: string;
+  currency: string;
+  description?: string;
+  is_active: boolean;
+  created_at: string;
 }
 
 interface PaginationInfo {
-  page: number
-  limit: number
-  total: number
-  totalPages: number
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
 }
 
-// API Service - IMPROVED VERSION
+interface BankAccountResponse {
+  success: boolean;
+  data: BankAccount[];
+  pagination: PaginationInfo;
+  message?: string;
+}
+
+interface BankAccountFilters {
+  search?: string;
+  page?: number;
+  limit?: number;
+  show_inactive?: boolean;
+}
+
+interface FormData {
+  account_code: string;
+  bank_name: string;
+  account_number: string;
+  account_holder: string;
+  branch: string;
+  currency: string;
+  description: string;
+}
+
+// API Service
 class BankAccountService {
-  private static async fetchWithAuth(url: string, options: RequestInit = {}) {
+  static async fetchWithAuth(url: string, options: RequestInit = {}) {
     const token = localStorage.getItem('token');
     if (!token) {
       toast.error('Session expired. Please login again.');
@@ -63,10 +78,9 @@ class BankAccountService {
     return this.handleResponse(response);
   }
 
-  private static async handleResponse(response: Response) {
+  static async handleResponse(response: Response) {
     const contentType = response.headers.get('content-type');
     
-    // Check if response is HTML (error page)
     if (contentType && contentType.includes('text/html')) {
       const text = await response.text();
       console.error('HTML Response received:', text.substring(0, 500));
@@ -85,14 +99,12 @@ class BankAccountService {
     }
     
     if (!response.ok) {
-      // Clone response untuk menghindari "body stream already read"
       const responseClone = response.clone();
       
       try {
         const errorData = await response.json();
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       } catch (jsonError) {
-        // Jika parsing JSON gagal, gunakan clone response untuk membaca text
         try {
           const errorText = await responseClone.text();
           throw new Error(errorText || `HTTP error! status: ${response.status}`);
@@ -106,12 +118,7 @@ class BankAccountService {
   }
 
   // Get all bank accounts with pagination
-  static async getBankAccounts(filters: {
-    search?: string;
-    page?: number;
-    limit?: number;
-    show_inactive?: boolean;
-  } = {}) {
+  static async getBankAccounts(filters: BankAccountFilters = {}): Promise<BankAccountResponse> {
     const params = new URLSearchParams();
     if (filters.search) params.append('search', filters.search);
     params.append('page', String(filters.page || 1));
@@ -121,30 +128,36 @@ class BankAccountService {
     return this.fetchWithAuth(`/api/bank-accounts?${params}`);
   }
 
-  static async createBankAccount(data: BankFormData) {
+  static async createBankAccount(data: FormData): Promise<BankAccountResponse> {
     return this.fetchWithAuth('/api/bank-accounts', {
       method: 'POST',
-      body: JSON.stringify({ ...data, currency: 'IDR' })
+      body: JSON.stringify(data)
     });
   }
 
-  static async updateBankAccount(data: BankFormData) {
+  static async updateBankAccount(data: FormData): Promise<BankAccountResponse> {
     return this.fetchWithAuth('/api/bank-accounts', {
       method: 'PUT',
-      body: JSON.stringify({ ...data, currency: 'IDR', is_active: true })
+      body: JSON.stringify(data)
     });
   }
 
-  // Toggle bank account status
-  static async toggleBankAccountStatus(account_code: string, is_active: boolean) {
+  static async deleteBankAccount(account_code: string): Promise<BankAccountResponse> {
+    return this.fetchWithAuth(`/api/bank-accounts?account_code=${account_code}`, {
+      method: 'DELETE'
+    });
+  }
+
+  static async toggleBankAccountStatus(account_code: string, is_active: boolean): Promise<BankAccountResponse> {
     return this.fetchWithAuth('/api/bank-accounts', {
       method: 'PUT',
       body: JSON.stringify({ 
         account_code, 
         is_active: !is_active,
-        bank_name: '', // Required fields but won't be used
+        bank_name: '',
         account_number: '',
-        account_holder: ''
+        account_holder: '',
+        currency: 'IDR'
       })
     });
   }
@@ -156,8 +169,8 @@ export default function BankAccountsPage() {
   const [submitting, setSubmitting] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [showInactive, setShowInactive] = useState(false)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
   
-  // Pagination state
   const [pagination, setPagination] = useState<PaginationInfo>({
     page: 1,
     limit: 10,
@@ -165,19 +178,18 @@ export default function BankAccountsPage() {
     totalPages: 0
   })
 
-  // Form state
   const [showForm, setShowForm] = useState(false)
   const [editingAccount, setEditingAccount] = useState<BankAccount | null>(null)
-  const [formData, setFormData] = useState<BankFormData>({
+  const [formData, setFormData] = useState<FormData>({
     account_code: '',
     bank_name: '',
     account_number: '',
     account_holder: '',
     branch: '',
+    currency: 'IDR',
     description: ''
   })
 
-  // Fetch data dengan pagination
   const fetchBankAccounts = async (page: number = pagination.page) => {
     try {
       setLoading(true)
@@ -192,9 +204,10 @@ export default function BankAccountsPage() {
         setBankAccounts(response.data)
         setPagination(response.pagination)
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error fetching bank accounts:', error)
-      toast.error(error.message || 'Failed to load bank accounts')
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load bank accounts'
+      toast.error(errorMessage)
     } finally {
       setLoading(false)
     }
@@ -204,7 +217,6 @@ export default function BankAccountsPage() {
     fetchBankAccounts(1)
   }, [searchTerm, showInactive])
 
-  // Pagination handlers
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= pagination.totalPages) {
       fetchBankAccounts(newPage)
@@ -216,15 +228,21 @@ export default function BankAccountsPage() {
     setTimeout(() => fetchBankAccounts(1), 0)
   }
 
-  // Form handlers
+  const generateAccountCode = (): string => {
+    const bankPrefix = formData.bank_name ? formData.bank_name.substring(0, 3).toUpperCase() : 'BNK';
+    const randomNum = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `${bankPrefix}${randomNum}`;
+  }
+
   const handleCreateNew = () => {
     setEditingAccount(null)
     setFormData({
-      account_code: '',
+      account_code: generateAccountCode(),
       bank_name: '',
       account_number: '',
       account_holder: '',
       branch: '',
+      currency: 'IDR',
       description: ''
     })
     setShowForm(true)
@@ -238,12 +256,13 @@ export default function BankAccountsPage() {
       account_number: account.account_number,
       account_holder: account.account_holder,
       branch: account.branch || '',
+      currency: account.currency || 'IDR',
       description: account.description || ''
     })
     setShowForm(true)
   }
 
-  const updateFormField = (field: keyof BankFormData, value: any) => {
+  const updateFormField = (field: keyof FormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }))
   }
 
@@ -253,8 +272,8 @@ export default function BankAccountsPage() {
       return
     }
 
-    if (!/^\d+$/.test(formData.account_number)) {
-      toast.error('Account number must contain only numbers')
+    if (!/^\d{5,16}$/.test(formData.account_number)) {
+      toast.error('Account number must be between 5-16 digits')
       return
     }
 
@@ -272,9 +291,10 @@ export default function BankAccountsPage() {
       setShowForm(false)
       setEditingAccount(null)
       await fetchBankAccounts()
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error saving bank account:', error)
-      toast.error(error.message || 'Failed to save bank account')
+      const errorMessage = error instanceof Error ? error.message : 'Failed to save bank account'
+      toast.error(errorMessage)
     } finally {
       setSubmitting(false)
     }
@@ -287,20 +307,45 @@ export default function BankAccountsPage() {
   }
 
   const handleToggleStatus = async (account: BankAccount) => {
+    const confirmMessage = account.is_active 
+      ? `Are you sure you want to deactivate ${account.bank_name} - ${formatAccountNumber(account.account_number)}?`
+      : `Are you sure you want to activate ${account.bank_name} - ${formatAccountNumber(account.account_number)}?`;
+    
+    if (!window.confirm(confirmMessage)) return;
+
     try {
-      setLoading(true)
+      setActionLoading(account.account_code)
       await BankAccountService.toggleBankAccountStatus(account.account_code, account.is_active)
       toast.success(`Bank account ${account.is_active ? 'deactivated' : 'activated'} successfully`)
       await fetchBankAccounts()
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error toggling bank account status:', error)
-      toast.error(error.message || 'Failed to update bank account status')
+      const errorMessage = error instanceof Error ? error.message : 'Failed to update bank account status'
+      toast.error(errorMessage)
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
-  // Status badge
+  const handleDelete = async (account: BankAccount) => {
+    const confirmMessage = `Are you sure you want to delete ${account.bank_name} - ${formatAccountNumber(account.account_number)}? This action cannot be undone.`;
+    
+    if (!window.confirm(confirmMessage)) return;
+
+    try {
+      setActionLoading(account.account_code)
+      await BankAccountService.deleteBankAccount(account.account_code)
+      toast.success('Bank account deleted successfully')
+      await fetchBankAccounts()
+    } catch (error: unknown) {
+      console.error('Error deleting bank account:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to delete bank account'
+      toast.error(errorMessage)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   const getStatusBadge = (isActive: boolean) => {
     return isActive ? (
       <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">
@@ -315,8 +360,7 @@ export default function BankAccountsPage() {
     )
   }
 
-  // Format account number for display
-  const formatAccountNumber = (accountNumber: string) => {
+  const formatAccountNumber = (accountNumber: string): string => {
     const cleanNumber = accountNumber.replace(/\D/g, '');
     
     if (cleanNumber.length <= 4) return cleanNumber;
@@ -326,13 +370,18 @@ export default function BankAccountsPage() {
     return cleanNumber.replace(/(.{4})/g, '$1-').replace(/-$/, '');
   }
 
-  // Format account number input
-  const formatAccountNumberInput = (value: string) => {
-    const cleanNumber = value.replace(/\D/g, '');
-    return cleanNumber;
+  const formatAccountNumberInput = (value: string): string => {
+    return value.replace(/\D/g, '');
   }
 
-  // Pagination component
+  const formatDate = (dateString: string): string => {
+    return new Date(dateString).toLocaleDateString('id-ID', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  }
+
   const PaginationControls = () => (
     <div className="flex items-center justify-between px-6 py-4 border-t">
       <div className="text-sm text-gray-600">
@@ -423,7 +472,7 @@ export default function BankAccountsPage() {
               </div>
             </div>
 
-            {/* Search & Filters - SAMA SEPERTI TAX TYPES */}
+            {/* Search & Filters */}
             <div className="flex flex-col sm:flex-row gap-3 pt-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4" />
@@ -465,18 +514,19 @@ export default function BankAccountsPage() {
                   <TableHeader className="bg-gray-50">
                     <TableRow>
                       <TableHead className="w-16 text-center font-semibold text-gray-900">No</TableHead>
-                      <TableHead className="font-semibold text-gray-900">Account Code</TableHead>
-                      <TableHead className="font-semibold text-gray-900">Bank Name</TableHead>
                       <TableHead className="font-semibold text-gray-900">Account Number</TableHead>
+                      <TableHead className="font-semibold text-gray-900">Bank Name</TableHead>
                       <TableHead className="font-semibold text-gray-900">Account Holder</TableHead>
+                      <TableHead className="font-semibold text-gray-900">Currency</TableHead>
                       <TableHead className="text-center font-semibold text-gray-900">Status</TableHead>
+                      <TableHead className="font-semibold text-gray-900">Created</TableHead>
                       <TableHead className="text-center font-semibold text-gray-900">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {bankAccounts.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="text-center py-12">
+                        <TableCell colSpan={9} className="text-center py-12">
                           <div className="flex flex-col items-center justify-center text-gray-500">
                             <CreditCard className="h-12 w-12 mb-4 text-gray-300" />
                             <p className="text-lg font-medium mb-2">
@@ -500,7 +550,7 @@ export default function BankAccountsPage() {
                           </TableCell>
                           <TableCell>
                             <span className="font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded text-sm">
-                              {account.account_code}
+                              {account.account_number}
                             </span>
                           </TableCell>
                           <TableCell>
@@ -509,19 +559,26 @@ export default function BankAccountsPage() {
                               <span className="font-medium text-gray-900">{account.bank_name}</span>
                             </div>
                           </TableCell>
-                          <TableCell>
-                            <div className="font-mono font-semibold text-gray-900">
-                              {formatAccountNumber(account.account_number)}
-                            </div>
-                          </TableCell>
+                          
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <User className="h-4 w-4 text-gray-400" />
                               <span className="text-gray-700">{account.account_holder}</span>
                             </div>
                           </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-xs">
+                              {account.currency}
+                            </Badge>
+                          </TableCell>
                           <TableCell className="text-center">
                             {getStatusBadge(account.is_active)}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1 text-sm text-gray-500">
+                              <Calendar className="h-3 w-3" />
+                              {formatDate(account.created_at)}
+                            </div>
                           </TableCell>
                           <TableCell className="text-center">
                             <div className="flex gap-1 justify-center">
@@ -531,7 +588,7 @@ export default function BankAccountsPage() {
                                 variant="outline"
                                 className="h-8 w-8 p-0 border-gray-300 hover:bg-gray-50"
                                 title="Edit"
-                                disabled={loading}
+                                disabled={loading || actionLoading !== null}
                               >
                                 <Edit className="h-3 w-3" />
                               </Button>
@@ -543,9 +600,29 @@ export default function BankAccountsPage() {
                                   account.is_active ? 'text-orange-600' : 'text-green-600'
                                 }`}
                                 title={account.is_active ? 'Deactivate' : 'Activate'}
-                                disabled={loading}
+                                disabled={loading || actionLoading === account.account_code}
                               >
-                                {account.is_active ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
+                                {actionLoading === account.account_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : account.is_active ? (
+                                  <X className="h-3 w-3" />
+                                ) : (
+                                  <Check className="h-3 w-3" />
+                                )}
+                              </Button>
+                              <Button
+                                onClick={() => handleDelete(account)}
+                                size="sm"
+                                variant="outline"
+                                className="h-8 w-8 p-0 border-gray-300 hover:bg-red-50 text-red-600"
+                                title="Delete"
+                                disabled={loading || actionLoading === account.account_code}
+                              >
+                                {actionLoading === account.account_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
                               </Button>
                             </div>
                           </TableCell>
@@ -562,7 +639,7 @@ export default function BankAccountsPage() {
           </CardContent>
         </Card>
 
-        {/* Bank Account Form - Below Table */}
+        {/* Bank Account Form */}
         {showForm && (
           <Card className="bg-white border shadow-sm">
             <CardHeader>
@@ -573,24 +650,22 @@ export default function BankAccountsPage() {
             <CardContent>
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="account_code" className="text-sm font-medium">
-                      Account Code *
+                   <div className="space-y-2">
+                    <Label htmlFor="account_number" className="text-sm font-medium">
+                      Account Number *
                     </Label>
                     <Input
-                      id="account_code"
-                      value={formData.account_code}
-                      onChange={(e) => updateFormField('account_code', e.target.value.toUpperCase())}
-                      placeholder="BANK001"
-                      disabled={!!editingAccount || submitting}
+                      id="account_number"
+                      value={formData.account_number}
+                      onChange={(e) => updateFormField('account_number', formatAccountNumberInput(e.target.value))}
+                      placeholder="1234567890"
+                      disabled={submitting}
+                      maxLength={16}
                     />
-                    {editingAccount && (
-                      <p className="text-xs text-gray-500 mt-1">
-                        Account code cannot be changed
-                      </p>
-                    )}
+                    <p className="text-xs text-gray-500">
+                      5-16 digits, numbers only
+                    </p>
                   </div>
-
                   <div className="space-y-2">
                     <Label htmlFor="bank_name" className="text-sm font-medium">
                       Bank Name *
@@ -606,23 +681,23 @@ export default function BankAccountsPage() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="account_number" className="text-sm font-medium">
-                      Account Number *
+               <div className="space-y-2">
+                    <Label htmlFor="currency" className="text-sm font-medium">
+                      Currency *
                     </Label>
-                    <Input
-                      id="account_number"
-                      value={formData.account_number}
-                      onChange={(e) => updateFormField('account_number', formatAccountNumberInput(e.target.value))}
-                      placeholder="1234567890"
+                    <select
+                      id="currency"
+                      value={formData.currency}
+                      onChange={(e) => updateFormField('currency', e.target.value)}
                       disabled={submitting}
-                      maxLength={16}
-                    />
-                    <p className="text-xs text-gray-500">
-                      Numbers only, no spaces or special characters
-                    </p>
+                      className="w-full border rounded-md px-3 py-2 text-sm"
+                    >
+                      <option value="IDR">IDR - Indonesian Rupiah</option>
+                      {/* <option value="USD">USD - US Dollar</option>
+                      <option value="EUR">EUR - Euro</option>
+                      <option value="SGD">SGD - Singapore Dollar</option> */}
+                    </select>
                   </div>
-
                   <div className="space-y-2">
                     <Label htmlFor="account_holder" className="text-sm font-medium">
                       Account Holder Name *
@@ -635,19 +710,6 @@ export default function BankAccountsPage() {
                       disabled={submitting}
                     />
                   </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="branch" className="text-sm font-medium">
-                    Branch Name
-                  </Label>
-                  <Input
-                    id="branch"
-                    value={formData.branch}
-                    onChange={(e) => updateFormField('branch', e.target.value)}
-                    placeholder="Bank branch location"
-                    disabled={submitting}
-                  />
                 </div>
 
                 <div className="space-y-2">

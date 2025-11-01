@@ -1,4 +1,4 @@
-'use client'
+"use client"
 
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -18,11 +18,18 @@ interface Company {
   name: string
   description?: string
   address?: string
+  city?: string
+  state?: string
+  postal_code?: string
+  country?: string
   phone?: string
   email?: string
+  website?: string
   tax_id?: string
   status: 'active' | 'inactive'
+  is_active: boolean
   created_at: string
+  updated_at: string
 }
 
 interface CompanyFormData {
@@ -30,8 +37,13 @@ interface CompanyFormData {
   name: string
   description: string
   address: string
+  city: string
+  state: string
+  postal_code: string
+  country: string
   phone: string
   email: string
+  website: string
   tax_id: string
 }
 
@@ -122,7 +134,7 @@ class CompanyService {
   }
 
   // Update company
-  static async updateCompany(data: CompanyFormData & { id: number }) {
+  static async updateCompany(data: CompanyFormData & { id: number; status: 'active' | 'inactive' }) {
     return this.fetchWithAuth('/api/companies', {
       method: 'PUT',
       body: JSON.stringify(data)
@@ -146,6 +158,7 @@ export default function CompaniesPage() {
   const [companies, setCompanies] = useState<Company[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   
@@ -165,8 +178,13 @@ export default function CompaniesPage() {
     name: '',
     description: '',
     address: '',
+    city: '',
+    state: '',
+    postal_code: '',
+    country: 'Indonesia',
     phone: '',
     email: '',
+    website: '',
     tax_id: ''
   })
 
@@ -219,7 +237,7 @@ export default function CompaniesPage() {
     }
   }
 
-  // Input validation functions - SAMA DENGAN SUPPLIER
+  // Input validation functions
   const validateEmail = (email: string): boolean => {
     if (!email) return true // Empty email is allowed
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -232,12 +250,14 @@ export default function CompaniesPage() {
     return phoneRegex.test(phone.replace(/\s/g, ''))
   }
 
-  const validateName = (value: string): boolean => {
-    return /^[a-zA-Z0-9\s\-\&\.\,\(\)]+$/.test(value)
-  }
-
-  const validateTaxId = (value: string): boolean => {
-    return /^[0-9\.\-\s]+$/.test(value)
+  const validateWebsite = (website: string): boolean => {
+    if (!website) return true // Empty website is allowed
+    try {
+      new URL(website);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // Pagination handlers
@@ -260,8 +280,13 @@ export default function CompaniesPage() {
       name: '',
       description: '',
       address: '',
+      city: '',
+      state: '',
+      postal_code: '',
+      country: 'Indonesia',
       phone: '',
       email: '',
+      website: '',
       tax_id: ''
     })
     setShowForm(true)
@@ -274,8 +299,13 @@ export default function CompaniesPage() {
       name: company.name,
       description: company.description || '',
       address: company.address || '',
+      city: company.city || '',
+      state: company.state || '',
+      postal_code: company.postal_code || '',
+      country: company.country || 'Indonesia',
       phone: company.phone || '',
       email: company.email || '',
+      website: company.website || '',
       tax_id: company.tax_id || ''
     })
     setShowForm(true)
@@ -295,20 +325,12 @@ export default function CompaniesPage() {
       toast.error('Company name is required')
       return
     }
-    if (!formData.tax_id.trim()) {
-      toast.error('Tax ID is required')
-      return
-    }
-    if (!formData.address.trim()) {
-      toast.error('Address is required')
-      return
-    }
-    if (!formData.description.trim()) {
-      toast.error('Description is required')
-      return
-    }
 
-    // Format validation - SAMA DENGAN SUPPLIER
+    if (!formData.tax_id.trim()) {
+      toast.error('Company name is required')
+      return
+    }
+    // Format validation
     if (formData.email && !validateEmail(formData.email)) {
       toast.error('Please enter a valid email address')
       return
@@ -319,13 +341,19 @@ export default function CompaniesPage() {
       return
     }
 
+    if (formData.website && !validateWebsite(formData.website)) {
+      toast.error('Please enter a valid website URL')
+      return
+    }
+
     try {
       setSubmitting(true)
       
       if (editingCompany) {
         const result = await CompanyService.updateCompany({
           ...formData,
-          id: editingCompany.id
+          id: editingCompany.id,
+          status: editingCompany.status
         })
         toast.success(result.message || 'Company updated successfully')
       } else {
@@ -359,17 +387,17 @@ export default function CompaniesPage() {
     if (!companyToDelete) return
 
     try {
-      setLoading(true)
+      setActionLoading(companyToDelete.company_code)
       const result = await CompanyService.deleteCompany(companyToDelete.id)
       toast.success(result.message || 'Company deleted successfully')
       setShowDeleteModal(false)
       setCompanyToDelete(null)
-      fetchCompanies()
+      await fetchCompanies()
     } catch (error: any) {
       console.error('Error deleting company:', error)
       toast.error(error.message || 'Failed to delete company')
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
@@ -380,27 +408,31 @@ export default function CompaniesPage() {
 
   const toggleStatus = async (company: Company) => {
     try {
-      setLoading(true)
-      const updateData = {
-        id: company.id,
+      setActionLoading(company.company_code)
+      const newStatus = company.status === 'active' ? 'inactive' : 'active'
+      await CompanyService.updateCompany({
         company_code: company.company_code,
         name: company.name,
         description: company.description || '',
         address: company.address || '',
+        city: company.city || '',
+        state: company.state || '',
+        postal_code: company.postal_code || '',
+        country: company.country || 'Indonesia',
         phone: company.phone || '',
         email: company.email || '',
+        website: company.website || '',
         tax_id: company.tax_id || '',
-        status: company.status === 'active' ? 'inactive' : 'active'
-      }
-      
-      await CompanyService.updateCompany(updateData)
-      toast.success(`Company ${company.status === 'active' ? 'deactivated' : 'activated'}`)
-      fetchCompanies()
+        id: company.id,
+        status: newStatus
+      })
+      toast.success(`Company ${newStatus === 'active' ? 'activated' : 'deactivated'}`)
+      await fetchCompanies()
     } catch (error: any) {
       console.error('Error updating company status:', error)
       toast.error(error.message || 'Failed to update company status')
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
@@ -419,6 +451,15 @@ export default function CompaniesPage() {
     )
   }
 
+  // Format date
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('id-ID', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    })
+  }
+
   // Pagination component
   const PaginationControls = () => (
     <div className="flex items-center justify-between px-6 py-4 border-t">
@@ -435,6 +476,7 @@ export default function CompaniesPage() {
             value={pagination.limit}
             onChange={(e) => handleLimitChange(Number(e.target.value))}
             className="border rounded px-2 py-1 text-sm"
+            disabled={loading}
           >
             <option value={5}>5</option>
             <option value={10}>10</option>
@@ -448,7 +490,7 @@ export default function CompaniesPage() {
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(pagination.page - 1)}
-            disabled={pagination.page === 1}
+            disabled={pagination.page === 1 || loading}
             className="h-8 w-8 p-0"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -462,7 +504,7 @@ export default function CompaniesPage() {
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(pagination.page + 1)}
-            disabled={pagination.page === pagination.totalPages}
+            disabled={pagination.page === pagination.totalPages || loading}
             className="h-8 w-8 p-0"
           >
             <ChevronRight className="h-4 w-4" />
@@ -489,7 +531,7 @@ export default function CompaniesPage() {
               variant="outline" 
               className="flex-1"
               onClick={handleDeleteCancel}
-              disabled={loading}
+              disabled={actionLoading === companyToDelete.company_code}
             >
               Cancel
             </Button>
@@ -497,9 +539,16 @@ export default function CompaniesPage() {
               variant="destructive"
               className="flex-1"
               onClick={handleDeleteConfirm}
-              disabled={loading}
+              disabled={actionLoading === companyToDelete.company_code}
             >
-              {loading ? 'Deleting...' : 'Yes, Delete'}
+              {actionLoading === companyToDelete.company_code ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Yes, Delete'
+              )}
             </Button>
           </div>
         </div>
@@ -525,7 +574,11 @@ export default function CompaniesPage() {
               </div>
               
               <div className="flex gap-2">
-                <Button onClick={handleCreateNew} className="bg-blue-600 hover:bg-blue-700 text-white">
+                <Button 
+                  onClick={handleCreateNew} 
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  disabled={loading}
+                >
                   <Plus className="h-4 w-4 mr-2" />
                   Add Company
                 </Button>
@@ -556,6 +609,7 @@ export default function CompaniesPage() {
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="px-3 py-2 border rounded-md text-sm"
+                disabled={loading}
               >
                 <option value="">All Status</option>
                 <option value="active">Active</option>
@@ -565,7 +619,7 @@ export default function CompaniesPage() {
           </CardHeader>
         </Card>
 
-        {/* Companies Table - TANPA SPACE DI ATAS */}
+        {/* Companies Table */}
         <Card className="bg-white border shadow-sm rounded-lg">
           <CardContent className="p-0">
             {loading ? (
@@ -594,7 +648,12 @@ export default function CompaniesPage() {
                         <TableCell colSpan={8} className="text-center py-12">
                           <div className="flex flex-col items-center justify-center text-gray-500">
                             <Building className="h-12 w-12 mb-4 text-gray-300" />
-                            <p className="text-lg font-medium mb-2">No companies found</p>
+                            <p className="text-lg font-medium mb-2">
+                              {searchTerm || statusFilter ? 'No companies found' : 'No companies yet'}
+                            </p>
+                            <p className="text-sm text-gray-400 mb-4">
+                              {searchTerm || statusFilter ? 'Try adjusting your search terms' : 'Get started by adding your first company'}
+                            </p>
                             <Button onClick={handleCreateNew} size="sm">
                               <Plus className="h-4 w-4 mr-2" />
                               Add Company
@@ -609,7 +668,7 @@ export default function CompaniesPage() {
                             {(pagination.page - 1) * pagination.limit + index + 1}
                           </TableCell>
                           <TableCell>
-                            <span className="font-semibold text-blue-600">
+                            <span className="font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded text-sm">
                               {company.company_code}
                             </span>
                           </TableCell>
@@ -648,6 +707,7 @@ export default function CompaniesPage() {
                                 variant="outline"
                                 className="h-8 w-8 p-0 border-gray-300 hover:bg-gray-50"
                                 title="Edit"
+                                disabled={actionLoading !== null}
                               >
                                 <Edit className="h-3 w-3" />
                               </Button>
@@ -659,17 +719,29 @@ export default function CompaniesPage() {
                                   company.status === 'active' ? 'text-orange-600' : 'text-green-600'
                                 }`}
                                 title={company.status === 'active' ? 'Deactivate' : 'Activate'}
+                                disabled={actionLoading === company.company_code}
                               >
-                                {company.status === 'active' ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
+                                {actionLoading === company.company_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : company.status === 'active' ? (
+                                  <X className="h-3 w-3" />
+                                ) : (
+                                  <Check className="h-3 w-3" />
+                                )}
                               </Button>
                               <Button
                                 onClick={() => handleDeleteClick(company)}
                                 size="sm"
                                 variant="outline"
-                                className="h-8 w-8 p-0 text-red-600 hover:text-red-700 border-gray-300 hover:bg-gray-50"
+                                className="h-8 w-8 p-0 border-gray-300 hover:bg-red-50 text-red-600"
                                 title="Delete"
+                                disabled={actionLoading === company.company_code}
                               >
-                                <Trash2 className="h-3 w-3" />
+                                {actionLoading === company.company_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
                               </Button>
                             </div>
                           </TableCell>
@@ -686,7 +758,7 @@ export default function CompaniesPage() {
           </CardContent>
         </Card>
 
-        {/* Company Form - Below Table */}
+        {/* Company Form */}
         {showForm && (
           <Card className="bg-white border shadow-sm rounded-lg">
             <CardHeader>
@@ -748,7 +820,7 @@ export default function CompaniesPage() {
                   {/* Tax ID */}
                   <div className="space-y-2">
                     <Label htmlFor="tax_id" className="text-sm font-medium">
-                      Tax ID *
+                      Tax ID * 
                     </Label>
                     <Input
                       id="tax_id"
@@ -759,7 +831,7 @@ export default function CompaniesPage() {
                     />
                   </div>
 
-                  {/* Phone - SAMA DENGAN SUPPLIER */}
+                  {/* Phone */}
                   <div className="space-y-2">
                     <Label htmlFor="phone" className="text-sm font-medium">
                       Phone
@@ -778,7 +850,7 @@ export default function CompaniesPage() {
                     )}
                   </div>
 
-                  {/* Email - SAMA DENGAN SUPPLIER */}
+                  {/* Email */}
                   <div className="space-y-2">
                     <Label htmlFor="email" className="text-sm font-medium">
                       Email
@@ -797,34 +869,109 @@ export default function CompaniesPage() {
                     )}
                   </div>
 
-                  {/* Address */}
-                  <div className="md:col-span-2 space-y-2">
-                    <Label htmlFor="address" className="text-sm font-medium">
-                      Address *
+                  {/* Website */}
+                  <div className="space-y-2">
+                    <Label htmlFor="website" className="text-sm font-medium">
+                      Website
                     </Label>
                     <Input
-                      id="address"
-                      value={formData.address}
-                      onChange={(e) => updateFormField('address', e.target.value)}
-                      placeholder="Street address"
+                      id="website"
+                      value={formData.website}
+                      onChange={(e) => updateFormField('website', e.target.value)}
+                      placeholder="https://example.com"
+                      disabled={submitting}
+                      className={formData.website && !validateWebsite(formData.website) ? 'border-red-500' : ''}
+                    />
+                    {formData.website && !validateWebsite(formData.website) && (
+                      <p className="text-xs text-red-500">Please enter a valid website URL</p>
+                    )}
+                  </div>
+
+                  {/* Country */}
+                  <div className="space-y-2">
+                    <Label htmlFor="country" className="text-sm font-medium">
+                      Country
+                    </Label>
+                    <Input
+                      id="country"
+                      value={formData.country}
+                      onChange={(e) => updateFormField('country', e.target.value)}
+                      placeholder="Indonesia"
                       disabled={submitting}
                     />
                   </div>
 
-                  {/* Description */}
-                  <div className="md:col-span-2 space-y-2">
-                    <Label htmlFor="description" className="text-sm font-medium">
-                      Description *
+                  {/* City */}
+                  <div className="space-y-2">
+                    <Label htmlFor="city" className="text-sm font-medium">
+                      City
                     </Label>
-                    <Textarea
-                      id="description"
-                      value={formData.description}
-                      onChange={(e) => updateFormField('description', e.target.value)}
-                      placeholder="Company description..."
-                      rows={3}
+                    <Input
+                      id="city"
+                      value={formData.city}
+                      onChange={(e) => updateFormField('city', e.target.value)}
+                      placeholder="Jakarta"
                       disabled={submitting}
                     />
                   </div>
+
+                  {/* State */}
+                  <div className="space-y-2">
+                    <Label htmlFor="state" className="text-sm font-medium">
+                      State/Province
+                    </Label>
+                    <Input
+                      id="state"
+                      value={formData.state}
+                      onChange={(e) => updateFormField('state', e.target.value)}
+                      placeholder="DKI Jakarta"
+                      disabled={submitting}
+                    />
+                  </div>
+
+                  {/* Postal Code */}
+                  <div className="space-y-2">
+                    <Label htmlFor="postal_code" className="text-sm font-medium">
+                      Postal Code
+                    </Label>
+                    <Input
+                      id="postal_code"
+                      value={formData.postal_code}
+                      onChange={(e) => updateFormField('postal_code', e.target.value)}
+                      placeholder="12345"
+                      disabled={submitting}
+                    />
+                  </div>
+                </div>
+
+                {/* Address */}
+                <div className="space-y-2">
+                  <Label htmlFor="address" className="text-sm font-medium">
+                    Address
+                  </Label>
+                  <Textarea
+                    id="address"
+                    value={formData.address}
+                    onChange={(e) => updateFormField('address', e.target.value)}
+                    placeholder="Street address"
+                    rows={2}
+                    disabled={submitting}
+                  />
+                </div>
+
+                {/* Description */}
+                <div className="space-y-2">
+                  <Label htmlFor="description" className="text-sm font-medium">
+                    Description
+                  </Label>
+                  <Textarea
+                    id="description"
+                    value={formData.description}
+                    onChange={(e) => updateFormField('description', e.target.value)}
+                    placeholder="Company description..."
+                    rows={3}
+                    disabled={submitting}
+                  />
                 </div>
 
                 <div className="flex gap-3 pt-4">

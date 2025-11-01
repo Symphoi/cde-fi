@@ -155,6 +155,7 @@ const othersItems: NavItem[] = [
       { name: "RBAC", path: "/rbac", pro: false },
       { name: "Projects", path: "/projects", pro: false },
       { name: "Reimbursement Categories", path: "/reimbursement-categories", pro: false },
+      { name: "Settings Format", path: "/numbering-sequences", pro: false },
     ],
   },
 ];

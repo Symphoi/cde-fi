@@ -8,30 +8,38 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { Search, Plus, Edit, Trash2, RefreshCw, Truck, Check, X, Loader2, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
+import { Search, Plus, Edit, Trash2, RefreshCw, Truck, Check, X, Loader2, ChevronLeft, ChevronRight, Sparkles, Building, User, Phone, Mail, MapPin, FileText, CreditCard } from 'lucide-react'
 import { toast } from 'sonner'
 
 // Types
 interface Supplier {
   id: number
   supplier_code: string
-  name: string
+  supplier_name: string
   contact_person: string
   phone: string
   email: string
   address: string
-  is_active: boolean
+  tax_id: string
+  bank_name: string
+  account_number: string
+  payment_terms: number
+  status: 'active' | 'inactive'
   created_at: string
+  updated_at: string
 }
 
 interface SupplierFormData {
   supplier_code: string
-  name: string
+  supplier_name: string
   contact_person: string
   phone: string
   email: string
   address: string
-  is_active: boolean
+  tax_id: string
+  bank_name: string
+  account_number: string
+  payment_terms: string
 }
 
 interface PaginationInfo {
@@ -61,8 +69,13 @@ class SupplierService {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || `HTTP error! status: ${response.status}`);
+      try {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      } catch (jsonError) {
+        const errorText = await response.text();
+        throw new Error(errorText || `HTTP error! status: ${response.status}`);
+      }
     }
     
     return response.json();
@@ -86,14 +99,21 @@ class SupplierService {
   static async createSupplier(data: SupplierFormData) {
     return this.fetchWithAuth('/api/suppliers', {
       method: 'POST',
-      body: JSON.stringify(data)
+      body: JSON.stringify({
+        ...data,
+        payment_terms: parseInt(data.payment_terms) || 30,
+        status: 'active'
+      })
     });
   }
 
-  static async updateSupplier(data: SupplierFormData & { id: number }) {
+  static async updateSupplier(data: SupplierFormData & { id: number; status: 'active' | 'inactive' }) {
     return this.fetchWithAuth('/api/suppliers', {
       method: 'PUT',
-      body: JSON.stringify(data)
+      body: JSON.stringify({
+        ...data,
+        payment_terms: parseInt(data.payment_terms) || 30
+      })
     });
   }
 
@@ -108,6 +128,7 @@ export default function SuppliersPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   
@@ -124,12 +145,15 @@ export default function SuppliersPage() {
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null)
   const [formData, setFormData] = useState<SupplierFormData>({
     supplier_code: '',
-    name: '',
+    supplier_name: '',
     contact_person: '',
     phone: '',
     email: '',
     address: '',
-    is_active: true
+    tax_id: '',
+    bank_name: '',
+    account_number: '',
+    payment_terms: '30'
   })
 
   // Delete confirmation modal
@@ -188,12 +212,15 @@ export default function SuppliersPage() {
     setEditingSupplier(null)
     setFormData({
       supplier_code: '',
-      name: '',
+      supplier_name: '',
       contact_person: '',
       phone: '',
       email: '',
       address: '',
-      is_active: true
+      tax_id: '',
+      bank_name: '',
+      account_number: '',
+      payment_terms: '30'
     })
     setShowForm(true)
   }
@@ -202,17 +229,20 @@ export default function SuppliersPage() {
     setEditingSupplier(supplier)
     setFormData({
       supplier_code: supplier.supplier_code,
-      name: supplier.name,
+      supplier_name: supplier.supplier_name,
       contact_person: supplier.contact_person || '',
       phone: supplier.phone || '',
       email: supplier.email || '',
       address: supplier.address || '',
-      is_active: supplier.is_active
+      tax_id: supplier.tax_id || '',
+      bank_name: supplier.bank_name || '',
+      account_number: supplier.account_number || '',
+      payment_terms: supplier.payment_terms?.toString() || '30'
     })
     setShowForm(true)
   }
 
-  const updateFormField = (field: keyof SupplierFormData, value: string | boolean) => {
+  const updateFormField = (field: keyof SupplierFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }))
   }
 
@@ -231,11 +261,12 @@ export default function SuppliersPage() {
   }
 
   const submitForm = async () => {
+    // Required field validation
     if (!formData.supplier_code.trim()) {
       toast.error('Supplier code is required')
       return
     }
-    if (!formData.name.trim()) {
+    if (!formData.supplier_name.trim()) {
       toast.error('Supplier name is required')
       return
     }
@@ -252,13 +283,21 @@ export default function SuppliersPage() {
       return
     }
 
+    // Validate payment terms
+    const paymentTerms = parseInt(formData.payment_terms)
+    if (isNaN(paymentTerms) || paymentTerms < 0) {
+      toast.error('Please enter valid payment terms')
+      return
+    }
+
     try {
       setSubmitting(true)
       
       if (editingSupplier) {
         const result = await SupplierService.updateSupplier({
           ...formData,
-          id: editingSupplier.id
+          id: editingSupplier.id,
+          status: editingSupplier.status
         })
         toast.success(result.message || 'Supplier updated successfully')
       } else {
@@ -292,17 +331,17 @@ export default function SuppliersPage() {
     if (!supplierToDelete) return
 
     try {
-      setLoading(true)
+      setActionLoading(supplierToDelete.supplier_code)
       const result = await SupplierService.deleteSupplier(supplierToDelete.id)
       toast.success(result.message || 'Supplier deleted successfully')
       setShowDeleteModal(false)
       setSupplierToDelete(null)
-      fetchSuppliers()
+      await fetchSuppliers()
     } catch (error: any) {
       console.error('Error deleting supplier:', error)
       toast.error(error.message || 'Failed to delete supplier')
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
@@ -313,24 +352,35 @@ export default function SuppliersPage() {
 
   const toggleStatus = async (supplier: Supplier) => {
     try {
-      setLoading(true)
+      setActionLoading(supplier.supplier_code)
+      const newStatus = supplier.status === 'active' ? 'inactive' : 'active'
       await SupplierService.updateSupplier({
-        ...supplier,
-        is_active: !supplier.is_active
+        supplier_code: supplier.supplier_code,
+        supplier_name: supplier.supplier_name,
+        contact_person: supplier.contact_person || '',
+        phone: supplier.phone || '',
+        email: supplier.email || '',
+        address: supplier.address || '',
+        tax_id: supplier.tax_id || '',
+        bank_name: supplier.bank_name || '',
+        account_number: supplier.account_number || '',
+        payment_terms: supplier.payment_terms?.toString() || '30',
+        id: supplier.id,
+        status: newStatus
       })
-      toast.success(`Supplier ${!supplier.is_active ? 'activated' : 'deactivated'}`)
-      fetchSuppliers()
+      toast.success(`Supplier ${newStatus === 'active' ? 'activated' : 'deactivated'}`)
+      await fetchSuppliers()
     } catch (error: any) {
       console.error('Error updating supplier status:', error)
       toast.error(error.message || 'Failed to update supplier status')
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
   // Status badge
-  const getStatusBadge = (isActive: boolean) => {
-    return isActive ? (
+  const getStatusBadge = (status: 'active' | 'inactive') => {
+    return status === 'active' ? (
       <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">
         <Check className="h-3 w-3 mr-1" />
         Active
@@ -341,6 +391,11 @@ export default function SuppliersPage() {
         Inactive
       </Badge>
     )
+  }
+
+  // Format payment terms
+  const formatPaymentTerms = (terms: number) => {
+    return `${terms} days`
   }
 
   // Pagination component
@@ -359,6 +414,7 @@ export default function SuppliersPage() {
             value={pagination.limit}
             onChange={(e) => handleLimitChange(Number(e.target.value))}
             className="border rounded px-2 py-1 text-sm"
+            disabled={loading}
           >
             <option value={5}>5</option>
             <option value={10}>10</option>
@@ -372,7 +428,7 @@ export default function SuppliersPage() {
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(pagination.page - 1)}
-            disabled={pagination.page === 1}
+            disabled={pagination.page === 1 || loading}
             className="h-8 w-8 p-0"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -386,7 +442,7 @@ export default function SuppliersPage() {
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(pagination.page + 1)}
-            disabled={pagination.page === pagination.totalPages}
+            disabled={pagination.page === pagination.totalPages || loading}
             className="h-8 w-8 p-0"
           >
             <ChevronRight className="h-4 w-4" />
@@ -405,7 +461,7 @@ export default function SuppliersPage() {
         <div className="bg-white rounded-lg max-w-md w-full p-6">
           <h3 className="text-lg font-semibold mb-4">Confirm Delete</h3>
           <div className="text-gray-600 mb-6">
-            Are you sure you want to delete supplier <strong>{supplierToDelete.name}</strong> ({supplierToDelete.supplier_code})?
+            Are you sure you want to delete supplier <strong>{supplierToDelete.supplier_name}</strong> ({supplierToDelete.supplier_code})?
             This action cannot be undone.
           </div>
           <div className="flex gap-3">
@@ -413,7 +469,7 @@ export default function SuppliersPage() {
               variant="outline" 
               className="flex-1"
               onClick={handleDeleteCancel}
-              disabled={loading}
+              disabled={actionLoading === supplierToDelete.supplier_code}
             >
               Cancel
             </Button>
@@ -421,9 +477,16 @@ export default function SuppliersPage() {
               variant="destructive"
               className="flex-1"
               onClick={handleDeleteConfirm}
-              disabled={loading}
+              disabled={actionLoading === supplierToDelete.supplier_code}
             >
-              {loading ? 'Deleting...' : 'Yes, Delete'}
+              {actionLoading === supplierToDelete.supplier_code ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Yes, Delete'
+              )}
             </Button>
           </div>
         </div>
@@ -449,7 +512,11 @@ export default function SuppliersPage() {
               </div>
               
               <div className="flex gap-2">
-                <Button onClick={handleCreateNew} className="bg-blue-600 hover:bg-blue-700 text-white">
+                <Button 
+                  onClick={handleCreateNew} 
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  disabled={loading}
+                >
                   <Plus className="h-4 w-4 mr-2" />
                   Add Supplier
                 </Button>
@@ -480,6 +547,7 @@ export default function SuppliersPage() {
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="px-3 py-2 border rounded-md text-sm"
+                disabled={loading}
               >
                 <option value="">All Status</option>
                 <option value="active">Active</option>
@@ -508,7 +576,7 @@ export default function SuppliersPage() {
                       <TableHead className="min-w-32 font-semibold text-gray-900">Contact Person</TableHead>
                       <TableHead className="min-w-32 font-semibold text-gray-900">Email</TableHead>
                       <TableHead className="min-w-32 font-semibold text-gray-900">Phone</TableHead>
-                      <TableHead className="min-w-48 font-semibold text-gray-900">Address</TableHead>
+                      <TableHead className="min-w-32 font-semibold text-gray-900">Payment Terms</TableHead>
                       <TableHead className="w-24 text-center font-semibold text-gray-900">Status</TableHead>
                       <TableHead className="w-28 text-center font-semibold text-gray-900">Actions</TableHead>
                     </TableRow>
@@ -519,7 +587,12 @@ export default function SuppliersPage() {
                         <TableCell colSpan={9} className="text-center py-12">
                           <div className="flex flex-col items-center justify-center text-gray-500">
                             <Truck className="h-12 w-12 mb-4 text-gray-300" />
-                            <p className="text-lg font-medium mb-2">No suppliers found</p>
+                            <p className="text-lg font-medium mb-2">
+                              {searchTerm || statusFilter ? 'No suppliers found' : 'No suppliers yet'}
+                            </p>
+                            <p className="text-sm text-gray-400 mb-4">
+                              {searchTerm || statusFilter ? 'Try adjusting your search terms' : 'Get started by adding your first supplier'}
+                            </p>
                             <Button onClick={handleCreateNew} size="sm">
                               <Plus className="h-4 w-4 mr-2" />
                               Add Supplier
@@ -534,43 +607,41 @@ export default function SuppliersPage() {
                             {(pagination.page - 1) * pagination.limit + index + 1}
                           </TableCell>
                           <TableCell>
-                            <span className="font-semibold text-blue-600">
+                            <span className="font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded text-sm">
                               {supplier.supplier_code}
                             </span>
                           </TableCell>
                           <TableCell className="font-medium text-gray-900">
-                            {supplier.name}
+                            {supplier.supplier_name}
                           </TableCell>
                           <TableCell>
                             {supplier.contact_person ? (
-                              <span className="text-gray-600">{supplier.contact_person}</span>
-                            ) : (
-                              <span className="text-gray-400">-</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {supplier.email ? (
-                              <span className="text-gray-600">{supplier.email}</span>
-                            ) : (
-                              <span className="text-gray-400">-</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {supplier.phone ? (
-                              <span className="text-gray-600">{supplier.phone}</span>
-                            ) : (
-                              <span className="text-gray-400">-</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="max-w-[200px]">
-                            {supplier.address ? (
-                              <span className="text-gray-600 text-sm">{supplier.address}</span>
+                              <span className="text-gray-600 text-sm">{supplier.contact_person}</span>
                             ) : (
                               <span className="text-gray-400 text-sm">-</span>
                             )}
                           </TableCell>
+                          <TableCell className="max-w-[200px] truncate">
+                            {supplier.email ? (
+                              <span className="text-gray-600 text-sm">{supplier.email}</span>
+                            ) : (
+                              <span className="text-gray-400 text-sm">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {supplier.phone ? (
+                              <span className="text-gray-600 text-sm">{supplier.phone}</span>
+                            ) : (
+                              <span className="text-gray-400 text-sm">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-gray-600 text-sm">
+                              {formatPaymentTerms(supplier.payment_terms)}
+                            </span>
+                          </TableCell>
                           <TableCell className="text-center">
-                            {getStatusBadge(supplier.is_active)}
+                            {getStatusBadge(supplier.status)}
                           </TableCell>
                           <TableCell className="text-center">
                             <div className="flex gap-1 justify-center">
@@ -580,6 +651,7 @@ export default function SuppliersPage() {
                                 variant="outline"
                                 className="h-8 w-8 p-0 border-gray-300 hover:bg-gray-50"
                                 title="Edit"
+                                disabled={actionLoading !== null}
                               >
                                 <Edit className="h-3 w-3" />
                               </Button>
@@ -588,20 +660,32 @@ export default function SuppliersPage() {
                                 size="sm"
                                 variant="outline"
                                 className={`h-8 w-8 p-0 border-gray-300 hover:bg-gray-50 ${
-                                  supplier.is_active ? 'text-orange-600' : 'text-green-600'
+                                  supplier.status === 'active' ? 'text-orange-600' : 'text-green-600'
                                 }`}
-                                title={supplier.is_active ? 'Deactivate' : 'Activate'}
+                                title={supplier.status === 'active' ? 'Deactivate' : 'Activate'}
+                                disabled={actionLoading === supplier.supplier_code}
                               >
-                                {supplier.is_active ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
+                                {actionLoading === supplier.supplier_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : supplier.status === 'active' ? (
+                                  <X className="h-3 w-3" />
+                                ) : (
+                                  <Check className="h-3 w-3" />
+                                )}
                               </Button>
                               <Button
                                 onClick={() => handleDeleteClick(supplier)}
                                 size="sm"
                                 variant="outline"
-                                className="h-8 w-8 p-0 text-red-600 hover:text-red-700 border-gray-300 hover:bg-gray-50"
+                                className="h-8 w-8 p-0 border-gray-300 hover:bg-red-50 text-red-600"
                                 title="Delete"
+                                disabled={actionLoading === supplier.supplier_code}
                               >
-                                <Trash2 className="h-3 w-3" />
+                                {actionLoading === supplier.supplier_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
                               </Button>
                             </div>
                           </TableCell>
@@ -618,7 +702,7 @@ export default function SuppliersPage() {
           </CardContent>
         </Card>
 
-        {/* Supplier Form - Below Table */}
+        {/* Supplier Form */}
         {showForm && (
           <Card className="bg-white border shadow-sm rounded-lg">
             <CardHeader>
@@ -627,11 +711,12 @@ export default function SuppliersPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
+              <div className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Supplier Code */}
                   <div className="space-y-2">
-                    <Label htmlFor="supplier_code" className="text-sm font-medium">
+                    <Label htmlFor="supplier_code" className="text-sm font-medium flex items-center gap-2">
+                      <Building className="h-4 w-4" />
                       Supplier Code *
                     </Label>
                     <div className="flex gap-2">
@@ -665,13 +750,14 @@ export default function SuppliersPage() {
 
                   {/* Supplier Name */}
                   <div className="space-y-2">
-                    <Label htmlFor="name" className="text-sm font-medium">
+                    <Label htmlFor="supplier_name" className="text-sm font-medium flex items-center gap-2">
+                      <Building className="h-4 w-4" />
                       Supplier Name *
                     </Label>
                     <Input
-                      id="name"
-                      value={formData.name}
-                      onChange={(e) => updateFormField('name', e.target.value)}
+                      id="supplier_name"
+                      value={formData.supplier_name}
+                      onChange={(e) => updateFormField('supplier_name', e.target.value)}
                       placeholder="PT Example Supplier"
                       disabled={submitting}
                     />
@@ -679,7 +765,8 @@ export default function SuppliersPage() {
 
                   {/* Contact Person */}
                   <div className="space-y-2">
-                    <Label htmlFor="contact_person" className="text-sm font-medium">
+                    <Label htmlFor="contact_person" className="text-sm font-medium flex items-center gap-2">
+                      <User className="h-4 w-4" />
                       Contact Person
                     </Label>
                     <Input
@@ -693,7 +780,8 @@ export default function SuppliersPage() {
 
                   {/* Phone */}
                   <div className="space-y-2">
-                    <Label htmlFor="phone" className="text-sm font-medium">
+                    <Label htmlFor="phone" className="text-sm font-medium flex items-center gap-2">
+                      <Phone className="h-4 w-4" />
                       Phone
                     </Label>
                     <Input
@@ -712,7 +800,8 @@ export default function SuppliersPage() {
 
                   {/* Email */}
                   <div className="space-y-2">
-                    <Label htmlFor="email" className="text-sm font-medium">
+                    <Label htmlFor="email" className="text-sm font-medium flex items-center gap-2">
+                      <Mail className="h-4 w-4" />
                       Email
                     </Label>
                     <Input
@@ -729,35 +818,82 @@ export default function SuppliersPage() {
                     )}
                   </div>
 
-                  {/* Address */}
-                  <div className="md:col-span-2 space-y-2">
-                    <Label htmlFor="address" className="text-sm font-medium">
-                      Address
+                  {/* Tax ID */}
+                  <div className="space-y-2">
+                    <Label htmlFor="tax_id" className="text-sm font-medium flex items-center gap-2">
+                      <FileText className="h-4 w-4" />
+                      Tax ID
                     </Label>
-                    <Textarea
-                      id="address"
-                      value={formData.address}
-                      onChange={(e) => updateFormField('address', e.target.value)}
-                      placeholder="Supplier address..."
-                      rows={3}
+                    <Input
+                      id="tax_id"
+                      value={formData.tax_id}
+                      onChange={(e) => updateFormField('tax_id', e.target.value)}
+                      placeholder="12.345.678.9-012.345"
                       disabled={submitting}
                     />
                   </div>
 
-                  {/* Status */}
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="is_active"
-                      checked={formData.is_active}
-                      onChange={(e) => updateFormField('is_active', e.target.checked)}
-                      disabled={submitting}
-                      className="rounded border-gray-300"
-                    />
-                    <Label htmlFor="is_active" className="text-sm font-medium">
-                      Active
+                  {/* Payment Terms */}
+                  <div className="space-y-2">
+                    <Label htmlFor="payment_terms" className="text-sm font-medium flex items-center gap-2">
+                      <CreditCard className="h-4 w-4" />
+                      Payment Terms (days)
                     </Label>
+                    <Input
+                      id="payment_terms"
+                      type="number"
+                      min="0"
+                      value={formData.payment_terms}
+                      onChange={(e) => updateFormField('payment_terms', e.target.value)}
+                      placeholder="30"
+                      disabled={submitting}
+                    />
                   </div>
+                </div>
+
+                {/* Bank Information */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="bank_name" className="text-sm font-medium">
+                      Bank Name
+                    </Label>
+                    <Input
+                      id="bank_name"
+                      value={formData.bank_name}
+                      onChange={(e) => updateFormField('bank_name', e.target.value)}
+                      placeholder="Bank Name"
+                      disabled={submitting}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="account_number" className="text-sm font-medium">
+                      Account Number
+                    </Label>
+                    <Input
+                      id="account_number"
+                      value={formData.account_number}
+                      onChange={(e) => updateFormField('account_number', e.target.value)}
+                      placeholder="Account Number"
+                      disabled={submitting}
+                    />
+                  </div>
+                </div>
+
+                {/* Address */}
+                <div className="space-y-2">
+                  <Label htmlFor="address" className="text-sm font-medium flex items-center gap-2">
+                    <MapPin className="h-4 w-4" />
+                    Address
+                  </Label>
+                  <Textarea
+                    id="address"
+                    value={formData.address}
+                    onChange={(e) => updateFormField('address', e.target.value)}
+                    placeholder="Supplier address..."
+                    rows={3}
+                    disabled={submitting}
+                  />
                 </div>
 
                 <div className="flex gap-3 pt-4">

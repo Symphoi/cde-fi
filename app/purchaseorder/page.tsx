@@ -1,4 +1,3 @@
-// app/purchase-order/page.tsx
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
@@ -11,7 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Search, Plus, FileText, Trash2, ChevronUp, ChevronLeft, ChevronRight, Upload, Download, Eye, Calendar, CreditCard, Banknote, Landmark } from 'lucide-react'
 
-// Type definitions - UPDATED FOR BACKEND INTEGRATION
+// Type definitions
 interface SalesOrder {
   so_code: string
   customer_name: string
@@ -21,6 +20,7 @@ interface SalesOrder {
   items: OrderItem[]
   po_count: number
   created_at: string
+  total_amount: number
 }
 
 interface OrderItem {
@@ -78,7 +78,6 @@ interface POFormData {
   invoiceFile?: File
 }
 
-// Payment Types - UPDATED FOR BACKEND
 interface Payment {
   payment_code: string
   po_code: string
@@ -115,6 +114,26 @@ interface PaymentFormData {
   documents: File[]
 }
 
+interface Supplier {
+  supplier_code: string
+  supplier_name: string
+  contact_person?: string
+  phone?: string
+  email?: string
+  bank_name?: string
+  account_number?: string
+}
+
+// Helper function untuk format Rupiah
+const formatRupiah = (amount: number): string => {
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  }).format(amount);
+}
+
 export default function PurchaseOrderPage() {
   // State untuk table
   const [searchTerm, setSearchTerm] = useState('')
@@ -128,6 +147,7 @@ export default function PurchaseOrderPage() {
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([])
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
+  const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
 
   // State untuk form PO
@@ -165,7 +185,8 @@ export default function PurchaseOrderPage() {
       
       if (activeTable === 'so' || activeTable === 'po') {
         // Fetch sales orders
-        const soResponse = await fetch('/api/sales-orders', {
+        const soResponse = await fetch('/api/purchase-orders', {
+          method: 'OPTIONS',
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -195,6 +216,20 @@ export default function PurchaseOrderPage() {
             setPayments(allPayments)
           }
         }
+
+        // Fetch suppliers untuk dropdown
+        const suppliersResponse = await fetch('/api/suppliers', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        })
+        
+        if (suppliersResponse.ok) {
+          const suppliersData = await suppliersResponse.json()
+          if (suppliersData.success) {
+            setSuppliers(suppliersData.data)
+          }
+        }
       }
       
     } catch (error) {
@@ -204,10 +239,6 @@ export default function PurchaseOrderPage() {
       setLoading(false)
     }
   }
-
-  const allPOs = purchaseOrders
-  const paidPOs = allPOs.filter(po => po.status === 'paid')
-  const payablePOs = allPOs.filter(po => po.status === 'approved_finance' && (!po.payments || po.payments.length === 0))
 
   // Filter logic
   const filteredSO = salesOrders.filter(so => {
@@ -223,7 +254,7 @@ export default function PurchaseOrderPage() {
     return matchesSearch && matchesStatus && matchesDate
   })
 
-  const filteredPO = allPOs.filter(po => {
+  const filteredPO = purchaseOrders.filter(po => {
     const searchLower = searchTerm?.toLowerCase() || ''
     
     return po.po_code?.toLowerCase()?.includes(searchLower) ||
@@ -249,8 +280,8 @@ export default function PurchaseOrderPage() {
   const currentItems = currentData.slice(indexOfFirstItem, indexOfLastItem)
   const totalPages = Math.ceil(currentData.length / itemsPerPage)
 
-  // FIXED: Fungsi untuk menghitung remaining quantity untuk SO tertentu
-  const getRemainingQuantityForSO = (itemId: string, productCode: string, soCode: string) => {
+  // Fungsi untuk menghitung remaining quantity untuk SO tertentu
+  const getRemainingQuantityForSO = (itemId: string, productCode: string, soCode: string): number => {
     const so = salesOrders.find(so => so.so_code === soCode)
     if (!so) return 0
 
@@ -271,16 +302,16 @@ export default function PurchaseOrderPage() {
     return Math.max(0, item.quantity - totalInExistingPOs)
   }
 
-  // FIXED: Fungsi untuk cek apakah SO masih bisa buat PO (ada item yang remaining > 0)
-  const canCreatePO = (so: SalesOrder) => {
+  // Fungsi untuk cek apakah SO masih bisa buat PO (ada item yang remaining > 0)
+  const canCreatePO = (so: SalesOrder): boolean => {
     return so.items.some(item => {
       const remaining = getRemainingQuantityForSO(item.so_item_code, item.product_code, so.so_code)
       return remaining > 0
     })
   }
 
-  // FIXED: Fungsi untuk menghitung remaining quantity yang benar (dengan selectedSO)
-  const getRemainingQuantity = (itemId: string, productCode: string) => {
+  // Fungsi untuk menghitung remaining quantity yang benar (dengan selectedSO)
+  const getRemainingQuantity = (itemId: string, productCode: string): number => {
     if (!selectedSO) return 0
 
     const item = selectedSO.items.find(item => item.so_item_code === itemId)
@@ -311,7 +342,7 @@ export default function PurchaseOrderPage() {
 
   // Handlers untuk PO
   const handleCreatePO = (so: SalesOrder) => {
-    // FIXED: Cek dulu apakah masih bisa buat PO
+    // Cek dulu apakah masih bisa buat PO
     if (!canCreatePO(so)) {
       alert('Tidak bisa membuat PO untuk Sales Order ini. Semua quantity sudah diproses.')
       return
@@ -325,7 +356,6 @@ export default function PurchaseOrderPage() {
   const addPOForm = (item: OrderItem) => {
     const remaining = getRemainingQuantity(item.so_item_code, item.product_code)
     
-    // PERUBAHAN: Boleh buat form meski remaining 0
     const newForm: POFormData = {
       id: Date.now().toString(),
       itemId: item.so_item_code,
@@ -350,7 +380,6 @@ export default function PurchaseOrderPage() {
         if (field === 'quantity') {
           const numericValue = typeof value === 'string' ? parseInt(value) || 0 : value
           
-          // PERUBAHAN: Validasi lebih longgar
           if (numericValue < 0) {
             alert('Quantity tidak boleh negatif')
             return form
@@ -411,15 +440,13 @@ export default function PurchaseOrderPage() {
 
       const remaining = getRemainingQuantity(form.itemId, form.sku)
       
-      // PERUBAHAN: Boleh submit meski remaining 0, asal quantity di form valid
       if (form.quantity > (remaining + form.quantity)) {
-        // Ini seharusnya tidak terjadi karena sudah divalidasi di updatePOForm
         alert(`Quantity exceeds available quantity for ${form.productName}. Available: ${remaining}`)
         return
       }
     }
 
-    // PERUBAHAN: Cek apakah ada setidaknya satu form dengan quantity > 0
+    // Cek apakah ada setidaknya satu form dengan quantity > 0
     const hasValidQuantity = poForms.some(form => form.quantity > 0)
     if (!hasValidQuantity) {
       alert('Please enter at least one item with quantity greater than 0')
@@ -651,7 +678,7 @@ export default function PurchaseOrderPage() {
   }
 
   const getStatusColor = (status: string) => {
-    const colors = {
+    const colors: {[key: string]: string} = {
       // SO Status
       submitted: 'bg-blue-100 text-blue-800',
       processing: 'bg-yellow-100 text-yellow-800',
@@ -670,7 +697,7 @@ export default function PurchaseOrderPage() {
       pending: 'bg-yellow-100 text-yellow-800',
       failed: 'bg-red-100 text-red-800'
     }
-    return colors[status as keyof typeof colors] || 'bg-gray-100 text-gray-800'
+    return colors[status] || 'bg-gray-100 text-gray-800'
   }
 
   const getStatusText = (status: string) => {
@@ -1063,7 +1090,7 @@ export default function PurchaseOrderPage() {
                               <Button 
                                 onClick={() => handleCreatePO(item as SalesOrder)}
                                 size="sm"
-                                disabled={!canCreatePO(item as SalesOrder)} // FIXED: Disable jika tidak bisa buat PO
+                                disabled={!canCreatePO(item as SalesOrder)}
                               >
                                 <Plus className="h-4 w-4 mr-1" />
                                 Create PO
@@ -1079,7 +1106,7 @@ export default function PurchaseOrderPage() {
                             </TableCell>
                             <TableCell>{(item as PurchaseOrder).date}</TableCell>
                             <TableCell className="font-semibold">
-                              Rp {(item as PurchaseOrder).total_amount.toLocaleString()}
+                              {formatRupiah((item as PurchaseOrder).total_amount)}
                             </TableCell>
                             <TableCell>
                               <Badge className={getStatusColor((item as PurchaseOrder).status)}>
@@ -1118,7 +1145,7 @@ export default function PurchaseOrderPage() {
                             <TableCell className="text-blue-600">{(item as Payment).so_reference || '-'}</TableCell>
                             <TableCell>{(item as Payment).supplier_name}</TableCell>
                             <TableCell className="font-semibold">
-                              Rp {(item as Payment).amount.toLocaleString()}
+                              {formatRupiah((item as Payment).amount)}
                             </TableCell>
                             <TableCell>{(item as Payment).payment_date}</TableCell>
                             <TableCell>
@@ -1245,7 +1272,6 @@ export default function PurchaseOrderPage() {
                                 <Button 
                                   onClick={() => addPOForm(item)}
                                   size="sm"
-                                  // PERUBAHAN: Tidak disable meski remaining 0
                                 >
                                   <Plus className="h-4 w-4 mr-1" />
                                   Add PO Form
@@ -1304,11 +1330,18 @@ export default function PurchaseOrderPage() {
 
                               <div className="space-y-1">
                                 <Label className="text-sm">Supplier Name *</Label>
-                                <Input
+                                <select
                                   value={form.supplier}
                                   onChange={(e) => updatePOForm(form.id, 'supplier', e.target.value)}
-                                  placeholder="Enter supplier name"
-                                />
+                                  className="w-full border rounded px-2 py-1"
+                                >
+                                  <option value="">Pilih Supplier</option>
+                                  {suppliers.map(supplier => (
+                                    <option key={supplier.supplier_code} value={supplier.supplier_name}>
+                                      {supplier.supplier_name}
+                                    </option>
+                                  ))}
+                                </select>
                               </div>
 
                               <div className="space-y-1">
@@ -1329,7 +1362,7 @@ export default function PurchaseOrderPage() {
                                   onChange={(e) => updatePOForm(form.id, 'quantity', parseInt(e.target.value) || 0)}
                                   placeholder="Enter quantity"
                                   min="1"
-                                  max={remaining + form.quantity} // Bisa sampai remaining + quantity yang sudah di form
+                                  max={remaining + form.quantity}
                                 />
                                 <p className="text-xs text-gray-500 mt-1">
                                   Remaining: {remaining} pcs
@@ -1371,15 +1404,15 @@ export default function PurchaseOrderPage() {
                                     <Upload className="h-4 w-4 mr-2" />
                                     Upload Invoice
                                     <input
-                                     ref={el => {
-    if (el) {
-      fileInputRefs.current[form.id] = el;
-    }
-  }}
-  type="file"
-  className="hidden"
-  onChange={(e) => handleInvoiceUpload(form.id, e)}
-  accept=".pdf,.jpg,.jpeg,.png"
+                                      ref={el => {
+                                        if (el) {
+                                          fileInputRefs.current[form.id] = el;
+                                        }
+                                      }}
+                                      type="file"
+                                      className="hidden"
+                                      onChange={(e) => handleInvoiceUpload(form.id, e)}
+                                      accept=".pdf,.jpg,.jpeg,.png"
                                     />
                                   </Button>
                                 )}
@@ -1449,7 +1482,7 @@ export default function PurchaseOrderPage() {
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">Total Amount</Label>
                         <div className="p-2 bg-gray-50 rounded border font-semibold text-green-600">
-                          Rp {selectedPO.total_amount.toLocaleString()}
+                          {formatRupiah(selectedPO.total_amount)}
                         </div>
                       </div>
                     </div>
@@ -1691,7 +1724,7 @@ export default function PurchaseOrderPage() {
                       <div className="space-y-3">
                         <div className="flex justify-between">
                           <span className="text-sm font-medium">Amount:</span>
-                          <span className="font-semibold text-green-600">Rp {viewingPayment.amount.toLocaleString()}</span>
+                          <span className="font-semibold text-green-600">{formatRupiah(viewingPayment.amount)}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm font-medium">Payment Date:</span>

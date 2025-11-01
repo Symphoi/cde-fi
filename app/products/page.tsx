@@ -8,28 +8,39 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { Search, Plus, Edit, Trash2, RefreshCw, Package, Check, X, Loader2, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
+import { Search, Plus, Edit, Trash2, RefreshCw, Package, Check, X, Loader2, ChevronLeft, ChevronRight, Sparkles, DollarSign, Tag } from 'lucide-react'
 import { toast } from 'sonner'
 
 // Types
 interface Product {
   id: number
   product_code: string
-  name: string
+  product_name: string
   description: string
-  unit: string
-  category_code: string
+  category: string
+  category_name?: string
+  unit_price: number
+  cost_price: number
   is_active: boolean
   created_at: string
+  updated_at: string
+}
+
+interface Category {
+  id: number
+  category_code: string
+  name: string
+  description: string
+  is_active: boolean
 }
 
 interface ProductFormData {
   product_code: string
-  name: string
+  product_name: string
   description: string
-  unit: string
-  category_code: string
-  is_active: boolean
+  category: string
+  unit_price: string
+  cost_price: string
 }
 
 interface PaginationInfo {
@@ -58,39 +69,12 @@ class ProductService {
       },
     });
 
-    return this.handleResponse(response);
-  }
-
-  private static async handleResponse(response: Response) {
-    // Clone response untuk bisa baca body multiple times
-    const responseClone = response.clone();
-    const contentType = response.headers.get('content-type');
-    
-    if (contentType && contentType.includes('text/html')) {
-      const text = await responseClone.text();
-      console.error('HTML Response received:', text.substring(0, 500));
-      
-      if (response.status === 401) {
-        toast.error('Session expired. Please login again.');
-        window.location.href = '/login';
-        throw new Error('Unauthorized - Please login again');
-      }
-      
-      if (response.status === 404) {
-        throw new Error('API endpoint not found. Please check the URL.');
-      }
-      
-      throw new Error(`Server error: Received HTML instead of JSON (Status: ${response.status})`);
-    }
-    
     if (!response.ok) {
       try {
-        // Coba parse sebagai JSON dulu
         const errorData = await response.json();
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       } catch (jsonError) {
-        // Kalo gagal, baca sebagai text dari clone
-        const errorText = await responseClone.text();
+        const errorText = await response.text();
         throw new Error(errorText || `HTTP error! status: ${response.status}`);
       }
     }
@@ -98,44 +82,50 @@ class ProductService {
     return response.json();
   }
 
-  // Get all products with pagination
-  // Di ProductService - UPDATE interface
-static async getProducts(filters: {
-  search?: string;
-  status?: string;
-  category?: string;
-  type?: string;  // ← TAMBAH INI
-  page?: number;
-  limit?: number;
-} = {}) {
-  const params = new URLSearchParams();
-  if (filters.search) params.append('search', filters.search);
-  if (filters.status) params.append('status', filters.status);
-  if (filters.category) params.append('category', filters.category);
-  if (filters.type) params.append('type', filters.type);  // ← TAMBAH INI
-  params.append('page', String(filters.page || 1));
-  params.append('limit', String(filters.limit || 10));
+  static async getProducts(filters: {
+    search?: string;
+    status?: string;
+    category?: string;
+    page?: number;
+    limit?: number;
+  } = {}) {
+    const params = new URLSearchParams();
+    if (filters.search) params.append('search', filters.search);
+    if (filters.status) params.append('status', filters.status);
+    if (filters.category) params.append('category', filters.category);
+    params.append('page', String(filters.page || 1));
+    params.append('limit', String(filters.limit || 10));
 
-  return this.fetchWithAuth(`/api/products?${params}`);
-}
+    return this.fetchWithAuth(`/api/products?${params}`);
+  }
 
-  // Create product
+  static async getCategories() {
+    return this.fetchWithAuth('/api/products?type=categories');
+  }
+
   static async createProduct(data: ProductFormData) {
     return this.fetchWithAuth('/api/products', {
       method: 'POST',
-      body: JSON.stringify(data)
+      body: JSON.stringify({
+        ...data,
+        unit_price: parseFloat(data.unit_price) || 0,
+        cost_price: parseFloat(data.cost_price) || 0,
+        is_active: true
+      })
     });
   }
 
-  // Update product
-  static async updateProduct(data: ProductFormData & { id: number }) {
+  static async updateProduct(data: ProductFormData & { id: number; is_active: boolean }) {
     return this.fetchWithAuth('/api/products', {
       method: 'PUT',
-      body: JSON.stringify(data)
+      body: JSON.stringify({
+        ...data,
+        unit_price: parseFloat(data.unit_price) || 0,
+        cost_price: parseFloat(data.cost_price) || 0
+      })
     });
   }
 
-  // Delete product
   static async deleteProduct(id: number) {
     return this.fetchWithAuth(`/api/products?id=${id}`, {
       method: 'DELETE'
@@ -147,10 +137,11 @@ export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('')
-  const [categories, setCategories] = useState<any[]>([])
+  const [categories, setCategories] = useState<Category[]>([])
   
   // Pagination state
   const [pagination, setPagination] = useState<PaginationInfo>({
@@ -165,31 +156,29 @@ export default function ProductsPage() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [formData, setFormData] = useState<ProductFormData>({
     product_code: '',
-    name: '',
+    product_name: '',
     description: '',
-    unit: '',
-    category_code: '',
-    is_active: true
+    category: '',
+    unit_price: '0',
+    cost_price: '0'
   })
 
   // Delete confirmation modal
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [productToDelete, setProductToDelete] = useState<Product | null>(null)
 
-  // Fetch categories untuk dropdown
-// ✅ FIX - pake ProductService yang ada auth
-const fetchCategories = async () => {
-  try {
-    const response = await ProductService.getProducts({
-      type: 'categories'  // ← Kirim type sebagai filter
-    });
-    if (response.success) {
-      setCategories(response.data);
+  // Fetch categories
+  const fetchCategories = async () => {
+    try {
+      const response = await ProductService.getCategories();
+      if (response.success) {
+        setCategories(response.data);
+      }
+    } catch (error: any) {
+      console.error('Error fetching categories:', error);
+      toast.error('Failed to load categories');
     }
-  } catch (error) {
-    console.error('Error fetching categories:', error);
   }
-}
 
   // Fetch data dengan pagination
   const fetchProducts = async (page: number = pagination.page) => {
@@ -221,21 +210,11 @@ const fetchCategories = async () => {
   }, [searchTerm, statusFilter, categoryFilter])
 
   // Generate unique product code
-  const generateProductCode = async () => {
-    try {
-      // Fallback manual generation
-      const randomSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const productCode = `PROD${randomSuffix}`;
-      setFormData(prev => ({ ...prev, product_code: productCode }))
-      toast.success('Product code generated successfully')
-    } catch (error: any) {
-      console.error('Error generating product code:', error)
-      // Fallback manual generation
-      const randomSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
-      const productCode = `PROD${randomSuffix}`;
-      setFormData(prev => ({ ...prev, product_code: productCode }))
-      toast.success('Product code generated successfully')
-    }
+  const generateProductCode = () => {
+    const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const productCode = `PROD${randomSuffix}`;
+    setFormData(prev => ({ ...prev, product_code: productCode }))
+    toast.success('Product code generated successfully')
   }
 
   // Pagination handlers
@@ -255,11 +234,11 @@ const fetchCategories = async () => {
     setEditingProduct(null)
     setFormData({
       product_code: '',
-      name: '',
+      product_name: '',
       description: '',
-      unit: '',
-      category_code: '',
-      is_active: true
+      category: '',
+      unit_price: '0',
+      cost_price: '0'
     })
     setShowForm(true)
   }
@@ -268,26 +247,50 @@ const fetchCategories = async () => {
     setEditingProduct(product)
     setFormData({
       product_code: product.product_code,
-      name: product.name,
+      product_name: product.product_name,
       description: product.description || '',
-      unit: product.unit || '',
-      category_code: product.category_code || '',
-      is_active: product.is_active
+      category: product.category || '',
+      unit_price: product.unit_price?.toString() || '0',
+      cost_price: product.cost_price?.toString() || '0'
     })
     setShowForm(true)
   }
 
-  const updateFormField = (field: keyof ProductFormData, value: string | boolean) => {
+  const updateFormField = (field: keyof ProductFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }))
   }
 
+  // Format currency
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      minimumFractionDigits: 0
+    }).format(amount)
+  }
+
   const submitForm = async () => {
+    // Required field validation
     if (!formData.product_code.trim()) {
       toast.error('Product code is required')
       return
     }
-    if (!formData.name.trim()) {
+    if (!formData.product_name.trim()) {
       toast.error('Product name is required')
+      return
+    }
+
+    // Validate prices
+    const unitPrice = parseFloat(formData.unit_price)
+    const costPrice = parseFloat(formData.cost_price)
+    
+    if (isNaN(unitPrice) || unitPrice < 0) {
+      toast.error('Please enter a valid unit price')
+      return
+    }
+
+    if (isNaN(costPrice) || costPrice < 0) {
+      toast.error('Please enter a valid cost price')
       return
     }
 
@@ -297,7 +300,8 @@ const fetchCategories = async () => {
       if (editingProduct) {
         const result = await ProductService.updateProduct({
           ...formData,
-          id: editingProduct.id
+          id: editingProduct.id,
+          is_active: editingProduct.is_active
         })
         toast.success(result.message || 'Product updated successfully')
       } else {
@@ -331,17 +335,17 @@ const fetchCategories = async () => {
     if (!productToDelete) return
 
     try {
-      setLoading(true)
+      setActionLoading(productToDelete.product_code)
       const result = await ProductService.deleteProduct(productToDelete.id)
       toast.success(result.message || 'Product deleted successfully')
       setShowDeleteModal(false)
       setProductToDelete(null)
-      fetchProducts()
+      await fetchProducts()
     } catch (error: any) {
       console.error('Error deleting product:', error)
       toast.error(error.message || 'Failed to delete product')
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
@@ -352,18 +356,25 @@ const fetchCategories = async () => {
 
   const toggleStatus = async (product: Product) => {
     try {
-      setLoading(true)
+      setActionLoading(product.product_code)
+      const newStatus = !product.is_active
       await ProductService.updateProduct({
-        ...product,
-        is_active: !product.is_active
+        product_code: product.product_code,
+        product_name: product.product_name,
+        description: product.description || '',
+        category: product.category || '',
+        unit_price: product.unit_price?.toString() || '0',
+        cost_price: product.cost_price?.toString() || '0',
+        id: product.id,
+        is_active: newStatus
       })
-      toast.success(`Product ${!product.is_active ? 'activated' : 'deactivated'}`)
-      fetchProducts()
+      toast.success(`Product ${newStatus ? 'activated' : 'deactivated'}`)
+      await fetchProducts()
     } catch (error: any) {
       console.error('Error updating product status:', error)
       toast.error(error.message || 'Failed to update product status')
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
@@ -382,6 +393,12 @@ const fetchCategories = async () => {
     )
   }
 
+  // Get category name by code
+  const getCategoryName = (categoryCode: string) => {
+    const category = categories.find(cat => cat.category_code === categoryCode);
+    return category ? category.name : categoryCode;
+  }
+
   // Pagination component
   const PaginationControls = () => (
     <div className="flex items-center justify-between px-6 py-4 border-t">
@@ -398,6 +415,7 @@ const fetchCategories = async () => {
             value={pagination.limit}
             onChange={(e) => handleLimitChange(Number(e.target.value))}
             className="border rounded px-2 py-1 text-sm"
+            disabled={loading}
           >
             <option value={5}>5</option>
             <option value={10}>10</option>
@@ -411,7 +429,7 @@ const fetchCategories = async () => {
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(pagination.page - 1)}
-            disabled={pagination.page === 1}
+            disabled={pagination.page === 1 || loading}
             className="h-8 w-8 p-0"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -425,7 +443,7 @@ const fetchCategories = async () => {
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(pagination.page + 1)}
-            disabled={pagination.page === pagination.totalPages}
+            disabled={pagination.page === pagination.totalPages || loading}
             className="h-8 w-8 p-0"
           >
             <ChevronRight className="h-4 w-4" />
@@ -444,7 +462,7 @@ const fetchCategories = async () => {
         <div className="bg-white rounded-lg max-w-md w-full p-6">
           <h3 className="text-lg font-semibold mb-4">Confirm Delete</h3>
           <div className="text-gray-600 mb-6">
-            Are you sure you want to delete product <strong>{productToDelete.name}</strong> ({productToDelete.product_code})?
+            Are you sure you want to delete product <strong>{productToDelete.product_name}</strong> ({productToDelete.product_code})?
             This action cannot be undone.
           </div>
           <div className="flex gap-3">
@@ -452,7 +470,7 @@ const fetchCategories = async () => {
               variant="outline" 
               className="flex-1"
               onClick={handleDeleteCancel}
-              disabled={loading}
+              disabled={actionLoading === productToDelete.product_code}
             >
               Cancel
             </Button>
@@ -460,9 +478,16 @@ const fetchCategories = async () => {
               variant="destructive"
               className="flex-1"
               onClick={handleDeleteConfirm}
-              disabled={loading}
+              disabled={actionLoading === productToDelete.product_code}
             >
-              {loading ? 'Deleting...' : 'Yes, Delete'}
+              {actionLoading === productToDelete.product_code ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Yes, Delete'
+              )}
             </Button>
           </div>
         </div>
@@ -488,7 +513,11 @@ const fetchCategories = async () => {
               </div>
               
               <div className="flex gap-2">
-                <Button onClick={handleCreateNew} className="bg-blue-600 hover:bg-blue-700 text-white">
+                <Button 
+                  onClick={handleCreateNew} 
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  disabled={loading}
+                >
                   <Plus className="h-4 w-4 mr-2" />
                   Add Product
                 </Button>
@@ -519,6 +548,7 @@ const fetchCategories = async () => {
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="px-3 py-2 border rounded-md text-sm"
+                disabled={loading}
               >
                 <option value="">All Status</option>
                 <option value="active">Active</option>
@@ -529,6 +559,7 @@ const fetchCategories = async () => {
                 value={categoryFilter}
                 onChange={(e) => setCategoryFilter(e.target.value)}
                 className="px-3 py-2 border rounded-md text-sm"
+                disabled={loading}
               >
                 <option value="">All Categories</option>
                 {categories.map((category) => (
@@ -557,8 +588,9 @@ const fetchCategories = async () => {
                       <TableHead className="w-12 text-center font-semibold text-gray-900">No</TableHead>
                       <TableHead className="w-32 font-semibold text-gray-900">Product Code</TableHead>
                       <TableHead className="min-w-40 font-semibold text-gray-900">Name</TableHead>
-                      <TableHead className="min-w-32 font-semibold text-gray-900">Unit</TableHead>
                       <TableHead className="min-w-32 font-semibold text-gray-900">Category</TableHead>
+                      <TableHead className="min-w-32 font-semibold text-gray-900">Unit Price</TableHead>
+                      <TableHead className="min-w-32 font-semibold text-gray-900">Cost Price</TableHead>
                       <TableHead className="w-24 text-center font-semibold text-gray-900">Status</TableHead>
                       <TableHead className="w-28 text-center font-semibold text-gray-900">Actions</TableHead>
                     </TableRow>
@@ -566,10 +598,15 @@ const fetchCategories = async () => {
                   <TableBody>
                     {products.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="text-center py-12">
+                        <TableCell colSpan={8} className="text-center py-12">
                           <div className="flex flex-col items-center justify-center text-gray-500">
                             <Package className="h-12 w-12 mb-4 text-gray-300" />
-                            <p className="text-lg font-medium mb-2">No products found</p>
+                            <p className="text-lg font-medium mb-2">
+                              {searchTerm || statusFilter || categoryFilter ? 'No products found' : 'No products yet'}
+                            </p>
+                            <p className="text-sm text-gray-400 mb-4">
+                              {searchTerm || statusFilter || categoryFilter ? 'Try adjusting your search terms' : 'Get started by adding your first product'}
+                            </p>
                             <Button onClick={handleCreateNew} size="sm">
                               <Plus className="h-4 w-4 mr-2" />
                               Add Product
@@ -584,26 +621,27 @@ const fetchCategories = async () => {
                             {(pagination.page - 1) * pagination.limit + index + 1}
                           </TableCell>
                           <TableCell>
-                            <span className="font-semibold text-blue-600">
+                            <span className="font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded text-sm">
                               {product.product_code}
                             </span>
                           </TableCell>
                           <TableCell className="font-medium text-gray-900">
-                            {product.name}
+                            {product.product_name}
                           </TableCell>
                           <TableCell>
-                            {product.unit ? (
-                              <span className="text-gray-600 text-sm">{product.unit}</span>
+                            {product.category ? (
+                              <span className="text-gray-600 text-sm">
+                                {product.category_name || getCategoryName(product.category)}
+                              </span>
                             ) : (
                               <span className="text-gray-400 text-sm">-</span>
                             )}
                           </TableCell>
-                          <TableCell>
-                            {product.category_code ? (
-                              <span className="text-gray-600 text-sm">{product.category_code}</span>
-                            ) : (
-                              <span className="text-gray-400 text-sm">-</span>
-                            )}
+                          <TableCell className="font-medium text-green-600">
+                            {formatCurrency(product.unit_price)}
+                          </TableCell>
+                          <TableCell className="font-medium text-orange-600">
+                            {formatCurrency(product.cost_price)}
                           </TableCell>
                           <TableCell className="text-center">
                             {getStatusBadge(product.is_active)}
@@ -616,6 +654,7 @@ const fetchCategories = async () => {
                                 variant="outline"
                                 className="h-8 w-8 p-0 border-gray-300 hover:bg-gray-50"
                                 title="Edit"
+                                disabled={actionLoading !== null}
                               >
                                 <Edit className="h-3 w-3" />
                               </Button>
@@ -627,17 +666,29 @@ const fetchCategories = async () => {
                                   product.is_active ? 'text-orange-600' : 'text-green-600'
                                 }`}
                                 title={product.is_active ? 'Deactivate' : 'Activate'}
+                                disabled={actionLoading === product.product_code}
                               >
-                                {product.is_active ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
+                                {actionLoading === product.product_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : product.is_active ? (
+                                  <X className="h-3 w-3" />
+                                ) : (
+                                  <Check className="h-3 w-3" />
+                                )}
                               </Button>
                               <Button
                                 onClick={() => handleDeleteClick(product)}
                                 size="sm"
                                 variant="outline"
-                                className="h-8 w-8 p-0 text-red-600 hover:text-red-700 border-gray-300 hover:bg-gray-50"
+                                className="h-8 w-8 p-0 border-gray-300 hover:bg-red-50 text-red-600"
                                 title="Delete"
+                                disabled={actionLoading === product.product_code}
                               >
-                                <Trash2 className="h-3 w-3" />
+                                {actionLoading === product.product_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
                               </Button>
                             </div>
                           </TableCell>
@@ -654,7 +705,7 @@ const fetchCategories = async () => {
           </CardContent>
         </Card>
 
-        {/* Product Form - Below Table */}
+        {/* Product Form */}
         {showForm && (
           <Card className="bg-white border shadow-sm rounded-lg">
             <CardHeader>
@@ -701,41 +752,28 @@ const fetchCategories = async () => {
 
                   {/* Product Name */}
                   <div className="space-y-2">
-                    <Label htmlFor="name" className="text-sm font-medium">
+                    <Label htmlFor="product_name" className="text-sm font-medium">
                       Product Name *
                     </Label>
                     <Input
-                      id="name"
-                      value={formData.name}
-                      onChange={(e) => updateFormField('name', e.target.value)}
+                      id="product_name"
+                      value={formData.product_name}
+                      onChange={(e) => updateFormField('product_name', e.target.value)}
                       placeholder="Product Name"
-                      disabled={submitting}
-                    />
-                  </div>
-
-                  {/* Unit */}
-                  <div className="space-y-2">
-                    <Label htmlFor="unit" className="text-sm font-medium">
-                      Unit
-                    </Label>
-                    <Input
-                      id="unit"
-                      value={formData.unit}
-                      onChange={(e) => updateFormField('unit', e.target.value)}
-                      placeholder="pcs, kg, meter, etc"
                       disabled={submitting}
                     />
                   </div>
 
                   {/* Category */}
                   <div className="space-y-2">
-                    <Label htmlFor="category_code" className="text-sm font-medium">
+                    <Label htmlFor="category" className="text-sm font-medium flex items-center gap-2">
+                      <Tag className="h-4 w-4" />
                       Category
                     </Label>
                     <select
-                      id="category_code"
-                      value={formData.category_code}
-                      onChange={(e) => updateFormField('category_code', e.target.value)}
+                      id="category"
+                      value={formData.category}
+                      onChange={(e) => updateFormField('category', e.target.value)}
                       disabled={submitting}
                       className="w-full px-3 py-2 border rounded-md text-sm"
                     >
@@ -748,35 +786,56 @@ const fetchCategories = async () => {
                     </select>
                   </div>
 
-                  {/* Description */}
-                  <div className="md:col-span-2 space-y-2">
-                    <Label htmlFor="description" className="text-sm font-medium">
-                      Description
+                  {/* Unit Price */}
+                  <div className="space-y-2">
+                    <Label htmlFor="unit_price" className="text-sm font-medium flex items-center gap-2">
+                      <DollarSign className="h-4 w-4" />
+                      Unit Price
                     </Label>
-                    <Textarea
-                      id="description"
-                      value={formData.description}
-                      onChange={(e) => updateFormField('description', e.target.value)}
-                      placeholder="Product description..."
-                      rows={3}
+                    <Input
+                      id="unit_price"
+                      type="number"
+                      min="0"
+                      step="1000"
+                      value={formData.unit_price}
+                      onChange={(e) => updateFormField('unit_price', e.target.value)}
+                      placeholder="0"
                       disabled={submitting}
                     />
                   </div>
 
-                  {/* Status */}
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="is_active"
-                      checked={formData.is_active}
-                      onChange={(e) => updateFormField('is_active', e.target.checked)}
-                      disabled={submitting}
-                      className="rounded border-gray-300"
-                    />
-                    <Label htmlFor="is_active" className="text-sm font-medium">
-                      Active
+                  {/* Cost Price */}
+                  <div className="space-y-2">
+                    <Label htmlFor="cost_price" className="text-sm font-medium flex items-center gap-2">
+                      <DollarSign className="h-4 w-4" />
+                      Cost Price
                     </Label>
+                    <Input
+                      id="cost_price"
+                      type="number"
+                      min="0"
+                      step="1000"
+                      value={formData.cost_price}
+                      onChange={(e) => updateFormField('cost_price', e.target.value)}
+                      placeholder="0"
+                      disabled={submitting}
+                    />
                   </div>
+                </div>
+
+                {/* Description */}
+                <div className="space-y-2">
+                  <Label htmlFor="description" className="text-sm font-medium">
+                    Description
+                  </Label>
+                  <Textarea
+                    id="description"
+                    value={formData.description}
+                    onChange={(e) => updateFormField('description', e.target.value)}
+                    placeholder="Product description..."
+                    rows={3}
+                    disabled={submitting}
+                  />
                 </div>
 
                 <div className="flex gap-3 pt-4">

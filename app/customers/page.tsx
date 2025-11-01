@@ -1,4 +1,4 @@
-'use client'
+"use client"
 
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -15,27 +15,31 @@ import { toast } from 'sonner'
 interface Customer {
   id: number
   customer_code: string
-  name: string
-  contact_person: string
-  phone: string
-  email: string
-  address: string
-  billing_address: string
-  shipping_address: string
-  is_active: boolean
+  customer_name: string
+  customer_type: 'individual' | 'company' | 'government'
+  phone?: string
+  email?: string
+  billing_address?: string
+  shipping_address?: string
+  tax_id?: string
+  credit_limit: number
+  payment_terms: number
+  status: 'active' | 'inactive'
   created_at: string
+  updated_at: string
 }
 
 interface CustomerFormData {
   customer_code: string
-  name: string
-  contact_person: string
+  customer_name: string
+  customer_type: 'individual' | 'company' | 'government'
   phone: string
   email: string
-  address: string
   billing_address: string
   shipping_address: string
-  is_active: boolean
+  tax_id: string
+  credit_limit: string
+  payment_terms: string
 }
 
 interface PaginationInfo {
@@ -65,8 +69,13 @@ class CustomerService {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || `HTTP error! status: ${response.status}`);
+      try {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      } catch (jsonError) {
+        const errorText = await response.text();
+        throw new Error(errorText || `HTTP error! status: ${response.status}`);
+      }
     }
     
     return response.json();
@@ -90,14 +99,23 @@ class CustomerService {
   static async createCustomer(data: CustomerFormData) {
     return this.fetchWithAuth('/api/customers', {
       method: 'POST',
-      body: JSON.stringify(data)
+      body: JSON.stringify({
+        ...data,
+        credit_limit: parseFloat(data.credit_limit) || 0,
+        payment_terms: parseInt(data.payment_terms) || 30,
+        status: 'active'
+      })
     });
   }
 
-  static async updateCustomer(data: CustomerFormData & { id: number }) {
+  static async updateCustomer(data: CustomerFormData & { id: number; status: 'active' | 'inactive' }) {
     return this.fetchWithAuth('/api/customers', {
       method: 'PUT',
-      body: JSON.stringify(data)
+      body: JSON.stringify({
+        ...data,
+        credit_limit: parseFloat(data.credit_limit) || 0,
+        payment_terms: parseInt(data.payment_terms) || 30
+      })
     });
   }
 
@@ -112,6 +130,7 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   
@@ -128,14 +147,15 @@ export default function CustomersPage() {
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
   const [formData, setFormData] = useState<CustomerFormData>({
     customer_code: '',
-    name: '',
-    contact_person: '',
+    customer_name: '',
+    customer_type: 'company',
     phone: '',
     email: '',
-    address: '',
     billing_address: '',
     shipping_address: '',
-    is_active: true
+    tax_id: '',
+    credit_limit: '0',
+    payment_terms: '30'
   })
 
   // Delete confirmation modal
@@ -194,14 +214,15 @@ export default function CustomersPage() {
     setEditingCustomer(null)
     setFormData({
       customer_code: '',
-      name: '',
-      contact_person: '',
+      customer_name: '',
+      customer_type: 'company',
       phone: '',
       email: '',
-      address: '',
       billing_address: '',
       shipping_address: '',
-      is_active: true
+      tax_id: '',
+      credit_limit: '0',
+      payment_terms: '30'
     })
     setShowForm(true)
   }
@@ -210,19 +231,20 @@ export default function CustomersPage() {
     setEditingCustomer(customer)
     setFormData({
       customer_code: customer.customer_code,
-      name: customer.name,
-      contact_person: customer.contact_person || '',
+      customer_name: customer.customer_name,
+      customer_type: customer.customer_type,
       phone: customer.phone || '',
       email: customer.email || '',
-      address: customer.address || '',
       billing_address: customer.billing_address || '',
       shipping_address: customer.shipping_address || '',
-      is_active: customer.is_active
+      tax_id: customer.tax_id || '',
+      credit_limit: customer.credit_limit.toString(),
+      payment_terms: customer.payment_terms.toString()
     })
     setShowForm(true)
   }
 
-  const updateFormField = (field: keyof CustomerFormData, value: string | boolean) => {
+  const updateFormField = (field: keyof CustomerFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }))
   }
 
@@ -241,11 +263,12 @@ export default function CustomersPage() {
   }
 
   const submitForm = async () => {
+    // Required field validation
     if (!formData.customer_code.trim()) {
       toast.error('Customer code is required')
       return
     }
-    if (!formData.name.trim()) {
+    if (!formData.customer_name.trim()) {
       toast.error('Customer name is required')
       return
     }
@@ -262,13 +285,28 @@ export default function CustomersPage() {
       return
     }
 
+    // Validate credit limit
+    const creditLimit = parseFloat(formData.credit_limit)
+    if (isNaN(creditLimit) || creditLimit < 0) {
+      toast.error('Please enter a valid credit limit')
+      return
+    }
+
+    // Validate payment terms
+    const paymentTerms = parseInt(formData.payment_terms)
+    if (isNaN(paymentTerms) || paymentTerms < 0) {
+      toast.error('Please enter valid payment terms')
+      return
+    }
+
     try {
       setSubmitting(true)
       
       if (editingCustomer) {
         const result = await CustomerService.updateCustomer({
           ...formData,
-          id: editingCustomer.id
+          id: editingCustomer.id,
+          status: editingCustomer.status
         })
         toast.success(result.message || 'Customer updated successfully')
       } else {
@@ -302,17 +340,17 @@ export default function CustomersPage() {
     if (!customerToDelete) return
 
     try {
-      setLoading(true)
+      setActionLoading(customerToDelete.customer_code)
       const result = await CustomerService.deleteCustomer(customerToDelete.id)
       toast.success(result.message || 'Customer deleted successfully')
       setShowDeleteModal(false)
       setCustomerToDelete(null)
-      fetchCustomers()
+      await fetchCustomers()
     } catch (error: any) {
       console.error('Error deleting customer:', error)
       toast.error(error.message || 'Failed to delete customer')
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
@@ -323,24 +361,35 @@ export default function CustomersPage() {
 
   const toggleStatus = async (customer: Customer) => {
     try {
-      setLoading(true)
+      setActionLoading(customer.customer_code)
+      const newStatus = customer.status === 'active' ? 'inactive' : 'active'
       await CustomerService.updateCustomer({
-        ...customer,
-        is_active: !customer.is_active
+        customer_code: customer.customer_code,
+        customer_name: customer.customer_name,
+        customer_type: customer.customer_type,
+        phone: customer.phone || '',
+        email: customer.email || '',
+        billing_address: customer.billing_address || '',
+        shipping_address: customer.shipping_address || '',
+        tax_id: customer.tax_id || '',
+        credit_limit: customer.credit_limit.toString(),
+        payment_terms: customer.payment_terms.toString(),
+        id: customer.id,
+        status: newStatus
       })
-      toast.success(`Customer ${!customer.is_active ? 'activated' : 'deactivated'}`)
-      fetchCustomers()
+      toast.success(`Customer ${newStatus === 'active' ? 'activated' : 'deactivated'}`)
+      await fetchCustomers()
     } catch (error: any) {
       console.error('Error updating customer status:', error)
       toast.error(error.message || 'Failed to update customer status')
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
   // Status badge
-  const getStatusBadge = (isActive: boolean) => {
-    return isActive ? (
+  const getStatusBadge = (status: 'active' | 'inactive') => {
+    return status === 'active' ? (
       <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">
         <Check className="h-3 w-3 mr-1" />
         Active
@@ -351,6 +400,28 @@ export default function CustomersPage() {
         Inactive
       </Badge>
     )
+  }
+
+  // Customer type badge
+  const getCustomerTypeBadge = (type: 'individual' | 'company' | 'government') => {
+    return type === 'company' ? (
+      <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-200 text-xs">
+        Company
+      </Badge>
+    ) : (
+      <Badge variant="outline" className="bg-purple-100 text-purple-800 border-purple-200 text-xs">
+        Individual
+      </Badge>
+    )
+  }
+
+  // Format currency
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      minimumFractionDigits: 0
+    }).format(amount)
   }
 
   // Pagination component
@@ -369,6 +440,7 @@ export default function CustomersPage() {
             value={pagination.limit}
             onChange={(e) => handleLimitChange(Number(e.target.value))}
             className="border rounded px-2 py-1 text-sm"
+            disabled={loading}
           >
             <option value={5}>5</option>
             <option value={10}>10</option>
@@ -382,7 +454,7 @@ export default function CustomersPage() {
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(pagination.page - 1)}
-            disabled={pagination.page === 1}
+            disabled={pagination.page === 1 || loading}
             className="h-8 w-8 p-0"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -396,7 +468,7 @@ export default function CustomersPage() {
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(pagination.page + 1)}
-            disabled={pagination.page === pagination.totalPages}
+            disabled={pagination.page === pagination.totalPages || loading}
             className="h-8 w-8 p-0"
           >
             <ChevronRight className="h-4 w-4" />
@@ -415,7 +487,7 @@ export default function CustomersPage() {
         <div className="bg-white rounded-lg max-w-md w-full p-6">
           <h3 className="text-lg font-semibold mb-4">Confirm Delete</h3>
           <div className="text-gray-600 mb-6">
-            Are you sure you want to delete customer <strong>{customerToDelete.name}</strong> ({customerToDelete.customer_code})?
+            Are you sure you want to delete customer <strong>{customerToDelete.customer_name}</strong> ({customerToDelete.customer_code})?
             This action cannot be undone.
           </div>
           <div className="flex gap-3">
@@ -423,7 +495,7 @@ export default function CustomersPage() {
               variant="outline" 
               className="flex-1"
               onClick={handleDeleteCancel}
-              disabled={loading}
+              disabled={actionLoading === customerToDelete.customer_code}
             >
               Cancel
             </Button>
@@ -431,9 +503,16 @@ export default function CustomersPage() {
               variant="destructive"
               className="flex-1"
               onClick={handleDeleteConfirm}
-              disabled={loading}
+              disabled={actionLoading === customerToDelete.customer_code}
             >
-              {loading ? 'Deleting...' : 'Yes, Delete'}
+              {actionLoading === customerToDelete.customer_code ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Yes, Delete'
+              )}
             </Button>
           </div>
         </div>
@@ -459,7 +538,11 @@ export default function CustomersPage() {
               </div>
               
               <div className="flex gap-2">
-                <Button onClick={handleCreateNew} className="bg-blue-600 hover:bg-blue-700 text-white">
+                <Button 
+                  onClick={handleCreateNew} 
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  disabled={loading}
+                >
                   <Plus className="h-4 w-4 mr-2" />
                   Add Customer
                 </Button>
@@ -490,6 +573,7 @@ export default function CustomersPage() {
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="px-3 py-2 border rounded-md text-sm"
+                disabled={loading}
               >
                 <option value="">All Status</option>
                 <option value="active">Active</option>
@@ -515,10 +599,11 @@ export default function CustomersPage() {
                       <TableHead className="w-12 text-center font-semibold text-gray-900">No</TableHead>
                       <TableHead className="w-32 font-semibold text-gray-900">Customer Code</TableHead>
                       <TableHead className="min-w-40 font-semibold text-gray-900">Name</TableHead>
-                      <TableHead className="min-w-32 font-semibold text-gray-900">Contact Person</TableHead>
+                      <TableHead className="min-w-24 font-semibold text-gray-900">Type</TableHead>
                       <TableHead className="min-w-32 font-semibold text-gray-900">Email</TableHead>
                       <TableHead className="min-w-32 font-semibold text-gray-900">Phone</TableHead>
-                      <TableHead className="min-w-48 font-semibold text-gray-900">Address</TableHead>
+                      <TableHead className="min-w-40 font-semibold text-gray-900">Tax ID</TableHead>
+                      <TableHead className="min-w-32 font-semibold text-gray-900">Credit Limit</TableHead>
                       <TableHead className="w-24 text-center font-semibold text-gray-900">Status</TableHead>
                       <TableHead className="w-28 text-center font-semibold text-gray-900">Actions</TableHead>
                     </TableRow>
@@ -526,10 +611,15 @@ export default function CustomersPage() {
                   <TableBody>
                     {customers.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center py-12">
+                        <TableCell colSpan={10} className="text-center py-12">
                           <div className="flex flex-col items-center justify-center text-gray-500">
                             <Users className="h-12 w-12 mb-4 text-gray-300" />
-                            <p className="text-lg font-medium mb-2">No customers found</p>
+                            <p className="text-lg font-medium mb-2">
+                              {searchTerm || statusFilter ? 'No customers found' : 'No customers yet'}
+                            </p>
+                            <p className="text-sm text-gray-400 mb-4">
+                              {searchTerm || statusFilter ? 'Try adjusting your search terms' : 'Get started by adding your first customer'}
+                            </p>
                             <Button onClick={handleCreateNew} size="sm">
                               <Plus className="h-4 w-4 mr-2" />
                               Add Customer
@@ -544,43 +634,42 @@ export default function CustomersPage() {
                             {(pagination.page - 1) * pagination.limit + index + 1}
                           </TableCell>
                           <TableCell>
-                            <span className="font-semibold text-blue-600">
+                            <span className="font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded text-sm">
                               {customer.customer_code}
                             </span>
                           </TableCell>
                           <TableCell className="font-medium text-gray-900">
-                            {customer.name}
+                            {customer.customer_name}
                           </TableCell>
                           <TableCell>
-                            {customer.contact_person ? (
-                              <span className="text-gray-600">{customer.contact_person}</span>
-                            ) : (
-                              <span className="text-gray-400">-</span>
-                            )}
+                            {getCustomerTypeBadge(customer.customer_type)}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="max-w-[200px] truncate">
                             {customer.email ? (
-                              <span className="text-gray-600">{customer.email}</span>
-                            ) : (
-                              <span className="text-gray-400">-</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {customer.phone ? (
-                              <span className="text-gray-600">{customer.phone}</span>
-                            ) : (
-                              <span className="text-gray-400">-</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="max-w-[200px]">
-                            {customer.address ? (
-                              <span className="text-gray-600 text-sm">{customer.address}</span>
+                              <span className="text-gray-600 text-sm">{customer.email}</span>
                             ) : (
                               <span className="text-gray-400 text-sm">-</span>
                             )}
                           </TableCell>
+                          <TableCell>
+                            {customer.phone ? (
+                              <span className="text-gray-600 text-sm">{customer.phone}</span>
+                            ) : (
+                              <span className="text-gray-400 text-sm">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="max-w-[160px] truncate">
+                            {customer.tax_id ? (
+                              <span className="text-gray-600 text-sm">{customer.tax_id}</span>
+                            ) : (
+                              <span className="text-gray-400 text-sm">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="font-medium text-gray-900">
+                            {formatCurrency(customer.credit_limit)}
+                          </TableCell>
                           <TableCell className="text-center">
-                            {getStatusBadge(customer.is_active)}
+                            {getStatusBadge(customer.status)}
                           </TableCell>
                           <TableCell className="text-center">
                             <div className="flex gap-1 justify-center">
@@ -590,6 +679,7 @@ export default function CustomersPage() {
                                 variant="outline"
                                 className="h-8 w-8 p-0 border-gray-300 hover:bg-gray-50"
                                 title="Edit"
+                                disabled={actionLoading !== null}
                               >
                                 <Edit className="h-3 w-3" />
                               </Button>
@@ -598,20 +688,32 @@ export default function CustomersPage() {
                                 size="sm"
                                 variant="outline"
                                 className={`h-8 w-8 p-0 border-gray-300 hover:bg-gray-50 ${
-                                  customer.is_active ? 'text-orange-600' : 'text-green-600'
+                                  customer.status === 'active' ? 'text-orange-600' : 'text-green-600'
                                 }`}
-                                title={customer.is_active ? 'Deactivate' : 'Activate'}
+                                title={customer.status === 'active' ? 'Deactivate' : 'Activate'}
+                                disabled={actionLoading === customer.customer_code}
                               >
-                                {customer.is_active ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
+                                {actionLoading === customer.customer_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : customer.status === 'active' ? (
+                                  <X className="h-3 w-3" />
+                                ) : (
+                                  <Check className="h-3 w-3" />
+                                )}
                               </Button>
                               <Button
                                 onClick={() => handleDeleteClick(customer)}
                                 size="sm"
                                 variant="outline"
-                                className="h-8 w-8 p-0 text-red-600 hover:text-red-700 border-gray-300 hover:bg-gray-50"
+                                className="h-8 w-8 p-0 border-gray-300 hover:bg-red-50 text-red-600"
                                 title="Delete"
+                                disabled={actionLoading === customer.customer_code}
                               >
-                                <Trash2 className="h-3 w-3" />
+                                {actionLoading === customer.customer_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
                               </Button>
                             </div>
                           </TableCell>
@@ -628,7 +730,7 @@ export default function CustomersPage() {
           </CardContent>
         </Card>
 
-        {/* Customer Form - Below Table */}
+        {/* Customer Form */}
         {showForm && (
           <Card className="bg-white border shadow-sm rounded-lg">
             <CardHeader>
@@ -675,28 +777,46 @@ export default function CustomersPage() {
 
                   {/* Customer Name */}
                   <div className="space-y-2">
-                    <Label htmlFor="name" className="text-sm font-medium">
+                    <Label htmlFor="customer_name" className="text-sm font-medium">
                       Customer Name *
                     </Label>
                     <Input
-                      id="name"
-                      value={formData.name}
-                      onChange={(e) => updateFormField('name', e.target.value)}
+                      id="customer_name"
+                      value={formData.customer_name}
+                      onChange={(e) => updateFormField('customer_name', e.target.value)}
                       placeholder="PT Example Customer"
                       disabled={submitting}
                     />
                   </div>
 
-                  {/* Contact Person */}
+                  {/* Customer Type */}
                   <div className="space-y-2">
-                    <Label htmlFor="contact_person" className="text-sm font-medium">
-                      Contact Person
+                    <Label htmlFor="customer_type" className="text-sm font-medium">
+                      Customer Type
+                    </Label>
+                    <select
+                      id="customer_type"
+                      value={formData.customer_type}
+                      onChange={(e) => updateFormField('customer_type', e.target.value as 'individual' | 'company' | 'government')}
+                      disabled={submitting}
+                      className="w-full border rounded-md px-3 py-2 text-sm"
+                    >
+                      <option value="company">Company</option>
+                      <option value="individual">Individual</option>
+                      <option value="Government">Government</option>
+                    </select>
+                  </div>
+
+                  {/* Tax ID */}
+                  <div className="space-y-2">
+                    <Label htmlFor="tax_id" className="text-sm font-medium">
+                      Tax ID
                     </Label>
                     <Input
-                      id="contact_person"
-                      value={formData.contact_person}
-                      onChange={(e) => updateFormField('contact_person', e.target.value)}
-                      placeholder="John Doe"
+                      id="tax_id"
+                      value={formData.tax_id}
+                      onChange={(e) => updateFormField('tax_id', e.target.value)}
+                      placeholder="12.345.678.9-012.345"
                       disabled={submitting}
                     />
                   </div>
@@ -739,65 +859,68 @@ export default function CustomersPage() {
                     )}
                   </div>
 
-                  {/* Address */}
-                  <div className="md:col-span-2 space-y-2">
-                    <Label htmlFor="address" className="text-sm font-medium">
-                      Address
+                  {/* Credit Limit */}
+                  <div className="space-y-2">
+                    <Label htmlFor="credit_limit" className="text-sm font-medium">
+                      Credit Limit
                     </Label>
-                    <Textarea
-                      id="address"
-                      value={formData.address}
-                      onChange={(e) => updateFormField('address', e.target.value)}
-                      placeholder="Customer address..."
-                      rows={2}
+                    <Input
+                      id="credit_limit"
+                      type="number"
+                      min="0"
+                      step="100000"
+                      value={formData.credit_limit}
+                      onChange={(e) => updateFormField('credit_limit', e.target.value)}
+                      placeholder="0"
                       disabled={submitting}
                     />
                   </div>
 
-                  {/* Billing Address */}
-                  <div className="md:col-span-2 space-y-2">
-                    <Label htmlFor="billing_address" className="text-sm font-medium">
-                      Billing Address
+                  {/* Payment Terms */}
+                  <div className="space-y-2">
+                    <Label htmlFor="payment_terms" className="text-sm font-medium">
+                      Payment Terms (days)
                     </Label>
-                    <Textarea
-                      id="billing_address"
-                      value={formData.billing_address}
-                      onChange={(e) => updateFormField('billing_address', e.target.value)}
-                      placeholder="Billing address for invoices..."
-                      rows={2}
+                    <Input
+                      id="payment_terms"
+                      type="number"
+                      min="0"
+                      value={formData.payment_terms}
+                      onChange={(e) => updateFormField('payment_terms', e.target.value)}
+                      placeholder="30"
                       disabled={submitting}
                     />
                   </div>
+                </div>
 
-                  {/* Shipping Address */}
-                  <div className="md:col-span-2 space-y-2">
-                    <Label htmlFor="shipping_address" className="text-sm font-medium">
-                      Shipping Address
-                    </Label>
-                    <Textarea
-                      id="shipping_address"
-                      value={formData.shipping_address}
-                      onChange={(e) => updateFormField('shipping_address', e.target.value)}
-                      placeholder="Shipping address for deliveries..."
-                      rows={2}
-                      disabled={submitting}
-                    />
-                  </div>
+                {/* Billing Address */}
+                <div className="space-y-2">
+                  <Label htmlFor="billing_address" className="text-sm font-medium">
+                    Billing Address
+                  </Label>
+                  <Textarea
+                    id="billing_address"
+                    value={formData.billing_address}
+                    onChange={(e) => updateFormField('billing_address', e.target.value)}
+                    placeholder="Billing address for invoices..."
+                    rows={2}
+                    disabled={submitting}
+                  />
+                </div>
 
-                  {/* Status */}
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="is_active"
-                      checked={formData.is_active}
-                      onChange={(e) => updateFormField('is_active', e.target.checked)}
-                      disabled={submitting}
-                      className="rounded border-gray-300"
-                    />
-                    <Label htmlFor="is_active" className="text-sm font-medium">
-                      Active
-                    </Label>
-                  </div>
+                {/* Shipping Address */}
+                <div className="space-y-2">
+                  <Label htmlFor="shipping_address" className="text-sm font-medium">
+                    Shipping Address
+                  </Label>
+                  <Textarea
+                    id="shipping_address"
+                    value={formData.shipping_address}
+                    onChange={(e) => updateFormField('shipping_address', e.target.value)}
+                    placeholder="Shipping address for deliveries..."
+                    rows={2}
+                    disabled={submitting}
+                  />
                 </div>
 
                 <div className="flex gap-3 pt-4">

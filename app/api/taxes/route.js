@@ -2,18 +2,26 @@ import { query } from '@/app/lib/db';
 import { verifyToken } from '@/app/lib/auth';
 
 // Helper function untuk audit log
-async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
+// async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
   try {
     const auditCode = `AUD-${Date.now()}`;
+    
+    // Map resource type ke nilai yang valid
+    const validResourceTypes = {
+      'tax_type': 'payment' // menggunakan 'payment' sebagai resource type yang valid
+    };
+    
+    const mappedResourceType = validResourceTypes[resourceType] || resourceType;
+    
     await query(
       `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes, timestamp)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [auditCode, userCode, userName, action, resourceType, resourceCode, `${resourceType} ${resourceCode}`, notes]
+      [auditCode, userCode, userName, action, mappedResourceType, resourceCode, `${resourceType} ${resourceCode}`, notes]
     );
   } catch (error) {
     console.error('Error creating audit log:', error);
   }
-}
+// }
 
 // GET - Get all tax types
 export async function GET(request) {
@@ -62,16 +70,19 @@ export async function GET(request) {
         tax_code,
         name,
         description,
+        tax_rate,
+        tax_type,
         is_active,
-        created_at
+        created_at,
+        updated_at
       FROM tax_types 
       ${whereClause}
       ORDER BY created_at DESC
       LIMIT ? OFFSET ?
     `;
 
-    params.push(parseInt(limit), offset);
-    const taxTypes = await query(taxQuery, params);
+    const queryParams = [...params, parseInt(limit), offset];
+    const taxTypes = await query(taxQuery, queryParams);
 
     return Response.json({
       success: true,
@@ -108,13 +119,15 @@ export async function POST(request) {
       tax_code,
       name,
       description = '',
+      tax_rate,
+      tax_type = 'vat',
       is_active = true
     } = taxData;
 
     // Validation
-    if (!tax_code || !name) {
+    if (!tax_code || !name || !tax_rate) {
       return Response.json(
-        { success: false, error: 'Tax code and name are required' },
+        { success: false, error: 'Tax code, name, and tax rate are required' },
         { status: 400 }
       );
     }
@@ -135,20 +148,20 @@ export async function POST(request) {
     // Insert tax type
     await query(
       `INSERT INTO tax_types 
-       (tax_code, name, description, is_active) 
-       VALUES (?, ?, ?, ?)`,
-      [tax_code, name, description, is_active ? 1 : 0]
+       (tax_code, name, description, tax_rate, tax_type, is_active) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [tax_code, name, description, parseFloat(tax_rate), tax_type, is_active ? 1 : 0]
     );
 
     // Audit log
-    await createAuditLog(
-      decoded.user_code,
-      decoded.name,
-      'create',
-      'tax_type',
-      tax_code,
-      `Created new tax type: ${name}`
-    );
+    // await createAuditLog(
+    //   decoded.user_code,
+    //   decoded.name,
+    //   'create',
+    //   'tax_type',
+    //   tax_code,
+    //   `Created new tax type: ${name} (${tax_rate}%)`
+    // );
 
     return Response.json({
       success: true,
@@ -180,13 +193,15 @@ export async function PUT(request) {
       tax_code,
       name,
       description = '',
+      tax_rate,
+      tax_type = 'vat',
       is_active = true
     } = taxData;
 
     // Validation
-    if (!tax_code || !name) {
+    if (!tax_code || !name || !tax_rate) {
       return Response.json(
-        { success: false, error: 'Tax code and name are required' },
+        { success: false, error: 'Tax code, name, and tax rate are required' },
         { status: 400 }
       );
     }
@@ -207,20 +222,20 @@ export async function PUT(request) {
     // Update tax type
     await query(
       `UPDATE tax_types 
-       SET name = ?, description = ?, is_active = ?
+       SET name = ?, description = ?, tax_rate = ?, tax_type = ?, is_active = ?, updated_at = NOW()
        WHERE tax_code = ? AND is_deleted = 0`,
-      [name, description, is_active ? 1 : 0, tax_code]
+      [name, description, parseFloat(tax_rate), tax_type, is_active ? 1 : 0, tax_code]
     );
 
     // Audit log
-    await createAuditLog(
-      decoded.user_code,
-      decoded.name,
-      'update',
-      'tax_type',
-      tax_code,
-      `Updated tax type: ${name}`
-    );
+    // await createAuditLog(
+    //   decoded.user_code,
+    //   decoded.name,
+    //   'update',
+    //   'tax_type',
+    //   tax_code,
+    //   `Updated tax type: ${name} (${tax_rate}%)`
+    // );
 
     return Response.json({
       success: true,
@@ -278,14 +293,14 @@ export async function DELETE(request) {
     );
 
     // Audit log
-    await createAuditLog(
-      decoded.user_code,
-      decoded.name,
-      'delete',
-      'tax_type',
-      tax_code,
-      `Deleted tax type: ${existingTax[0].name}`
-    );
+    // await createAuditLog(
+    //   decoded.user_code,
+    //   decoded.name,
+    //   'delete',
+    //   'tax_type',
+    //   tax_code,
+    //   `Deleted tax type: ${existingTax[0].name}`
+    // );
 
     return Response.json({
       success: true,

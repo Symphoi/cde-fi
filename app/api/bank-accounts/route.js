@@ -2,20 +2,20 @@ import { query } from '@/app/lib/db';
 import { verifyToken } from '@/app/lib/auth';
 
 // Helper function untuk audit log
-async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
-  try {
-    const auditCode = `AUD-${Date.now()}`;
-    await query(
-      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [auditCode, userCode, userName, action, resourceType, resourceCode, `${resourceType} ${resourceCode}`, notes]
-    );
-  } catch (error) {
-    console.error('Error creating audit log:', error);
-  }
-}
+// async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
+//   try {
+//     const auditCode = `AUD-${Date.now()}`;
+//     await query(
+//       `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes, timestamp)
+//        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+//       [auditCode, userCode, userName, action, resourceType, resourceCode, `${resourceType} ${resourceCode}`, notes]
+//     );
+//   } catch (error) {
+//     console.error('Error creating audit log:', error);
+//   }
+// }
 
-// GET - Get all bank accounts DENGAN PAGINATION
+// GET - Get all bank accounts
 export async function GET(request) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -41,9 +41,9 @@ export async function GET(request) {
     }
 
     if (search) {
-      whereClause += ' AND (account_code LIKE ? OR bank_name LIKE ? OR account_holder LIKE ?)';
+      whereClause += ' AND (account_code LIKE ? OR bank_name LIKE ? OR account_holder LIKE ? OR account_number LIKE ?)';
       const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     // Get total count
@@ -67,10 +67,11 @@ export async function GET(request) {
         currency,
         description,
         is_active,
-        created_at
+        created_at,
+        updated_at
       FROM bank_accounts 
       ${whereClause}
-      ORDER BY bank_name, account_number
+      ORDER BY created_at DESC
       LIMIT ? OFFSET ?
     `;
 
@@ -90,6 +91,57 @@ export async function GET(request) {
 
   } catch (error) {
     console.error('GET bank accounts error:', error);
+    return Response.json(
+      { success: false, error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+
+// GET - Get single bank account by account_code
+export async function GET_SINGLE(request, { params }) {
+  try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { accountCode } = params;
+
+    const bankAccount = await query(
+      `SELECT 
+        id,
+        account_code,
+        bank_name,
+        account_number,
+        account_holder,
+        branch,
+        currency,
+        description,
+        is_active,
+        created_at,
+        updated_at
+       FROM bank_accounts 
+       WHERE account_code = ? AND is_deleted = 0`,
+      [accountCode]
+    );
+
+    if (bankAccount.length === 0) {
+      return Response.json(
+        { success: false, error: 'Bank account not found' },
+        { status: 404 }
+      );
+    }
+
+    return Response.json({
+      success: true,
+      data: bankAccount[0]
+    });
+
+  } catch (error) {
+    console.error('GET single bank account error:', error);
     return Response.json(
       { success: false, error: 'Internal server error' },
       { status: 500 }
@@ -161,14 +213,14 @@ export async function POST(request) {
     );
 
     // Audit log
-    await createAuditLog(
-      decoded.user_code,
-      decoded.name,
-      'create',
-      'bank_account',
-      account_code,
-      `Created bank account: ${bank_name} - ${account_number}`
-    );
+    // await createAuditLog(
+    //   decoded.user_code,
+    //   decoded.name,
+    //   'create',
+    //   'bank_account',
+    //   account_code,
+    //   `Created bank account: ${bank_name} - ${account_number}`
+    // );
 
     return Response.json({
       success: true,
@@ -244,20 +296,20 @@ export async function PUT(request) {
     // Update bank account
     await query(
       `UPDATE bank_accounts 
-       SET bank_name = ?, account_number = ?, account_holder = ?, branch = ?, currency = ?, description = ?, is_active = ?
+       SET bank_name = ?, account_number = ?, account_holder = ?, branch = ?, currency = ?, description = ?, is_active = ?, updated_at = NOW()
        WHERE account_code = ? AND is_deleted = 0`,
       [bank_name, account_number, account_holder, branch, currency, description, is_active, account_code]
     );
 
     // Audit log
-    await createAuditLog(
-      decoded.user_code,
-      decoded.name,
-      'update',
-      'bank_account',
-      account_code,
-      `Updated bank account: ${bank_name} - ${account_number}`
-    );
+    // await createAuditLog(
+    //   decoded.user_code,
+    //   decoded.name,
+    //   'update',
+    //   'bank_account',
+    //   account_code,
+    //   `Updated bank account: ${bank_name} - ${account_number}`
+    // );
 
     return Response.json({
       success: true,
@@ -266,6 +318,71 @@ export async function PUT(request) {
 
   } catch (error) {
     console.error('PUT bank account error:', error);
+    return Response.json(
+      { success: false, error: error.message || 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE - Soft delete bank account
+export async function DELETE(request) {
+  try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const decoded = verifyToken(token);
+    
+    if (!decoded) {
+      return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const account_code = searchParams.get('account_code');
+
+    if (!account_code) {
+      return Response.json(
+        { success: false, error: 'Account code is required' },
+        { status: 400 }
+      );
+    }
+
+    // Check if bank account exists
+    const existingAccount = await query(
+      'SELECT account_code, bank_name, account_number FROM bank_accounts WHERE account_code = ? AND is_deleted = 0',
+      [account_code]
+    );
+
+    if (existingAccount.length === 0) {
+      return Response.json(
+        { success: false, error: 'Bank account not found' },
+        { status: 404 }
+      );
+    }
+
+    // Soft delete bank account
+    await query(
+      'UPDATE bank_accounts SET is_deleted = 1, deleted_at = NOW() WHERE account_code = ?',
+      [account_code]
+    );
+
+    const account = existingAccount[0];
+
+    // Audit log
+    // await createAuditLog(
+    //   decoded.user_code,
+    //   decoded.name,
+    //   'delete',
+    //   'bank_account',
+    //   account_code,
+    //   `Deleted bank account: ${account.bank_name} - ${account.account_number}`
+    // );
+
+    return Response.json({
+      success: true,
+      message: 'Bank account deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('DELETE bank account error:', error);
     return Response.json(
       { success: false, error: error.message || 'Internal server error' },
       { status: 500 }

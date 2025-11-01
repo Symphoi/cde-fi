@@ -17,14 +17,19 @@ interface TaxType {
   tax_code: string
   name: string
   description: string
+  tax_rate: number
+  tax_type: 'vat' | 'pph' | 'other'
   is_active: boolean
   created_at: string
+  updated_at: string
 }
 
 interface TaxFormData {
   tax_code: string
   name: string
   description: string
+  tax_rate: string
+  tax_type: 'vat' | 'pph' | 'other'
   is_active: boolean
 }
 
@@ -134,6 +139,7 @@ export default function TaxesPage() {
   const [taxTypes, setTaxTypes] = useState<TaxType[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [showInactive, setShowInactive] = useState(false)
   
@@ -152,6 +158,8 @@ export default function TaxesPage() {
     tax_code: '',
     name: '',
     description: '',
+    tax_rate: '',
+    tax_type: 'vat',
     is_active: true
   })
 
@@ -179,7 +187,7 @@ export default function TaxesPage() {
   }
 
   useEffect(() => {
-    fetchTaxTypes(1) // Reset ke page 1 ketika search/filter berubah
+    fetchTaxTypes(1)
   }, [searchTerm, showInactive])
 
   // Pagination handlers
@@ -201,6 +209,8 @@ export default function TaxesPage() {
       tax_code: '',
       name: '',
       description: '',
+      tax_rate: '',
+      tax_type: 'vat',
       is_active: true
     })
     setShowForm(true)
@@ -211,7 +221,9 @@ export default function TaxesPage() {
     setFormData({
       tax_code: tax.tax_code,
       name: tax.name,
-      description: tax.description,
+      description: tax.description || '',
+      tax_rate: tax.tax_rate.toString(),
+      tax_type: tax.tax_type,
       is_active: tax.is_active
     })
     setShowForm(true)
@@ -222,8 +234,15 @@ export default function TaxesPage() {
   }
 
   const submitForm = async () => {
-    if (!formData.tax_code.trim() || !formData.name.trim()) {
-      toast.error('Tax code and name are required')
+    if (!formData.tax_code.trim() || !formData.name.trim() || !formData.tax_rate.trim()) {
+      toast.error('Tax code, name, and tax rate are required')
+      return
+    }
+
+    // Validate tax rate is a number
+    const taxRate = parseFloat(formData.tax_rate)
+    if (isNaN(taxRate) || taxRate < 0 || taxRate > 100) {
+      toast.error('Tax rate must be a valid number between 0 and 100')
       return
     }
 
@@ -240,7 +259,7 @@ export default function TaxesPage() {
 
       setShowForm(false)
       setEditingTax(null)
-      await fetchTaxTypes() // Refresh data dengan page current
+      await fetchTaxTypes()
     } catch (error: any) {
       console.error('Error saving tax:', error)
       toast.error(error.message || 'Failed to save tax type')
@@ -261,32 +280,36 @@ export default function TaxesPage() {
     }
 
     try {
-      setLoading(true)
+      setActionLoading(tax.tax_code)
       const result = await TaxService.deleteTaxType(tax.tax_code)
       toast.success(result.message || 'Tax type deleted successfully')
-      fetchTaxTypes() // Refresh current page
+      await fetchTaxTypes()
     } catch (error: any) {
       console.error('Error deleting tax:', error)
       toast.error(error.message || 'Failed to delete tax type')
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
   const toggleStatus = async (tax: TaxType) => {
     try {
-      setLoading(true)
+      setActionLoading(tax.tax_code)
       await TaxService.updateTaxType({
-        ...tax,
+        ...formData,
+        tax_code: tax.tax_code,
+        name: tax.name,
+        tax_rate: tax.tax_rate.toString(),
+        tax_type: tax.tax_type,
         is_active: !tax.is_active
       })
       toast.success(`Tax type ${!tax.is_active ? 'activated' : 'deactivated'}`)
-      fetchTaxTypes() // Refresh current page
+      await fetchTaxTypes()
     } catch (error: any) {
       console.error('Error updating tax status:', error)
       toast.error(error.message || 'Failed to update tax status')
     } finally {
-      setLoading(false)
+      setActionLoading(null)
     }
   }
 
@@ -301,6 +324,23 @@ export default function TaxesPage() {
       <Badge variant="secondary" className="bg-gray-100 text-gray-600 border-gray-200 text-xs">
         <X className="h-3 w-3 mr-1" />
         Inactive
+      </Badge>
+    )
+  }
+
+  // Tax type badge
+  const getTaxTypeBadge = (taxType: string) => {
+    const typeConfig = {
+      vat: { label: 'VAT', color: 'bg-blue-100 text-blue-800 border-blue-200' },
+      pph: { label: 'PPH', color: 'bg-orange-100 text-orange-800 border-orange-200' },
+      other: { label: 'Other', color: 'bg-gray-100 text-gray-800 border-gray-200' }
+    }
+    
+    const config = typeConfig[taxType as keyof typeof typeConfig] || typeConfig.other
+    
+    return (
+      <Badge variant="outline" className={`${config.color} text-xs`}>
+        {config.label}
       </Badge>
     )
   }
@@ -321,6 +361,7 @@ export default function TaxesPage() {
             value={pagination.limit}
             onChange={(e) => handleLimitChange(Number(e.target.value))}
             className="border rounded px-2 py-1 text-sm"
+            disabled={loading}
           >
             <option value={5}>5</option>
             <option value={10}>10</option>
@@ -334,7 +375,7 @@ export default function TaxesPage() {
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(pagination.page - 1)}
-            disabled={pagination.page === 1}
+            disabled={pagination.page === 1 || loading}
             className="h-8 w-8 p-0"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -348,7 +389,7 @@ export default function TaxesPage() {
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(pagination.page + 1)}
-            disabled={pagination.page === pagination.totalPages}
+            disabled={pagination.page === pagination.totalPages || loading}
             className="h-8 w-8 p-0"
           >
             <ChevronRight className="h-4 w-4" />
@@ -376,7 +417,11 @@ export default function TaxesPage() {
               </div>
               
               <div className="flex gap-2">
-                <Button onClick={handleCreateNew} className="bg-blue-600 hover:bg-blue-700 text-white">
+                <Button 
+                  onClick={handleCreateNew}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  disabled={loading}
+                >
                   <Plus className="h-4 w-4 mr-2" />
                   Add Tax Type
                 </Button>
@@ -435,6 +480,8 @@ export default function TaxesPage() {
                       <TableHead className="w-16 text-center font-semibold text-gray-900">No</TableHead>
                       <TableHead className="font-semibold text-gray-900">Tax Code</TableHead>
                       <TableHead className="font-semibold text-gray-900">Name</TableHead>
+                      <TableHead className="font-semibold text-gray-900">Tax Rate</TableHead>
+                      <TableHead className="font-semibold text-gray-900">Type</TableHead>
                       <TableHead className="font-semibold text-gray-900">Description</TableHead>
                       <TableHead className="text-center font-semibold text-gray-900">Status</TableHead>
                       <TableHead className="text-center font-semibold text-gray-900">Actions</TableHead>
@@ -443,10 +490,15 @@ export default function TaxesPage() {
                   <TableBody>
                     {taxTypes.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center py-12">
+                        <TableCell colSpan={8} className="text-center py-12">
                           <div className="flex flex-col items-center justify-center text-gray-500">
                             <Tag className="h-12 w-12 mb-4 text-gray-300" />
-                            <p className="text-lg font-medium mb-2">No tax types found</p>
+                            <p className="text-lg font-medium mb-2">
+                              {searchTerm || showInactive ? 'No tax types found' : 'No tax types yet'}
+                            </p>
+                            <p className="text-sm text-gray-400 mb-4">
+                              {searchTerm || showInactive ? 'Try adjusting your search terms' : 'Get started by adding your first tax type'}
+                            </p>
                             <Button onClick={handleCreateNew} size="sm">
                               <Plus className="h-4 w-4 mr-2" />
                               Add Tax Type
@@ -468,6 +520,12 @@ export default function TaxesPage() {
                           <TableCell className="font-medium text-gray-900">
                             {tax.name}
                           </TableCell>
+                          <TableCell className="font-semibold text-gray-900">
+                            {tax.tax_rate}%
+                          </TableCell>
+                          <TableCell>
+                            {getTaxTypeBadge(tax.tax_type)}
+                          </TableCell>
                           <TableCell className="max-w-[200px]">
                             <span className="text-gray-600 text-sm line-clamp-2">
                               {tax.description || '-'}
@@ -484,6 +542,7 @@ export default function TaxesPage() {
                                 variant="outline"
                                 className="h-8 w-8 p-0 border-gray-300 hover:bg-gray-50"
                                 title="Edit"
+                                disabled={loading || actionLoading !== null}
                               >
                                 <Edit className="h-3 w-3" />
                               </Button>
@@ -495,17 +554,29 @@ export default function TaxesPage() {
                                   tax.is_active ? 'text-orange-600' : 'text-green-600'
                                 }`}
                                 title={tax.is_active ? 'Deactivate' : 'Activate'}
+                                disabled={loading || actionLoading === tax.tax_code}
                               >
-                                {tax.is_active ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
+                                {actionLoading === tax.tax_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : tax.is_active ? (
+                                  <X className="h-3 w-3" />
+                                ) : (
+                                  <Check className="h-3 w-3" />
+                                )}
                               </Button>
                               <Button
                                 onClick={() => handleDelete(tax)}
                                 size="sm"
                                 variant="outline"
-                                className="h-8 w-8 p-0 text-red-600 hover:text-red-700 border-gray-300 hover:bg-gray-50"
+                                className="h-8 w-8 p-0 border-gray-300 hover:bg-red-50 text-red-600"
                                 title="Delete"
+                                disabled={loading || actionLoading === tax.tax_code}
                               >
-                                <Trash2 className="h-3 w-3" />
+                                {actionLoading === tax.tax_code ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
                               </Button>
                             </div>
                           </TableCell>
@@ -522,7 +593,7 @@ export default function TaxesPage() {
           </CardContent>
         </Card>
 
-        {/* Tax Form - Below Table (Non Modal) */}
+        {/* Tax Form */}
         {showForm && (
           <Card className="bg-white border shadow-sm">
             <CardHeader>
@@ -562,6 +633,42 @@ export default function TaxesPage() {
                       placeholder="PPN 11%"
                       disabled={submitting}
                     />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="tax_rate" className="text-sm font-medium">
+                      Tax Rate (%) *
+                    </Label>
+                    <Input
+                      id="tax_rate"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.01"
+                      value={formData.tax_rate}
+                      onChange={(e) => updateFormField('tax_rate', e.target.value)}
+                      placeholder="11.00"
+                      disabled={submitting}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="tax_type" className="text-sm font-medium">
+                      Tax Type *
+                    </Label>
+                    <select
+                      id="tax_type"
+                      value={formData.tax_type}
+                      onChange={(e) => updateFormField('tax_type', e.target.value)}
+                      disabled={submitting}
+                      className="w-full border rounded-md px-3 py-2 text-sm"
+                    >
+                      <option value="vat">VAT</option>
+                      <option value="pph">PPH</option>
+                      <option value="other">Other</option>
+                    </select>
                   </div>
                 </div>
 
