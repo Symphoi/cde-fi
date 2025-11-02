@@ -47,6 +47,73 @@ async function getNextSequence(
   }
 }
 
+// Helper function untuk create AR invoice
+async function createARInvoice(soCode, customerName, totalAmount, decoded) {
+  try {
+    // Generate AR code
+    const sequence = await getNextSequence('AR', null, null, null, null);
+    const arCode = `${sequence.prefix}${sequence.number}`;
+    
+    // Generate invoice number
+    const invoiceSequence = await getNextSequence('INV', null, null, null, null);
+    const invoiceNumber = `${invoiceSequence.prefix}${invoiceSequence.number}`;
+
+    const currentDate = new Date();
+    const dueDate = new Date(currentDate);
+    dueDate.setDate(dueDate.getDate() + 30); // 30 days terms
+
+    // Insert AR invoice
+    await query(
+      `INSERT INTO accounts_receivable 
+       (ar_code, customer_name, invoice_number, invoice_date, due_date, amount, outstanding_amount, status, so_code) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'unpaid', ?)`,
+      [
+        arCode,
+        customerName,
+        invoiceNumber,
+        currentDate.toISOString().split('T')[0],
+        dueDate.toISOString().split('T')[0],
+        totalAmount,
+        totalAmount,
+        soCode
+      ]
+    );
+
+    // Update SO dengan AR info
+    await query(
+      `UPDATE sales_orders 
+       SET ar_code = ?, invoice_number = ?, invoice_date = ?, due_date = ?, accounting_status = 'not_posted'
+       WHERE so_code = ?`,
+      [
+        arCode,
+        invoiceNumber,
+        currentDate.toISOString().split('T')[0],
+        dueDate.toISOString().split('T')[0],
+        soCode
+      ]
+    );
+
+    // Audit log
+    await query(
+      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes)
+       VALUES (?, ?, ?, 'create', 'ar_invoice', ?, ?, ?)`,
+      [
+        `AUD-${Date.now()}`,
+        decoded.user_code,
+        decoded.name,
+        arCode,
+        `AR Invoice ${arCode}`,
+        `Auto-created AR invoice for SO ${soCode}`
+      ]
+    );
+
+    return { arCode, invoiceNumber };
+  } catch (error) {
+    console.error('Create AR invoice error:', error);
+    throw error;
+  }
+}
+
 // GET_DETAIL function untuk handle single SO
 async function GET_DETAIL(soCode) {
   try {
@@ -154,7 +221,7 @@ export async function GET(request) {
 
     const { searchParams } = new URL(request.url);
     const action = searchParams.get("action");
-    const soCode = searchParams.get("so_code"); // NEW: untuk get detail
+    const soCode = searchParams.get("so_code");
 
     // Handler untuk get detail sales order by so_code
     if (soCode) {
@@ -329,6 +396,7 @@ export async function GET(request) {
     );
   }
 }
+
 export async function POST(request) {
   let connection;
   try {
@@ -495,7 +563,6 @@ export async function POST(request) {
     const sequence = await getNextSequence('SO', companyCode, project_code, sales_rep_code, customer_code);
     const soCode = `${sequence.prefix}${sequence.number}`;
 
-    // Start transaction
     // Insert sales order
     await query(
       `INSERT INTO sales_orders 
@@ -565,6 +632,9 @@ export async function POST(request) {
       }
     }
 
+    // ✅ AUTO CREATE AR INVOICE
+    const arResult = await createARInvoice(soCode, customer_name, total_amount, decoded);
+
     // ✅ HANDLE FILE UPLOADS
     const allFiles = [salesOrderFile, ...otherFiles];
     const uploadedFiles = [];
@@ -621,7 +691,7 @@ export async function POST(request) {
         decoded.name, 
         soCode, 
         `Sales Order ${soCode}`,
-        `Created new sales order with ${uploadedFiles.length} files`
+        `Created new sales order with ${uploadedFiles.length} files and AR invoice ${arResult.arCode}`
       ]
     );
 
@@ -630,12 +700,16 @@ export async function POST(request) {
       success: true,
       message: 'Sales order created successfully',
       so_code: soCode,
+      ar_code: arResult.arCode,
+      invoice_number: arResult.invoiceNumber,
       data: {
         so_code: soCode,
         customer_name,
         total_amount,
         files_uploaded: uploadedFiles.length,
-        uploaded_files: uploadedFiles.map(f => f.originalName)
+        uploaded_files: uploadedFiles.map(f => f.originalName),
+        ar_code: arResult.arCode,
+        invoice_number: arResult.invoiceNumber
       }
     }, { status: 201 });
 
@@ -653,4 +727,3 @@ export async function POST(request) {
     );
   }
 }
-

@@ -17,34 +17,300 @@ async function createAuditLog(userCode, userName, action, resourceType, resource
   }
 }
 
-// Helper untuk generate code dengan numbering_sequences
-async function generateCode(sequenceCode, prefix) {
+// Helper function untuk generate number sequence dengan template support
+async function getNextSequence(
+  sequenceCode,
+  companyCode,
+  projectCode,
+  salesRepCode,
+  customerCode
+) {
   try {
-    // Get next number
-    const sequence = await query(
-      'SELECT next_number FROM numbering_sequences WHERE sequence_code = ?',
+    const existingSequence = await query(
+      "SELECT next_number, prefix FROM numbering_sequences WHERE sequence_code = ?",
       [sequenceCode]
     );
-    
-    if (sequence.length === 0) {
-      throw new Error(`Sequence ${sequenceCode} not found`);
+
+    if (existingSequence.length > 0) {
+      const currentNumber = existingSequence[0].next_number;
+      const template = existingSequence[0].prefix;
+
+      const dynamicPrefix = template
+        .replace("{company}", companyCode || "CS")
+        .replace("{project}", projectCode || "PROJ")
+        .replace("{sales_rep}", salesRepCode || "SR001")
+        .replace("{customer}", customerCode || "CUST001");
+
+      const nextNumber = currentNumber + 1;
+      await query(
+        "UPDATE numbering_sequences SET next_number = ? WHERE sequence_code = ?",
+        [nextNumber, sequenceCode]
+      );
+
+      return {
+        number: currentNumber,
+        prefix: dynamicPrefix,
+      };
+    } else {
+      throw new Error("Sequence not found");
     }
-    
-    const nextNumber = sequence[0].next_number;
-    const code = `${prefix}${String(nextNumber).padStart(4, '0')}`;
-    
-    // Update next number
-    await query(
-      'UPDATE numbering_sequences SET next_number = next_number + 1 WHERE sequence_code = ?',
-      [sequenceCode]
-    );
-    
-    return code;
   } catch (error) {
-    console.error('Error generating code:', error);
-    // Fallback ke method lama
-    const countResult = await query(`SELECT COUNT(*) as count FROM purchase_orders`);
-    return `${prefix}-${new Date().getFullYear()}-${String(countResult[0].count + 1).padStart(4, '0')}`;
+    console.error("Error getting sequence:", error);
+    throw error;
+  }
+}
+
+// Helper function untuk create AP invoice
+async function createAPInvoice(poCode, supplierName, totalAmount, decoded) {
+  try {
+    // Generate AP code
+    const sequence = await getNextSequence('AP', null, null, null, null);
+    const apCode = `${sequence.prefix}${sequence.number}`;
+    
+    // Generate supplier invoice number
+    const invoiceNumber = `INV-${poCode}-${Date.now().toString().slice(-6)}`;
+
+    const currentDate = new Date();
+    const dueDate = new Date(currentDate);
+    dueDate.setDate(dueDate.getDate() + 30); // 30 days terms
+
+    // Insert AP invoice
+    await query(
+      `INSERT INTO accounts_payable 
+       (ap_code, supplier_name, invoice_number, invoice_date, due_date, amount, outstanding_amount, status, po_code) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'unpaid', ?)`,
+      [
+        apCode,
+        supplierName,
+        invoiceNumber,
+        currentDate.toISOString().split('T')[0],
+        dueDate.toISOString().split('T')[0],
+        totalAmount,
+        totalAmount,
+        poCode
+      ]
+    );
+
+    // Update PO dengan AP info
+    await query(
+      `UPDATE purchase_orders 
+       SET ap_code = ?, supplier_invoice_number = ?, supplier_invoice_date = ?, due_date = ?
+       WHERE po_code = ?`,
+      [
+        apCode,
+        invoiceNumber,
+        currentDate.toISOString().split('T')[0],
+        dueDate.toISOString().split('T')[0],
+        poCode
+      ]
+    );
+
+    // Audit log
+    await query(
+      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes)
+       VALUES (?, ?, ?, 'create', 'ap_invoice', ?, ?, ?)`,
+      [
+        `AUD-${Date.now()}`,
+        decoded.user_code,
+        decoded.name,
+        apCode,
+        `AP Invoice ${apCode}`,
+        `Auto-created AP invoice for PO ${poCode}`
+      ]
+    );
+
+    return { apCode, invoiceNumber };
+  } catch (error) {
+    console.error('Create AP invoice error:', error);
+    throw error;
+  }
+}
+
+// Helper function untuk create journal entry
+async function createJournalEntryForPayment(paymentCode, poCode, amount, companyBankCode, decoded) {
+  try {
+    // Get accounting rule untuk payment
+    const accountingRule = await query(
+      'SELECT debit_account_code, credit_account_code FROM accounting_rules WHERE rule_code = ? AND is_active = 1',
+      ['RULE004'] // Pengeluaran Kas
+    );
+
+    if (accountingRule.length === 0) {
+      throw new Error('Accounting rule not found for payment');
+    }
+
+    // Get bank account details
+    const bankAccount = await query(
+      'SELECT account_code, bank_name, account_number FROM bank_accounts WHERE account_code = ? AND is_active = 1 AND is_deleted = 0',
+      [companyBankCode]
+    );
+
+    if (bankAccount.length === 0) {
+      throw new Error('Bank account not found');
+    }
+
+    const creditAccountCode = bankAccount[0].account_code; // Use actual bank account code
+    const debitAccountCode = accountingRule[0].debit_account_code; // 2110 - Hutang Usaha
+
+    // Get open accounting period
+    const openPeriod = await query(
+      'SELECT period_code FROM accounting_periods WHERE status = "open" ORDER BY start_date DESC LIMIT 1'
+    );
+
+    const periodCode = openPeriod.length > 0 ? openPeriod[0].period_code : '2024-01'; // fallback
+
+    // Generate journal code
+    const journalSequence = await getNextSequence('JNL', null, null, null, null);
+    const journalCode = `${journalSequence.prefix}${journalSequence.number}`;
+
+    const currentDate = new Date().toISOString().split('T')[0];
+
+    // Insert journal entry
+    await query(
+      `INSERT INTO journal_entries 
+       (journal_code, transaction_date, description, reference_type, reference_code, period_code, total_debit, total_credit, status, created_by)
+       VALUES (?, ?, ?, 'payment', ?, ?, ?, ?, 'posted', ?)`,
+      [
+        journalCode,
+        currentDate,
+        `Payment for PO ${poCode}`,
+        paymentCode,
+        periodCode,
+        amount,
+        amount,
+        decoded.name
+      ]
+    );
+
+    // Insert journal items - Debit: Hutang Usaha
+    const debitItemCode = `JNI-${Date.now()}-1`;
+    await query(
+      `INSERT INTO journal_items 
+       (journal_item_code, journal_code, account_code, debit_amount, credit_amount, description)
+       VALUES (?, ?, ?, ?, 0, ?)`,
+      [
+        debitItemCode,
+        journalCode,
+        debitAccountCode,
+        amount,
+        `Payment to supplier for PO ${poCode}`
+      ]
+    );
+
+    // Insert journal items - Credit: Bank
+    const creditItemCode = `JNI-${Date.now()}-2`;
+    await query(
+      `INSERT INTO journal_items 
+       (journal_item_code, journal_code, account_code, debit_amount, credit_amount, description)
+       VALUES (?, ?, ?, 0, ?, ?)`,
+      [
+        creditItemCode,
+        journalCode,
+        creditAccountCode,
+        amount,
+        `Bank payment for PO ${poCode} - ${bankAccount[0].bank_name}`
+      ]
+    );
+
+    // Update PO dengan journal info
+    await query(
+      `UPDATE purchase_orders 
+       SET journal_code = ?, accounting_status = 'posted'
+       WHERE po_code = ?`,
+      [journalCode, poCode]
+    );
+
+    // Update AP status to paid
+    await query(
+      `UPDATE accounts_payable 
+       SET status = 'paid', outstanding_amount = 0
+       WHERE po_code = ?`,
+      [poCode]
+    );
+
+    // Audit log
+    await query(
+      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes)
+       VALUES (?, ?, ?, 'post_journal', 'journal_entry', ?, ?, ?)`,
+      [
+        `AUD-${Date.now()}`,
+        decoded.user_code,
+        decoded.name,
+        journalCode,
+        `Journal Entry ${journalCode}`,
+        `Auto-posted journal entry for payment ${paymentCode}`
+      ]
+    );
+
+    return { journalCode, debitAccountCode, creditAccountCode };
+  } catch (error) {
+    console.error('Create journal entry error:', error);
+    throw error;
+  }
+}
+
+// ================================
+// GET ALL SUPPLIERS ENDPOINT
+// ================================
+async function handleGetSuppliers(decoded) {
+  try {
+    const suppliers = await query(
+      `SELECT 
+        supplier_code,
+        supplier_name,
+        contact_person,
+        phone,
+        email,
+        bank_name,
+        account_number
+       FROM suppliers 
+       WHERE status = 'active' AND is_deleted = FALSE
+       ORDER BY supplier_name`
+    );
+
+    return Response.json({
+      success: true,
+      data: suppliers
+    });
+
+  } catch (error) {
+    console.error('Get suppliers error:', error);
+    return Response.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+
+// ================================
+// GET ALL BANK ACCOUNTS ENDPOINT
+// ================================
+async function handleGetBankAccounts(decoded) {
+  try {
+    const bankAccounts = await query(
+      `SELECT 
+        account_code,
+        bank_name,
+        account_number,
+        account_holder,
+        branch,
+        currency
+       FROM bank_accounts 
+       WHERE is_active = 1 AND is_deleted = 0
+       ORDER BY bank_name, account_number`
+    );
+
+    return Response.json({
+      success: true,
+      data: bankAccounts
+    });
+
+  } catch (error) {
+    console.error('Get bank accounts error:', error);
+    return Response.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
   }
 }
 
@@ -59,6 +325,18 @@ export async function GET(request) {
     }
 
     const { searchParams } = new URL(request.url);
+    const endpoint = searchParams.get('endpoint');
+
+    // Handle suppliers endpoint
+    if (endpoint === 'suppliers') {
+      return await handleGetSuppliers(decoded);
+    }
+
+    // Handle bank accounts endpoint
+    if (endpoint === 'bank-accounts') {
+      return await handleGetBankAccounts(decoded);
+    }
+
     const status = searchParams.get('status');
     const search = searchParams.get('search');
     const page = parseInt(searchParams.get('page')) || 1;
@@ -102,6 +380,9 @@ export async function GET(request) {
         po.approved_date_finance,
         po.approval_notes,
         po.rejection_reason,
+        po.ap_code,
+        po.journal_code,
+        po.accounting_status,
         po.created_at
        FROM purchase_orders po 
        ${whereClause}
@@ -219,9 +500,11 @@ export async function POST(request) {
       
       poData = JSON.parse(dataField);
       
-      // Get all files
+      // Get all files - FIXED: Gunakan check yang compatible dengan Node.js
       const fileFields = formData.getAll('files');
-      files = fileFields.filter(file => file instanceof File && file.size > 0);
+      files = fileFields.filter(file => {
+        return file && typeof file === 'object' && 'size' in file && file.size > 0;
+      });
       
     } else {
       // HANDLE JSON REQUEST BIASA
@@ -249,8 +532,25 @@ export async function POST(request) {
       );
     }
 
-    // Generate PO code menggunakan numbering_sequences
-    const poCode = await generateCode('PO', 'PO');
+    // Get company info untuk number sequence
+    const companyInfo = await query(
+      'SELECT company_code FROM companies WHERE is_deleted = FALSE LIMIT 1'
+    );
+    const companyCode = companyInfo.length > 0 ? companyInfo[0].company_code : 'COMPANY';
+
+    // Get project info jika ada
+    let projectCode = null;
+    if (so_code) {
+      const soInfo = await query(
+        'SELECT project_code FROM sales_orders WHERE so_code = ? AND is_deleted = FALSE',
+        [so_code]
+      );
+      projectCode = soInfo.length > 0 ? soInfo[0].project_code : null;
+    }
+
+    // Generate PO code menggunakan advanced number sequence
+    const sequence = await getNextSequence('PO', companyCode, projectCode, null, null);
+    const poCode = `${sequence.prefix}${String(sequence.number).padStart(4, '0')}`;
 
     // Calculate total amount
     const totalAmount = items.reduce((sum, item) => sum + (item.purchase_price * item.quantity), 0);
@@ -305,11 +605,12 @@ export async function POST(request) {
       );
     }
 
-    // HANDLE FILE UPLOADS JIKA ADA
+    // HANDLE FILE UPLOADS JIKA ADA - FIXED VERSION
     if (files.length > 0) {
       for (let file of files) {
         const timestamp = Date.now();
-        const fileExtension = file.name.split('.').pop();
+        const originalName = file.name || `po_file_${timestamp}.pdf`;
+        const fileExtension = originalName.split('.').pop() || 'pdf';
         const filename = `po_file_${timestamp}_${Math.random().toString(36).substr(2, 9)}.${fileExtension}`;
         
         // Save file ke public/uploads/po
@@ -330,7 +631,7 @@ export async function POST(request) {
           [
             attachmentCode,
             'TEMP', // akan diupdate ketika payment dibuat
-            file.name,
+            originalName,
             'proof',
             filename
           ]
@@ -395,6 +696,16 @@ export async function PATCH(request) {
         approvalField = 'approved_by_finance';
         approvalDateField = 'approved_date_finance';
         auditAction = 'approve';
+        
+        // ✅ AUTO CREATE AP INVOICE ketika PO approved finance
+        const poInfo = await query(
+          'SELECT supplier_name, total_amount FROM purchase_orders WHERE po_code = ?',
+          [po_code]
+        );
+        
+        if (poInfo.length > 0) {
+          await createAPInvoice(po_code, poInfo[0].supplier_name, poInfo[0].total_amount, decoded);
+        }
         break;
       case 'reject':
         newStatus = 'rejected';
@@ -495,13 +806,22 @@ export async function PUT(request) {
       amount,
       supplier_name,
       so_code = null,
-      so_reference = null
+      so_reference = null,
+      company_bank_code // NEW: Bank company yang dipilih
     } = paymentData;
 
     // Validasi required fields
     if (!po_code || !payment_method || !payment_date || !reference_number || !amount || !supplier_name) {
       return Response.json(
         { error: 'PO code, payment method, payment date, reference number, amount, and supplier name are required' },
+        { status: 400 }
+      );
+    }
+
+    // Validasi: untuk transfer wajib pilih bank company
+    if (payment_method === 'transfer' && !company_bank_code) {
+      return Response.json(
+        { error: 'Company bank account is required for transfer payment' },
         { status: 400 }
       );
     }
@@ -523,8 +843,25 @@ export async function PUT(request) {
       );
     }
 
-    // Generate payment code menggunakan numbering_sequences
-    const paymentCode = await generateCode('PAY', 'PAY');
+    // Get company info untuk number sequence
+    const companyInfo = await query(
+      'SELECT company_code FROM companies WHERE is_deleted = FALSE LIMIT 1'
+    );
+    const companyCode = companyInfo.length > 0 ? companyInfo[0].company_code : 'COMPANY';
+
+    // Generate payment code menggunakan advanced number sequence
+    const sequence = await getNextSequence('PAY', companyCode, null, null, null);
+    const paymentCode = `${sequence.prefix}${String(sequence.number).padStart(4, '0')}`;
+
+    // Get bank account details untuk company bank
+    let companyBankInfo = null;
+    if (company_bank_code) {
+      const bankInfo = await query(
+        'SELECT bank_name, account_number, account_holder FROM bank_accounts WHERE account_code = ? AND is_active = 1 AND is_deleted = 0',
+        [company_bank_code]
+      );
+      companyBankInfo = bankInfo.length > 0 ? bankInfo[0] : null;
+    }
 
     // Insert payment
     await query(
@@ -544,14 +881,25 @@ export async function PUT(request) {
       ['paid', po_code]
     );
 
-    // Handle file uploads untuk payment documents
+    // ✅ AUTO CREATE JOURNAL ENTRY untuk payment
+    if (company_bank_code) {
+      await createJournalEntryForPayment(paymentCode, po_code, amount, company_bank_code, decoded);
+    }
+
+    // Handle file uploads untuk payment documents - FIXED VERSION
     const fileFields = formData.getAll('files');
-    const files = fileFields.filter(file => file instanceof File && file.size > 0);
+    
+    // FIX: Gunakan check yang compatible dengan Node.js environment
+    const files = fileFields.filter(file => {
+      // Di Node.js, file dari formData memiliki type dan size properties
+      return file && typeof file === 'object' && 'size' in file && file.size > 0;
+    });
 
     if (files.length > 0) {
       for (let file of files) {
         const timestamp = Date.now();
-        const fileExtension = file.name.split('.').pop();
+        const originalName = file.name || `payment_doc_${timestamp}.pdf`;
+        const fileExtension = originalName.split('.').pop() || 'pdf';
         const filename = `payment_${timestamp}_${Math.random().toString(36).substr(2, 9)}.${fileExtension}`;
         
         // Save file ke public/uploads/payments
@@ -563,6 +911,15 @@ export async function PUT(request) {
         const filePath = path.join(uploadDir, filename);
         await writeFile(filePath, buffer);
 
+        // Determine file type
+        let fileType = 'proof';
+        const lowerName = originalName.toLowerCase();
+        if (lowerName.includes('invoice')) {
+          fileType = 'invoice';
+        } else if (lowerName.includes('receipt') || lowerName.includes('bukti')) {
+          fileType = 'proof';
+        }
+
         // Insert payment attachment
         const attachmentCode = `PAYATT-${timestamp}`;
         await query(
@@ -572,15 +929,15 @@ export async function PUT(request) {
           [
             attachmentCode,
             paymentCode,
-            file.name,
-            file.name.toLowerCase().includes('invoice') ? 'invoice' : 'proof',
+            originalName,
+            fileType,
             filename
           ]
         );
       }
     }
 
-    // Update temporary attachments
+    // Update temporary attachments (jika ada)
     if (files.length > 0) {
       await query(
         `UPDATE purchase_order_attachments 
@@ -600,13 +957,17 @@ export async function PUT(request) {
       'pay',
       'payment',
       paymentCode,
-      `Payment created for PO ${po_code}`
+      `Payment created for PO ${po_code} using company bank ${companyBankInfo?.bank_name || 'N/A'}`
     );
 
     return Response.json({
       success: true,
       message: `Payment created successfully with ${files.length} documents`,
-      payment_code: paymentCode
+      payment_code: paymentCode,
+      company_bank_used: companyBankInfo ? {
+        bank_name: companyBankInfo.bank_name,
+        account_number: companyBankInfo.account_number
+      } : null
     });
 
   } catch (error) {

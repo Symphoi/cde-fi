@@ -24,8 +24,6 @@ import {
   RotateCcw,
   Loader2,
   FileDigit,
-  HelpCircle,
-  ChevronDown,
   Building,
   User,
   Folder,
@@ -62,71 +60,71 @@ const templateOptions = [
   },
   // SALES & CUSTOMER RELATED
   { 
-    value: '{customer_code}/{project_code}/{company_code}/{sales_rep}/', 
+    value: '{customer}/{project}/{company}/{sales_rep}/', 
     label: 'Sales Order Format',
     description: 'CUST001/PRJ001/COMP001/SR001/',
     category: 'sales'
   },
   { 
-    value: '{customer_code}/{project_code}/', 
+    value: '{customer}/{project}/', 
     label: 'Project Customer Format',
     description: 'CUST001/PRJ001/',
     category: 'sales'
   },
   { 
-    value: '{customer_code}/{year}/{month}/', 
+    value: '{customer}/{year}/{month}/', 
     label: 'Customer Monthly',
     description: 'CUST001/2024/12/',
     category: 'sales'
   },
   // PURCHASE & VENDOR RELATED  
   { 
-    value: '{vendor_code}/{project_code}/{company_code}/', 
+    value: '{vendor}/{project}/{company}/', 
     label: 'Purchase Order Format',
     description: 'VEND001/PRJ001/COMP001/',
     category: 'purchase'
   },
   { 
-    value: '{vendor_code}/{year}/{month}/', 
+    value: '{vendor}/{year}/{month}/', 
     label: 'Vendor Monthly',
     description: 'VEND001/2024/12/',
     category: 'purchase'
   },
   // INVOICE & PAYMENTS
   { 
-    value: '{customer_code}/INV/{year}/{month}/', 
+    value: '{customer}/INV/{year}/{month}/', 
     label: 'Invoice Format',
     description: 'CUST001/INV/2024/12/',
     category: 'accounting'
   },
   { 
-    value: '{customer_code}/PAY/{year}/{month}/', 
+    value: '{customer}/PAY/{year}/{month}/', 
     label: 'Payment Format',
     description: 'CUST001/PAY/2024/12/',
     category: 'accounting'
   },
   // EMPLOYEE RELATED
   { 
-    value: '{user_code}/{year}/{month}/', 
+    value: '{user}/{year}/{month}/', 
     label: 'Employee Monthly',
     description: 'USR001/2024/12/',
     category: 'hr'
   },
   { 
-    value: '{user_code}/CA/{year}/', 
+    value: '{user}/CA/{year}/', 
     label: 'Cash Advance Format',
     description: 'USR001/CA/2024/',
     category: 'hr'
   },
   // COMPANY & PROJECT
   { 
-    value: '{company_code}/{project_code}/', 
+    value: '{company}/{project}/', 
     label: 'Company Project',
     description: 'COMP001/PRJ001/',
     category: 'project'
   },
   { 
-    value: '{company_code}-{year}-', 
+    value: '{company}-{year}-', 
     label: 'Company Year Format',
     description: 'COMP001-2024-',
     category: 'company'
@@ -146,50 +144,43 @@ const templateOptions = [
   }
 ];
 
+
 // Variable categories for template builder
 const variableCategories = [
   {
     name: 'Customer',
     icon: User,
     variables: [
-      { code: '{customer_code}', name: 'Customer Code', example: 'CUST001' },
-      { code: '{customer_name}', name: 'Customer Name', example: 'PT Customer' },
-      { code: '{customer_type}', name: 'Customer Type', example: 'company' }
+      { code: '{customer}', name: 'Customer', example: 'CUST001' }
     ]
   },
   {
     name: 'Project',
     icon: Folder,
     variables: [
-      { code: '{project_code}', name: 'Project Code', example: 'PRJ001' },
-      { code: '{project_name}', name: 'Project Name', example: 'Website Development' }
+      { code: '{project}', name: 'Project', example: 'PRJ001' }
     ]
   },
   {
     name: 'Company',
     icon: Building,
     variables: [
-      { code: '{company_code}', name: 'Company Code', example: 'COMP001' },
-      { code: '{company_name}', name: 'Company Name', example: 'PT Perusahaan' }
+      { code: '{company}', name: 'Company', example: 'COMP001' }
     ]
   },
   {
     name: 'Vendor',
     icon: Truck,
     variables: [
-      { code: '{vendor_code}', name: 'Vendor Code', example: 'VEND001' },
-      { code: '{vendor_name}', name: 'Vendor Name', example: 'PT Supplier' }
+      { code: '{vendor}', name: 'Vendor', example: 'VEND001' }
     ]
   },
   {
     name: 'User',
     icon: User,
     variables: [
-      { code: '{user_code}', name: 'User Code', example: 'USR001' },
-      { code: '{user_name}', name: 'User Name', example: 'John Doe' },
-      { code: '{department}', name: 'Department', example: 'Sales' },
-      { code: '{position}', name: 'Position', example: 'Manager' },
-      { code: '{sales_rep}', name: 'Sales Rep Code', example: 'SR001' }
+      { code: '{user}', name: 'User', example: 'USR001' },
+      { code: '{sales_rep}', name: 'Sales Rep', example: 'SR001' }
     ]
   },
   {
@@ -197,8 +188,7 @@ const variableCategories = [
     icon: Calendar,
     variables: [
       { code: '{year}', name: 'Year', example: '2024' },
-      { code: '{month}', name: 'Month', example: '12' },
-      { code: '{day}', name: 'Day', example: '31' }
+      { code: '{month}', name: 'Month', example: '12' }
     ]
   },
   {
@@ -213,6 +203,7 @@ const variableCategories = [
     ]
   }
 ];
+
 
 // API Service
 class NumberingSequenceService {
@@ -233,19 +224,12 @@ class NumberingSequenceService {
       },
     });
 
-    if (!response.ok) {
-      try {
-        const errorData = await response.json();
-        throw new Error(
-          errorData.error || `HTTP error! status: ${response.status}`
-        );
-      } catch (jsonError) {
-        const errorText = await response.text();
-        throw new Error(errorText || `HTTP error! status: ${response.status}`);
-      }
-    }
-
-    return response.json();
+    // FIX BENER
+if (!response.ok) {
+  const errorText = await response.text();  // ← BACA SEKALI SAJA
+  throw new Error(errorText);
+}
+return response.json();  // ← HANYA JIKA SUCCESS
   }
 
   static async getSequences(search?: string) {
@@ -422,22 +406,26 @@ export default function NumberingSequencesPage() {
   };
 
   // Validate template variables
-  const validateTemplate = (template: string): string[] => {
-    const allowedVariables = [
-      '{customer_code}', '{customer_name}', '{customer_type}',
-      '{project_code}', '{project_name}', 
-      '{company_code}', '{company_name}',
-      '{vendor_code}', '{vendor_name}',
-      '{user_code}', '{user_name}', '{department}', '{position}', '{sales_rep}',
-      '{year}', '{month}', '{day}'
-    ];
-    const variablesInTemplate = template.match(/\{[\w]+\}/g) || [];
-    return variablesInTemplate.filter(v => !allowedVariables.includes(v));
-  };
+const validateTemplate = (template: string): string[] => {
+  const allowedVariables = [
+    '{company}', '{project}', '{customer}', 
+    '{vendor}', '{user}', '{sales_rep}',
+    '{year}', '{month}'
+  ];
+  const variablesInTemplate = template.match(/\{[\w]+\}/g) || [];
+  return variablesInTemplate.filter(v => !allowedVariables.includes(v));
+};
+
 
   const submitForm = async () => {
     if (!formData.sequence_code.trim()) {
       toast.error("Sequence code is required");
+      return;
+    }
+
+    // Validate sequence code format
+    if (!/^[A-Z0-9_-]+$/.test(formData.sequence_code)) {
+      toast.error("Sequence code can only contain uppercase letters, numbers, hyphens, and underscores");
       return;
     }
 
