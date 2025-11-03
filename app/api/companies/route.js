@@ -1,14 +1,27 @@
 import { query } from '@/app/lib/db';
 import { verifyToken } from '@/app/lib/auth';
 
-// Helper function untuk audit log - DISABLED
+// Helper function untuk audit log
 async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
   try {
-    // Audit log disabled untuk companies
-    console.log(`[AUDIT DISABLED] ${action} ${resourceType} ${resourceCode}: ${notes}`);
-    return;
+    const auditCode = `AUD-${Date.now()}`;
+    await query(
+      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        auditCode,
+        userCode,
+        userName,
+        action,
+        resourceType,
+        resourceCode,
+        `${resourceType} ${resourceCode}`,
+        notes
+      ]
+    );
+    console.log('✅ Audit log created for:', resourceType, resourceCode);
   } catch (error) {
-    console.error('Error in audit log (disabled):', error);
+    console.error('❌ Audit log error:', error);
   }
 }
 
@@ -20,12 +33,10 @@ async function handleGenerateCode() {
     let attempts = 0;
     const maxAttempts = 10;
 
-    // Generate unique company code
     while (!isUnique && attempts < maxAttempts) {
       const randomSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
       companyCode = `COMP${randomSuffix}`;
       
-      // Check if code already exists
       const existingCompany = await query(
         'SELECT company_code FROM companies WHERE company_code = ? AND is_deleted = 0',
         [companyCode]
@@ -179,7 +190,7 @@ export async function POST(request) {
     // Validation
     if (!company_code || !name || !tax_id) {
       return Response.json(
-        { success: false, error: 'Company code ,  name and tax_id are required' },
+        { success: false, error: 'Company code, name and tax_id are required' },
         { status: 400 }
       );
     }
@@ -221,7 +232,7 @@ export async function POST(request) {
       ]
     );
 
-    // Audit log (disabled)
+    // Audit log - FIXED parameter
     await createAuditLog(
       decoded.user_code,
       decoded.name,
@@ -277,7 +288,7 @@ export async function PUT(request) {
     // Validation
     if (!id || !company_code || !name || !tax_id) {
       return Response.json(
-        { success: false, error: 'Company ID, code , tax id and name are required' },
+        { success: false, error: 'Company ID, code, tax id and name are required' },
         { status: 400 }
       );
     }
@@ -334,7 +345,7 @@ export async function PUT(request) {
       ]
     );
 
-    // Audit log (disabled)
+    // Audit log - FIXED parameter
     await createAuditLog(
       decoded.user_code,
       decoded.name,
@@ -399,7 +410,7 @@ export async function DELETE(request) {
       [id]
     );
 
-    // Audit log (disabled)
+    // Audit log - FIXED parameter
     await createAuditLog(
       decoded.user_code,
       decoded.name,

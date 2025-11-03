@@ -2,7 +2,7 @@ import { query } from '@/app/lib/db';
 import { verifyToken } from '@/app/lib/auth';
 
 // Helper function untuk audit log
-// async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
+async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
   try {
     const auditCode = `AUD-${Date.now()}`;
     
@@ -21,7 +21,7 @@ import { verifyToken } from '@/app/lib/auth';
   } catch (error) {
     console.error('Error creating audit log:', error);
   }
-// }
+}
 
 // GET - Get all tax types
 export async function GET(request) {
