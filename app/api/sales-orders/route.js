@@ -59,36 +59,32 @@ async function createARInvoice(soCode, customerName, totalAmount, decoded) {
     const invoiceNumber = `${invoiceSequence.prefix}${invoiceSequence.number}`;
 
     const currentDate = new Date();
-    const dueDate = new Date(currentDate);
-    dueDate.setDate(dueDate.getDate() + 30); // 30 days terms
 
-    // Insert AR invoice
+    // Insert AR invoice - TANPA due_date
     await query(
       `INSERT INTO accounts_receivable 
-       (ar_code, customer_name, invoice_number, invoice_date, due_date, amount, outstanding_amount, status, so_code) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'unpaid', ?)`,
+       (ar_code, customer_name, invoice_number, invoice_date, amount, outstanding_amount, status, so_code) 
+       VALUES (?, ?, ?, ?, ?, ?, 'unpaid', ?)`,
       [
         arCode,
         customerName,
         invoiceNumber,
         currentDate.toISOString().split('T')[0],
-        dueDate.toISOString().split('T')[0],
         totalAmount,
         totalAmount,
         soCode
       ]
     );
 
-    // Update SO dengan AR info
+    // Update SO dengan AR info - TANPA due_date
     await query(
       `UPDATE sales_orders 
-       SET ar_code = ?, invoice_number = ?, invoice_date = ?, due_date = ?, accounting_status = 'not_posted'
+       SET ar_code = ?, invoice_number = ?, invoice_date = ?, accounting_status = 'not_posted'
        WHERE so_code = ?`,
       [
         arCode,
         invoiceNumber,
         currentDate.toISOString().split('T')[0],
-        dueDate.toISOString().split('T')[0],
         soCode
       ]
     );
@@ -398,7 +394,6 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  let connection;
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     const decoded = verifyToken(token);
@@ -635,7 +630,7 @@ export async function POST(request) {
     // ✅ AUTO CREATE AR INVOICE
     const arResult = await createARInvoice(soCode, customer_name, total_amount, decoded);
 
-    // ✅ HANDLE FILE UPLOADS
+    // ✅ HANDLE FILE UPLOADS - FIXED VERSION
     const allFiles = [salesOrderFile, ...otherFiles];
     const uploadedFiles = [];
 
@@ -643,17 +638,36 @@ export async function POST(request) {
       if (file && file.size > 0) {
         const timestamp = Date.now();
         const randomString = Math.random().toString(36).substr(2, 9);
-        const fileExtension = file.name.split('.').pop();
-        const filename = `so_${soCode}_${timestamp}_${randomString}.${fileExtension}`;
         
-        // Save file ke public/uploads/sales-orders
+        // ⭐⭐ BERSIHKAN NAMA FILE DARI KARAKTER KHUSUS ⭐⭐
+        const cleanSoCode = soCode.replace(/[\/\\:*?"<>|]/g, '_');
+        const cleanOriginalName = file.name.replace(/[\/\\:*?"<>|]/g, '_');
+        
+        const fileExtension = cleanOriginalName.split('.').pop();
+        const filename = `so_${cleanSoCode}_${timestamp}_${randomString}.${fileExtension}`;
+        
+        // Pastikan directory ada
         const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'sales-orders');
-        await mkdir(uploadDir, { recursive: true });
+        
+        try {
+          await mkdir(uploadDir, { recursive: true });
+          console.log('Directory created/verified:', uploadDir);
+        } catch (mkdirError) {
+          console.error('Error creating directory:', mkdirError);
+          throw new Error(`Failed to create upload directory: ${mkdirError.message}`);
+        }
         
         const bytes = await file.arrayBuffer();
         const buffer = Buffer.from(bytes);
         const filePath = path.join(uploadDir, filename);
-        await writeFile(filePath, buffer);
+        
+        try {
+          await writeFile(filePath, buffer);
+          console.log('File saved successfully:', filePath);
+        } catch (writeError) {
+          console.error('Error writing file:', writeError);
+          throw new Error(`Failed to save file: ${writeError.message}`);
+        }
 
         // Insert ke database
         const attachmentCode = `ATT-${timestamp}-${randomString}`;
@@ -665,7 +679,7 @@ export async function POST(request) {
             attachmentCode,
             soCode,
             filename,
-            file.name,
+            cleanOriginalName, // Gunakan nama yang sudah dibersihkan
             file.type,
             file.size,
             `/uploads/sales-orders/${filename}`
@@ -673,7 +687,7 @@ export async function POST(request) {
         );
 
         uploadedFiles.push({
-          originalName: file.name,
+          originalName: cleanOriginalName,
           savedName: filename,
           size: file.size,
           type: file.type
