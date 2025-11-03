@@ -145,7 +145,7 @@ const othersItems: NavItem[] = [
       { name: "Bank Account", path: "/bank-accounts", pro: false },
       { name: "Taxes", path: "/taxes", pro: false },
       { name: "Account", path: "/chart-of-account", pro: false },
-      { name: "Account Mapping", path: "/chart-of-Mapping", pro: false },
+      { name: "Account Mapping", path: "/accounting-rules", pro: false },
     ],
   },
   {

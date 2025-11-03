@@ -48,7 +48,7 @@ interface PurchaseOrder {
   supplier_contact?: string
   supplier_bank?: string
   total_amount: number
-  status: 'draft' | 'submitted' | 'paid' | 'cancelled' // Simplified status
+  status: 'draft' | 'submitted' | 'paid' | 'cancelled' | 'rejected'
   notes?: string
   date: string
   priority: 'low' | 'medium' | 'high'
@@ -339,6 +339,7 @@ export default function PurchaseOrderPage() {
             const submitted = poData.data.filter((po: PurchaseOrder) => po.status === 'submitted').length
             const paid = poData.data.filter((po: PurchaseOrder) => po.status === 'paid').length
             const cancelled = poData.data.filter((po: PurchaseOrder) => po.status === 'cancelled').length
+            const rejected = poData.data.filter((po: PurchaseOrder) => po.status === 'rejected').length
             
             setStats(prev => ({ 
               ...prev, 
@@ -347,7 +348,7 @@ export default function PurchaseOrderPage() {
               submitted,
               processing: 0, // Tidak ada processing status
               completed: paid,
-              cancelled
+              cancelled: cancelled + rejected
             }))
             
             // Extract all payments dari purchase orders
@@ -480,6 +481,12 @@ export default function PurchaseOrderPage() {
   const indexOfFirstItem = indexOfLastItem - itemsPerPage
   const currentItems = currentData.slice(indexOfFirstItem, indexOfLastItem)
   const totalPages = Math.ceil(currentData.length / itemsPerPage)
+
+  // Fungsi untuk cek apakah PO bisa dilakukan payment
+  const canMakePayment = (po: PurchaseOrder): boolean => {
+    const allowedStatuses = ['submitted'] // Hanya PO dengan status submitted yang bisa dibayar
+    return allowedStatuses.includes(po.status)
+  }
 
   // Fungsi untuk menghitung remaining quantity untuk SO tertentu
   const getRemainingQuantityForSO = (itemId: string, productCode: string, soCode: string): number => {
@@ -744,9 +751,9 @@ export default function PurchaseOrderPage() {
 
   // Handlers untuk Payment
   const handleCreatePayment = (po: PurchaseOrder) => {
-    // Cek apakah PO sudah submitted (bukan draft)
-    if (po.status === 'draft') {
-      alert('Only submitted Purchase Orders can be paid')
+    // Cek apakah PO bisa dilakukan payment
+    if (!canMakePayment(po)) {
+      alert(`Cannot create payment for PO with status "${getStatusText(po.status)}". Only submitted Purchase Orders can be paid.`)
       return
     }
     
@@ -827,6 +834,12 @@ export default function PurchaseOrderPage() {
 
   const submitPayment = async () => {
     if (!selectedPO) return
+
+    // Double check sebelum submit payment
+    if (!canMakePayment(selectedPO)) {
+      alert(`Cannot process payment for PO with status "${getStatusText(selectedPO.status)}". Only submitted Purchase Orders can be paid.`)
+      return
+    }
 
     if (!validatePaymentForm()) return
 
@@ -913,9 +926,10 @@ export default function PurchaseOrderPage() {
       completed: 'bg-green-100 text-green-800',
       cancelled: 'bg-red-100 text-red-800',
       
-      // PO Status (Simplified)
+      // PO Status
       draft: 'bg-gray-100 text-gray-800',
       paid: 'bg-green-100 text-green-800',
+      rejected: 'bg-red-100 text-red-800',
       
       // Payment Status
       pending: 'bg-yellow-100 text-yellow-800',
@@ -931,6 +945,7 @@ export default function PurchaseOrderPage() {
       submitted: 'Submitted',
       paid: 'Paid',
       cancelled: 'Cancelled',
+      rejected: 'Rejected',
       
       // Payment Status
       pending: 'Pending',
@@ -1211,6 +1226,7 @@ export default function PurchaseOrderPage() {
                     <option value="submitted">Submitted</option>
                     <option value="paid">Paid</option>
                     <option value="cancelled">Cancelled</option>
+                    <option value="rejected">Rejected</option>
                   </>
                 ) : (
                   <>
@@ -1417,16 +1433,16 @@ export default function PurchaseOrderPage() {
                                   View
                                 </Button>
                                 
-                                {/* PAYMENT ACTION - HANYA UNTUK PO YANG BELUM PAID */}
-                                {(item as PurchaseOrder).status !== 'paid' && (
-                                  <Button 
-                                    onClick={() => handleCreatePayment(item as PurchaseOrder)}
-                                    size="sm"
-                                  >
-                                    <CreditCard className="h-4 w-4 mr-1" />
-                                    Pay
-                                  </Button>
-                                )}
+                                {/* PAYMENT ACTION - HANYA UNTUK PO YANG BISA DIBUAT PAYMENT */}
+                                <Button 
+                                  onClick={() => handleCreatePayment(item as PurchaseOrder)}
+                                  size="sm"
+                                  disabled={!canMakePayment(item as PurchaseOrder)}
+                                  title={!canMakePayment(item as PurchaseOrder) ? `Cannot pay PO with status "${getStatusText((item as PurchaseOrder).status)}"` : 'Create Payment'}
+                                >
+                                  <CreditCard className="h-4 w-4 mr-1" />
+                                  Pay
+                                </Button>
                                 
                                 {/* PDF EXPORT */}
                                 <Button 
