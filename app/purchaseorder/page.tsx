@@ -484,7 +484,7 @@ export default function PurchaseOrderPage() {
 
   // Fungsi untuk cek apakah PO bisa dilakukan payment
   const canMakePayment = (po: PurchaseOrder): boolean => {
-    const allowedStatuses = ['submitted'] // Hanya PO dengan status submitted yang bisa dibayar
+    const allowedStatuses = ['approved_finance'] // Hanya PO dengan status submitted yang bisa dibayar
     return allowedStatuses.includes(po.status)
   }
 

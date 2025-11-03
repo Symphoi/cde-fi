@@ -1,6 +1,161 @@
 import { query } from '@/app/lib/db';
 import { verifyToken } from '@/app/lib/auth';
 
+// Helper function untuk generate number sequence
+async function getNextSequence(sequenceCode, companyCode, projectCode, salesRepCode, customerCode) {
+  try {
+    const existingSequence = await query(
+      "SELECT next_number, prefix FROM numbering_sequences WHERE sequence_code = ?",
+      [sequenceCode]
+    );
+
+    if (existingSequence.length > 0) {
+      const currentNumber = existingSequence[0].next_number;
+      const template = existingSequence[0].prefix;
+
+      const dynamicPrefix = template
+        .replace("{company}", companyCode || "CS")
+        .replace("{project}", projectCode || "PROJ")
+        .replace("{sales_rep}", salesRepCode || "SR001")
+        .replace("{customer}", customerCode || "CUST001");
+
+      const nextNumber = currentNumber + 1;
+      await query(
+        "UPDATE numbering_sequences SET next_number = ? WHERE sequence_code = ?",
+        [nextNumber, sequenceCode]
+      );
+
+      return {
+        number: currentNumber,
+        prefix: dynamicPrefix,
+      };
+    } else {
+      throw new Error("Sequence not found");
+    }
+  } catch (error) {
+    console.error("Error getting sequence:", error);
+    throw error;
+  }
+}
+
+// Helper function untuk create AP invoice
+async function createAPInvoice(poCode, userName) {
+  try {
+    // Get PO data
+    const poData = await query(
+      `SELECT supplier_name, total_amount, so_code 
+       FROM purchase_orders WHERE po_code = ?`,
+      [poCode]
+    );
+
+    if (poData.length === 0) {
+      throw new Error('PO not found');
+    }
+
+    const po = poData[0];
+    
+    // Generate AP code
+    const sequence = await getNextSequence('AP', null, null, null, null);
+    const apCode = `${sequence.prefix}${sequence.number}`;
+    
+    // Generate supplier invoice number
+    const invoiceNumber = `INV-${poCode}-${Date.now().toString().slice(-6)}`;
+
+    const currentDate = new Date();
+    const dueDate = new Date(currentDate);
+    dueDate.setDate(dueDate.getDate() + 30); // 30 days terms
+
+    // Insert AP invoice
+    await query(
+      `INSERT INTO accounts_payable 
+       (ap_code, supplier_name, invoice_number, invoice_date, due_date, amount, outstanding_amount, status, po_code) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'unpaid', ?)`,
+      [
+        apCode,
+        po.supplier_name,
+        invoiceNumber,
+        currentDate.toISOString().split('T')[0],
+        dueDate.toISOString().split('T')[0],
+        po.total_amount,
+        po.total_amount,
+        poCode
+      ]
+    );
+
+    // Update PO dengan AP info
+    await query(
+      `UPDATE purchase_orders 
+       SET ap_code = ?, supplier_invoice_number = ?, supplier_invoice_date = ?, due_date = ?
+       WHERE po_code = ?`,
+      [
+        apCode,
+        invoiceNumber,
+        currentDate.toISOString().split('T')[0],
+        dueDate.toISOString().split('T')[0],
+        poCode
+      ]
+    );
+
+    // Audit log
+    await query(
+      `INSERT INTO audit_logs (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, notes)
+       VALUES (?, ?, ?, 'create', 'ap_invoice', ?, ?, ?)`,
+      [
+        `AUD-${Date.now()}`,
+        'SYSTEM', // Karena auto-created
+        userName,
+        apCode,
+        `AP Invoice ${apCode}`,
+        `Auto-created AP invoice for PO ${poCode}`
+      ]
+    );
+
+    return { apCode, invoiceNumber };
+  } catch (error) {
+    console.error('Create AP invoice error:', error);
+    throw error;
+  }
+}
+
+// Helper function untuk create delivery order otomatis
+async function createDeliveryOrder(po_code, created_by) {
+  try {
+    // Get PO data untuk DO
+    const poData = await query(
+      `SELECT po_code, so_code, supplier_name, total_amount 
+       FROM purchase_orders WHERE po_code = ?`,
+      [po_code]
+    );
+
+    if (poData.length === 0) return;
+
+    const po = poData[0];
+    
+    // Generate DO code
+    const countResult = await query('SELECT COUNT(*) as count FROM delivery_orders');
+    const do_code = `DO-${new Date().getFullYear()}-${String(countResult[0].count + 1).padStart(4, '0')}`;
+
+    // Create delivery order
+    await query(
+      `INSERT INTO delivery_orders (do_code, po_code, so_code, status, created_at)
+       VALUES (?, ?, ?, 'shipping', NOW())`,
+      [do_code, po.po_code, po.so_code]
+    );
+
+    // Update PO dengan DO info
+    await query(
+      `UPDATE purchase_orders SET do_code = ?, do_status = 'created' WHERE po_code = ?`,
+      [do_code, po_code]
+    );
+
+    console.log(`Auto-created DO: ${do_code} for PO: ${po_code}`);
+
+  } catch (error) {
+    console.error('Create delivery order error:', error);
+    // Jangan throw error, karena ini secondary action
+  }
+}
+
 // GET all approval transactions atau single PO detail
 export async function GET(request) {
   try {
@@ -278,8 +433,8 @@ export async function PATCH(request) {
     }
 
     let newStatus, approvalField, approvalDateField, auditAction;
-    let updateApprovalLevel = false; // TAMBAH INI
-    let newApprovalLevel = null; // TAMBAH INI
+    let updateApprovalLevel = false;
+    let newApprovalLevel = null;
 
     switch (action) {
       case 'approve_spv':
@@ -287,8 +442,8 @@ export async function PATCH(request) {
         approvalField = 'approved_by_spv';
         approvalDateField = 'approved_date_spv';
         auditAction = 'approve';
-        updateApprovalLevel = true; // TAMBAH INI
-        newApprovalLevel = 'finance'; // TAMBAH INI - Setelah SPV approve, level jadi finance
+        updateApprovalLevel = true;
+        newApprovalLevel = 'finance';
         break;
       case 'approve_finance':
         newStatus = 'approved_finance';
@@ -313,7 +468,7 @@ export async function PATCH(request) {
       params.push(decoded.name);
     }
 
-    // TAMBAH INI - Update approval_level jika needed
+    // Update approval_level jika needed
     if (updateApprovalLevel && newApprovalLevel) {
       queryStr += `, approval_level = ?`;
       params.push(newApprovalLevel);
@@ -338,9 +493,10 @@ export async function PATCH(request) {
       return Response.json({ error: 'Purchase order not found' }, { status: 404 });
     }
 
-    // Jika approve finance, auto create delivery order
+    // Jika approve finance, auto create delivery order DAN AP invoice
     if (action === 'approve_finance') {
       await createDeliveryOrder(po_code, decoded.name);
+      await createAPInvoice(po_code, decoded.name);
     }
 
     // Audit log
@@ -369,44 +525,5 @@ export async function PATCH(request) {
       { error: error.message || 'Internal server error' },
       { status: 500 }
     );
-  }
-}
-
-// Helper function untuk create delivery order otomatis
-async function createDeliveryOrder(po_code, created_by) {
-  try {
-    // Get PO data untuk DO
-    const poData = await query(
-      `SELECT po_code, so_code, supplier_name, total_amount 
-       FROM purchase_orders WHERE po_code = ?`,
-      [po_code]
-    );
-
-    if (poData.length === 0) return;
-
-    const po = poData[0];
-    
-    // Generate DO code
-    const countResult = await query('SELECT COUNT(*) as count FROM delivery_orders');
-    const do_code = `DO-${new Date().getFullYear()}-${String(countResult[0].count + 1).padStart(4, '0')}`;
-
-    // Create delivery order
-    await query(
-      `INSERT INTO delivery_orders (do_code, po_code, so_code, status, created_at)
-       VALUES (?, ?, ?, 'shipping', NOW())`,
-      [do_code, po.po_code, po.so_code]
-    );
-
-    // Update PO dengan DO info
-    await query(
-      `UPDATE purchase_orders SET do_code = ?, do_status = 'created' WHERE po_code = ?`,
-      [do_code, po_code]
-    );
-
-    console.log(`Auto-created DO: ${do_code} for PO: ${po_code}`);
-
-  } catch (error) {
-    console.error('Create delivery order error:', error);
-    // Jangan throw error, karena ini secondary action
   }
 }
