@@ -58,9 +58,11 @@ async function handleGetAllRBACData() {
   const roles = await query(`
     SELECT 
       r.id, r.role_code, r.name, r.description, r.is_system_role, r.created_at,
-      GROUP_CONCAT(rp.permission_code) as permission_codes
+      GROUP_CONCAT(rp.permission_code) as permission_codes,
+      COUNT(DISTINCT ur.user_code) as user_count
     FROM roles r
     LEFT JOIN role_permissions rp ON r.role_code = rp.role_code AND rp.is_deleted = 0
+    LEFT JOIN user_roles ur ON r.role_code = ur.role_code AND ur.is_deleted = 0
     WHERE r.is_deleted = 0
     GROUP BY r.id
     ORDER BY r.created_at DESC
@@ -68,15 +70,38 @@ async function handleGetAllRBACData() {
 
   // Get permissions
   const permissions = await query(`
-    SELECT * FROM permissions 
+    SELECT 
+      id,
+      permission_code as code,
+      name,
+      description,
+      category,
+      module,
+      action,
+      created_at
+    FROM permissions 
     WHERE is_deleted = 0 
     ORDER BY category, module, action
   `);
 
-  // Get audit logs
+  // Get audit logs untuk RBAC saja
   const auditLogs = await query(`
-    SELECT * FROM audit_logs 
+    SELECT 
+      id,
+      audit_code as code,
+      user_code,
+      user_name,
+      action,
+      resource_type,
+      resource_code,
+      resource_name,
+      old_values,
+      new_values,
+      timestamp,
+      notes
+    FROM audit_logs 
     WHERE is_deleted = 0 
+    AND resource_type IN ('user', 'role', 'permission', 'user_role', 'role_permission')
     ORDER BY timestamp DESC 
     LIMIT 100
   `);
@@ -85,15 +110,52 @@ async function handleGetAllRBACData() {
     success: true,
     data: {
       users: users.map(user => ({
-        ...user,
+        id: user.id,
+        user_code: user.user_code,
+        name: user.name,
+        email: user.email,
+        department: user.department,
+        position: user.position,
+        status: user.status,
+        lastLogin: user.last_login,
+        createdAt: user.created_at,
         roles: user.role_codes ? user.role_codes.split(',') : []
       })),
       roles: roles.map(role => ({
-        ...role,
-        permissions: role.permission_codes ? role.permission_codes.split(',') : []
+        id: role.id,
+        role_code: role.role_code,
+        name: role.name,
+        description: role.description,
+        isSystemRole: Boolean(role.is_system_role),
+        createdAt: role.created_at,
+        permissions: role.permission_codes ? role.permission_codes.split(',') : [],
+        userCount: parseInt(role.user_count) || 0
       })),
-      permissions,
-      auditLogs
+      permissions: permissions.map(perm => ({
+        id: perm.id,
+        code: perm.code,
+        name: perm.name,
+        description: perm.description,
+        category: perm.category,
+        module: perm.module,
+        action: perm.action,
+        createdAt: perm.created_at
+      })),
+      auditLogs: auditLogs.map(log => ({
+  id: log.id,
+  code: log.code,
+  userId: log.user_code,
+  userName: log.user_name,
+  action: log.action,
+  resourceType: log.resource_type,
+  resourceId: log.resource_code,
+  resourceName: log.resource_name,
+  oldValues: log.old_values, // ✅ Langsung return string
+  newValues: log.new_values, // ✅ Langsung return string
+  timestamp: log.timestamp,
+  notes: log.notes
+}))
+
     }
   });
 }
@@ -125,7 +187,15 @@ async function handleGetUsers(search) {
   return Response.json({
     success: true,
     data: users.map(user => ({
-      ...user,
+      id: user.id,
+      user_code: user.user_code,
+      name: user.name,
+      email: user.email,
+      department: user.department,
+      position: user.position,
+      status: user.status,
+      lastLogin: user.last_login,
+      createdAt: user.created_at,
       roles: user.role_codes ? user.role_codes.split(',') : []
     }))
   });
@@ -137,7 +207,7 @@ async function handleGetRoles(search) {
     SELECT 
       r.id, r.role_code, r.name, r.description, r.is_system_role, r.created_at,
       GROUP_CONCAT(rp.permission_code) as permission_codes,
-      COUNT(ur.user_code) as user_count
+      COUNT(DISTINCT ur.user_code) as user_count
     FROM roles r
     LEFT JOIN role_permissions rp ON r.role_code = rp.role_code AND rp.is_deleted = 0
     LEFT JOIN user_roles ur ON r.role_code = ur.role_code AND ur.is_deleted = 0
@@ -159,7 +229,12 @@ async function handleGetRoles(search) {
   return Response.json({
     success: true,
     data: roles.map(role => ({
-      ...role,
+      id: role.id,
+      role_code: role.role_code,
+      name: role.name,
+      description: role.description,
+      isSystemRole: Boolean(role.is_system_role),
+      createdAt: role.created_at,
       permissions: role.permission_codes ? role.permission_codes.split(',') : [],
       userCount: parseInt(role.user_count) || 0
     }))
@@ -168,7 +243,20 @@ async function handleGetRoles(search) {
 
 // Get permissions dengan filter search
 async function handleGetPermissions(search) {
-  let sql = `SELECT * FROM permissions WHERE is_deleted = 0`;
+  let sql = `
+    SELECT 
+      id,
+      permission_code as code,
+      name,
+      description,
+      category,
+      module,
+      action,
+      created_at
+    FROM permissions 
+    WHERE is_deleted = 0
+  `;
+  
   const params = [];
 
   if (search) {
@@ -186,14 +274,32 @@ async function handleGetPermissions(search) {
     if (!acc[permission.category]) {
       acc[permission.category] = [];
     }
-    acc[permission.category].push(permission);
+    acc[permission.category].push({
+      id: permission.id,
+      code: permission.code,
+      name: permission.name,
+      description: permission.description,
+      category: permission.category,
+      module: permission.module,
+      action: permission.action,
+      createdAt: permission.created_at
+    });
     return acc;
   }, {});
 
   return Response.json({
     success: true,
     data: permissionsByCategory,
-    allPermissions: permissions
+    allPermissions: permissions.map(perm => ({
+      id: perm.id,
+      code: perm.code,
+      name: perm.name,
+      description: perm.description,
+      category: perm.category,
+      module: perm.module,
+      action: perm.action,
+      createdAt: perm.created_at
+    }))
   });
 }
 
@@ -206,7 +312,25 @@ async function handleGetAuditLogs(request) {
   const dateTo = searchParams.get('dateTo');
   const search = searchParams.get('search') || '';
 
-  let sql = `SELECT * FROM audit_logs WHERE is_deleted = 0`;
+  let sql = `
+    SELECT 
+      id,
+      audit_code as code,
+      user_code,
+      user_name,
+      action,
+      resource_type,
+      resource_code,
+      resource_name,
+      old_values,
+      new_values,
+      timestamp,
+      notes
+    FROM audit_logs 
+    WHERE is_deleted = 0
+    AND resource_type IN ('user', 'role', 'permission', 'user_role', 'role_permission')
+  `;
+  
   const params = [];
 
   if (search) {
@@ -240,9 +364,23 @@ async function handleGetAuditLogs(request) {
   const auditLogs = await query(sql, params);
 
   return Response.json({
-    success: true,
-    data: auditLogs
-  });
+  success: true,
+  data: auditLogs.map(log => ({
+    id: log.id,
+    code: log.code,
+    userId: log.user_code,
+    userName: log.user_name,
+    action: log.action,
+    resourceType: log.resource_type,
+    resourceId: log.resource_code,
+    resourceName: log.resource_name,
+    oldValues: log.old_values, // ✅ Tanpa JSON.parse
+    newValues: log.new_values, // ✅ Tanpa JSON.parse
+    timestamp: log.timestamp,
+    notes: log.notes
+  }))
+});
+
 }
 
 // ==================== POST - Create user/role ====================
@@ -275,13 +413,15 @@ export async function POST(request) {
   }
 }
 
-// Create new user
+// Create new user - FIXED with password validation
 async function handleCreateUser(userData, decoded) {
-  const { name, email, roles, department, position, status = 'active' } = userData;
+  const { name, email, password, roles, department, position, status = 'active' } = userData;
 
-  // Validasi
-  if (!name || !email) {
-    return Response.json({ error: 'Nama dan email harus diisi' }, { status: 400 });
+  // ✅ VALIDASI HARUS ADA
+  if (!name || !email || !password) {
+    return Response.json({ 
+      error: 'Nama, email, dan password harus diisi' 
+    }, { status: 400 });
   }
 
   // Check if email already exists
@@ -300,12 +440,17 @@ async function handleCreateUser(userData, decoded) {
   );
   const user_code = `USER-${new Date().getFullYear()}-${String(userCount[0].count + 1).padStart(4, '0')}`;
 
-  // Create user (password_hash akan di-set default)
+  // Hash password (gunakan bcrypt di production)
+  const bcrypt = await import('bcrypt');
+  const saltRounds = 12;
+  const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+  // Create user dengan password
   await query(
     `INSERT INTO users 
-     (user_code, name, email, department, position, status, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [user_code, name, email, department, position, status, decoded.user_code]
+     (user_code, name, email, password_hash, department, position, status, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [user_code, name, email, hashedPassword, department, position, status, decoded.user_code]
   );
 
   // Assign roles
@@ -341,10 +486,11 @@ async function handleCreateUser(userData, decoded) {
   });
 }
 
-// Create new role
+// Create new role - FIXED
 async function handleCreateRole(roleData, decoded) {
   const { name, description, permissions } = roleData;
 
+  // ✅ VALIDASI
   if (!name) {
     return Response.json({ error: 'Nama role harus diisi' }, { status: 400 });
   }
@@ -426,9 +572,9 @@ export async function PATCH(request) {
   }
 }
 
-// Update user
+// Update user - FIXED with optional password update
 async function handleUpdateUser(user_code, userData, decoded) {
-  const { name, email, roles, department, position, status } = userData;
+  const { name, email, password, roles, department, position, status } = userData;
 
   // Get old user data untuk audit
   const oldUser = await query(
@@ -440,14 +586,29 @@ async function handleUpdateUser(user_code, userData, decoded) {
     return Response.json({ error: 'User tidak ditemukan' }, { status: 404 });
   }
 
-  // Update user
-  await query(
-    `UPDATE users 
+  // ✅ VALIDASI
+  if (!name || !email) {
+    return Response.json({ error: 'Nama dan email harus diisi' }, { status: 400 });
+  }
+
+  let updateSql = `UPDATE users 
      SET name = ?, email = ?, department = ?, position = ?, status = ?,
-         updated_at = NOW(), updated_by = ?
-     WHERE user_code = ?`,
-    [name, email, department, position, status, decoded.user_code, user_code]
-  );
+         updated_at = NOW(), updated_by = ?`;
+  let params = [name, email, department, position, status, decoded.user_code];
+
+  // Jika ada password baru, update password
+  if (password && password.trim() !== '') {
+    const bcrypt = await import('bcrypt');
+    const saltRounds = 12;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    updateSql = updateSql.replace('SET', 'SET password_hash = ?,');
+    params.splice(2, 0, hashedPassword); // Sisipkan hashedPassword setelah email
+  }
+
+  updateSql += ` WHERE user_code = ?`;
+  params.push(user_code);
+
+  await query(updateSql, params);
 
   // Get current roles untuk audit
   const currentRoles = await query(
@@ -493,9 +654,14 @@ async function handleUpdateUser(user_code, userData, decoded) {
   });
 }
 
-// Update role
+// Update role - FIXED
 async function handleUpdateRole(role_code, roleData, decoded) {
   const { name, description, permissions } = roleData;
+
+  // ✅ VALIDASI
+  if (!name) {
+    return Response.json({ error: 'Nama role harus diisi' }, { status: 400 });
+  }
 
   // Get old role data untuk audit
   const oldRole = await query(
@@ -589,7 +755,7 @@ export async function DELETE(request) {
   }
 }
 
-// Soft delete user
+// Soft delete user - FIXED
 async function handleDeleteUser(user_code, decoded) {
   // Check if user exists
   const user = await query(
@@ -603,8 +769,8 @@ async function handleDeleteUser(user_code, decoded) {
 
   // Soft delete user
   await query(
-    'UPDATE users SET is_deleted = 1, deleted_at = NOW() WHERE user_code = ?',
-    [user_code]
+    'UPDATE users SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? WHERE user_code = ?',
+    [decoded.user_code, user_code]
   );
 
   // Soft delete user roles
@@ -632,7 +798,7 @@ async function handleDeleteUser(user_code, decoded) {
   });
 }
 
-// Soft delete role
+// Soft delete role - FIXED
 async function handleDeleteRole(role_code, decoded) {
   // Check if role exists and is not system role
   const role = await query(
@@ -650,8 +816,8 @@ async function handleDeleteRole(role_code, decoded) {
 
   // Soft delete role
   await query(
-    'UPDATE roles SET is_deleted = 1, deleted_at = NOW() WHERE role_code = ?',
-    [role_code]
+    'UPDATE roles SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? WHERE role_code = ?',
+    [decoded.user_code, role_code]
   );
 
   // Soft delete role permissions
