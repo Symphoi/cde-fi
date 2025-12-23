@@ -15,12 +15,12 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 
-// Test account credentials
-const TEST_ACCOUNTS = {
-  admin: { email: 'admin@company.com', password: 'password123' },
-  finance: { email: 'budi.finance@company.com', password: 'password123' },
-  staff: { email: 'ahmad.sales@company.com', password: 'password123' }
-}
+// // Test account credentials
+// const TEST_ACCOUNTS = {
+//   admin: { email: 'admin@company.com', password: 'password123' },
+//   finance: { email: 'budi.finance@company.com', password: 'password123' },
+//   staff: { email: 'ahmad.sales@company.com', password: 'password123' }
+// }
 
 export function LoginForm({
   className,
@@ -74,42 +74,42 @@ export function LoginForm({
     }
   }
 
-  const handleTestAccount = async (role: 'admin' | 'finance' | 'staff') => {
-    setIsLoading(true)
+  // const handleTestAccount = async (role: 'admin' | 'finance' | 'staff') => {
+  //   setIsLoading(true)
     
-    const testAccount = TEST_ACCOUNTS[role]
+  //   const testAccount = TEST_ACCOUNTS[role]
     
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(testAccount)
-      })
+  //   try {
+  //     const response = await fetch('/api/auth/login', {
+  //       method: 'POST',
+  //       headers: {
+  //         'Content-Type': 'application/json',
+  //       },
+  //       body: JSON.stringify(testAccount)
+  //     })
 
-      const data = await response.json()
+  //     const data = await response.json()
 
-      if (data.success) {
-        // Save token to localStorage
-        localStorage.setItem('token', data.token)
-        localStorage.setItem('user', JSON.stringify(data.user))
+  //     if (data.success) {
+  //       // Save token to localStorage
+  //       localStorage.setItem('token', data.token)
+  //       localStorage.setItem('user', JSON.stringify(data.user))
         
-        // Show success message
-        alert(`Successfully logged in as ${data.user.name} (${data.user.roles[0]?.role_name})`)
+  //       // Show success message
+  //       alert(`Successfully logged in as ${data.user.name} (${data.user.roles[0]?.role_name})`)
         
-        // Redirect to dashboard
-        router.push('/dashboard')
-      } else {
-        alert(data.error || 'Login failed')
-      }
-    } catch (error) {
-      console.error('Login error:', error)
-      alert('Login failed. Please try again.')
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  //       // Redirect to dashboard
+  //       router.push('/dashboard')
+  //     } else {
+  //       alert(data.error || 'Login failed')
+  //     }
+  //   } catch (error) {
+  //     console.error('Login error:', error)
+  //     alert('Login failed. Please try again.')
+  //   } finally {
+  //     setIsLoading(false)
+  //   }
+  // }
 
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
@@ -144,6 +144,7 @@ export function LoginForm({
                 <Input 
                   id="password" 
                   type="password" 
+                  placeholder="********"
                   value={formData.password}
                   onChange={handleInputChange}
                   required
@@ -160,7 +161,7 @@ export function LoginForm({
                   {isLoading ? 'Logging in...' : 'Login'}
                 </Button>
               </Field>
-              
+{/*               
               <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card">
                 Or continue with Tester Account
               </FieldSeparator>
@@ -190,17 +191,17 @@ export function LoginForm({
                 >
                   {isLoading ? '...' : 'Admin'}
                 </Button>
-              </Field>
+              </Field> */}
 
               {/* Link alternative */}
-              <div className="text-center mt-4">
+              {/* <div className="text-center mt-4">
                 <Link 
                   href="/salesorder" 
                   className="text-sm text-blue-600 hover:text-blue-800 underline"
                 >
                   Skip login & go directly to Dashboard
                 </Link>
-              </div>
+              </div> */}
             </FieldGroup>
           </form>
           
