@@ -99,7 +99,7 @@ async function handleGetAllRBACData() {
       new_values,
       timestamp,
       notes
-    FROM audit_logs 
+    FROM user_logs 
     WHERE is_deleted = 0 
     AND resource_type IN ('user', 'role', 'permission', 'user_role', 'role_permission')
     ORDER BY timestamp DESC 
@@ -142,20 +142,19 @@ async function handleGetAllRBACData() {
         createdAt: perm.created_at
       })),
       auditLogs: auditLogs.map(log => ({
-  id: log.id,
-  code: log.code,
-  userId: log.user_code,
-  userName: log.user_name,
-  action: log.action,
-  resourceType: log.resource_type,
-  resourceId: log.resource_code,
-  resourceName: log.resource_name,
-  oldValues: log.old_values, // ✅ Langsung return string
-  newValues: log.new_values, // ✅ Langsung return string
-  timestamp: log.timestamp,
-  notes: log.notes
-}))
-
+        id: log.id,
+        code: log.code,
+        userId: log.user_code,
+        userName: log.user_name,
+        action: log.action,
+        resourceType: log.resource_type,
+        resourceId: log.resource_code,
+        resourceName: log.resource_name,
+        oldValues: log.old_values,
+        newValues: log.new_values,
+        timestamp: log.timestamp,
+        notes: log.notes
+      }))
     }
   });
 }
@@ -326,7 +325,7 @@ async function handleGetAuditLogs(request) {
       new_values,
       timestamp,
       notes
-    FROM audit_logs 
+    FROM user_logs 
     WHERE is_deleted = 0
     AND resource_type IN ('user', 'role', 'permission', 'user_role', 'role_permission')
   `;
@@ -364,23 +363,22 @@ async function handleGetAuditLogs(request) {
   const auditLogs = await query(sql, params);
 
   return Response.json({
-  success: true,
-  data: auditLogs.map(log => ({
-    id: log.id,
-    code: log.code,
-    userId: log.user_code,
-    userName: log.user_name,
-    action: log.action,
-    resourceType: log.resource_type,
-    resourceId: log.resource_code,
-    resourceName: log.resource_name,
-    oldValues: log.old_values, // ✅ Tanpa JSON.parse
-    newValues: log.new_values, // ✅ Tanpa JSON.parse
-    timestamp: log.timestamp,
-    notes: log.notes
-  }))
-});
-
+    success: true,
+    data: auditLogs.map(log => ({
+      id: log.id,
+      code: log.code,
+      userId: log.user_code,
+      userName: log.user_name,
+      action: log.action,
+      resourceType: log.resource_type,
+      resourceId: log.resource_code,
+      resourceName: log.resource_name,
+      oldValues: log.old_values,
+      newValues: log.new_values,
+      timestamp: log.timestamp,
+      notes: log.notes
+    }))
+  });
 }
 
 // ==================== POST - Create user/role ====================
@@ -856,7 +854,7 @@ async function createAuditLog(user_code, user_name, action, resource_type, resou
   const audit_code = `AUDIT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   
   await query(
-    `INSERT INTO audit_logs 
+    `INSERT INTO user_logs 
      (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, old_values, new_values, notes)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
