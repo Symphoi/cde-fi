@@ -241,6 +241,11 @@ const groupBy = <T, K extends keyof any>(array: T[], getKey: (item: T) => K): Re
   }, {} as Record<K, T[]>);
 };
 
+// Helper untuk remove duplicates
+const getUniqueArray = <T,>(array: T[]): T[] => {
+  return [...new Set(array)];
+};
+
 // ==================== MAIN COMPONENT ====================
 export default function RBACPage() {
   const [activeTab, setActiveTab] = useState<'users' | 'roles' | 'permissions' | 'audit'>('users');
@@ -249,11 +254,11 @@ export default function RBACPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   
-  // User state - DITAMBAH PASSWORD
+  // User state
   const [newUser, setNewUser] = useState({
     name: '',
     email: '',
-    password: '', // ✅ DITAMBAH
+    password: '',
     roles: [] as string[],
     department: '',
     position: '',
@@ -402,8 +407,8 @@ export default function RBACPage() {
     setNewUser({
       name: user.name,
       email: user.email,
-      password: '', // Password kosong saat edit
-      roles: user.roles || [],
+      password: '',
+      roles: getUniqueArray(user.roles || []),
       department: user.department || '',
       position: user.position || '',
       status: user.status || 'active'
@@ -499,7 +504,7 @@ export default function RBACPage() {
     setNewRole({
       name: role.name,
       description: role.description || '',
-      permissions: role.permissions || []
+      permissions: getUniqueArray(role.permissions || [])
     });
   };
 
@@ -853,10 +858,14 @@ export default function RBACPage() {
                         <TableCell>{user.department || '-'}</TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1">
-                            {user.roles.map(roleId => {
+                            {getUniqueArray(user.roles || []).map(roleId => {
                               const role = roles.find(r => r.role_code === roleId);
                               return role ? (
-                                <Badge key={roleId} variant="secondary" className="text-xs">
+                                <Badge 
+                                  key={`${user.user_code}-${roleId}`} 
+                                  variant="secondary" 
+                                  className="text-xs"
+                                >
                                   {role.name}
                                 </Badge>
                               ) : null;
@@ -986,7 +995,7 @@ export default function RBACPage() {
             </CardContent>
           </Card>
 
-          {/* Roles Table */}
+          {/* Roles Table - FIXED: Remove duplicate permissions */}
           <Card>
             <CardHeader>
               <CardTitle>Roles</CardTitle>
@@ -1011,60 +1020,69 @@ export default function RBACPage() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredRoles.map(role => (
-                      <TableRow key={role.role_code}>
-                        <TableCell className="font-medium">
-                          <div className="flex items-center gap-2">
-                            {role.name}
-                            {role.isSystemRole && (
-                              <Badge variant="secondary" className="text-xs">System</Badge>
-                            )}
-                            <div className="text-xs text-gray-500">
-                              ({role.role_code})
+                    filteredRoles.map(role => {
+                      // Remove duplicate permissions sebelum render
+                      const uniquePermissions = getUniqueArray(role.permissions || []);
+                      
+                      return (
+                        <TableRow key={role.role_code}>
+                          <TableCell className="font-medium">
+                            <div className="flex items-center gap-2">
+                              {role.name}
+                              {role.isSystemRole && (
+                                <Badge variant="secondary" className="text-xs">System</Badge>
+                              )}
+                              <div className="text-xs text-gray-500">
+                                ({role.role_code})
+                              </div>
                             </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>{role.description || '-'}</TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1 max-w-[300px]">
-                            {role.permissions.slice(0, 3).map(permissionCode => (
-                              <Badge key={permissionCode} variant="outline" className="text-xs">
-                                {getPermissionName(permissionCode)}
-                              </Badge>
-                            ))}
-                            {role.permissions.length > 3 && (
-                              <Badge variant="secondary" className="text-xs">
-                                +{role.permissions.length - 3} more
-                              </Badge>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">
-                            {role.userCount || 0} users
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex space-x-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => startEditRole(role)}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => deleteRole(role.role_code)}
-                              disabled={role.isSystemRole}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
+                          </TableCell>
+                          <TableCell>{role.description || '-'}</TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-1 max-w-[300px]">
+                              {uniquePermissions.slice(0, 3).map(permissionCode => (
+                                <Badge 
+                                  key={`${role.role_code}-${permissionCode}`} 
+                                  variant="outline" 
+                                  className="text-xs"
+                                >
+                                  {getPermissionName(permissionCode)}
+                                </Badge>
+                              ))}
+                              {uniquePermissions.length > 3 && (
+                                <Badge variant="secondary" className="text-xs">
+                                  +{uniquePermissions.length - 3} more
+                                </Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {role.userCount || 0} users
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex space-x-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => startEditRole(role)}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => deleteRole(role.role_code)}
+                                disabled={role.isSystemRole}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -1130,7 +1148,11 @@ export default function RBACPage() {
                                     .filter(role => role.permissions.includes(permission.code))
                                     .slice(0, 2)
                                     .map(role => (
-                                      <Badge key={role.role_code} variant="outline" className="text-xs">
+                                      <Badge 
+                                        key={`${permission.code}-${role.role_code}`} 
+                                        variant="outline" 
+                                        className="text-xs"
+                                      >
                                         {role.name}
                                       </Badge>
                                     ))}

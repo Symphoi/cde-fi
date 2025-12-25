@@ -46,7 +46,7 @@ async function handleGetAllRBACData() {
     SELECT 
       u.id, u.user_code, u.name, u.email, u.department, u.position, u.status, 
       u.last_login, u.created_at,
-      GROUP_CONCAT(ur.role_code) as role_codes
+      GROUP_CONCAT(DISTINCT ur.role_code) as role_codes
     FROM users u
     LEFT JOIN user_roles ur ON u.user_code = ur.user_code AND ur.is_deleted = 0
     WHERE u.is_deleted = 0
@@ -54,11 +54,11 @@ async function handleGetAllRBACData() {
     ORDER BY u.created_at DESC
   `);
 
-  // Get roles dengan permissions
+  // Get roles dengan permissions - FIXED: ADDED DISTINCT
   const roles = await query(`
     SELECT 
       r.id, r.role_code, r.name, r.description, r.is_system_role, r.created_at,
-      GROUP_CONCAT(rp.permission_code) as permission_codes,
+      GROUP_CONCAT(DISTINCT rp.permission_code) as permission_codes,
       COUNT(DISTINCT ur.user_code) as user_count
     FROM roles r
     LEFT JOIN role_permissions rp ON r.role_code = rp.role_code AND rp.is_deleted = 0
@@ -165,7 +165,7 @@ async function handleGetUsers(search) {
     SELECT 
       u.id, u.user_code, u.name, u.email, u.department, u.position, u.status, 
       u.last_login, u.created_at,
-      GROUP_CONCAT(ur.role_code) as role_codes
+      GROUP_CONCAT(DISTINCT ur.role_code) as role_codes
     FROM users u
     LEFT JOIN user_roles ur ON u.user_code = ur.user_code AND ur.is_deleted = 0
     WHERE u.is_deleted = 0
@@ -200,12 +200,12 @@ async function handleGetUsers(search) {
   });
 }
 
-// Get roles dengan filter search
+// Get roles dengan filter search - FIXED: ADDED DISTINCT
 async function handleGetRoles(search) {
   let sql = `
     SELECT 
       r.id, r.role_code, r.name, r.description, r.is_system_role, r.created_at,
-      GROUP_CONCAT(rp.permission_code) as permission_codes,
+      GROUP_CONCAT(DISTINCT rp.permission_code) as permission_codes,
       COUNT(DISTINCT ur.user_code) as user_count
     FROM roles r
     LEFT JOIN role_permissions rp ON r.role_code = rp.role_code AND rp.is_deleted = 0
@@ -570,89 +570,156 @@ export async function PATCH(request) {
   }
 }
 
-// Update user - FIXED with optional password update
+// Update user - FIXED dengan handle duplicate
 async function handleUpdateUser(user_code, userData, decoded) {
-  const { name, email, password, roles, department, position, status } = userData;
+  try {
+    const { name, email, password, roles = [], department, position, status } = userData;
 
-  // Get old user data untuk audit
-  const oldUser = await query(
-    'SELECT name, email, department, position, status FROM users WHERE user_code = ?',
-    [user_code]
-  );
+    // ✅ VALIDASI
+    if (!name || !email) {
+      return Response.json({ error: 'Nama dan email harus diisi' }, { status: 400 });
+    }
 
-  if (oldUser.length === 0) {
-    return Response.json({ error: 'User tidak ditemukan' }, { status: 404 });
-  }
+    // Get old user data untuk audit
+    const oldUser = await query(
+      'SELECT name, email, department, position, status FROM users WHERE user_code = ?',
+      [user_code]
+    );
 
-  // ✅ VALIDASI
-  if (!name || !email) {
-    return Response.json({ error: 'Nama dan email harus diisi' }, { status: 400 });
-  }
+    if (oldUser.length === 0) {
+      return Response.json({ error: 'User tidak ditemukan' }, { status: 404 });
+    }
 
-  let updateSql = `UPDATE users 
-     SET name = ?, email = ?, department = ?, position = ?, status = ?,
-         updated_at = NOW(), updated_by = ?`;
-  let params = [name, email, department, position, status, decoded.user_code];
+    // Prepare update query
+    let updateSql = `UPDATE users 
+       SET name = ?, email = ?, department = ?, position = ?, status = ?,
+           updated_at = NOW(), updated_by = ?`;
+    let params = [name, email, department, position, status, decoded.user_code];
 
-  // Jika ada password baru, update password
-  if (password && password.trim() !== '') {
-    const bcrypt = await import('bcrypt');
-    const saltRounds = 12;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
-    updateSql = updateSql.replace('SET', 'SET password_hash = ?,');
-    params.splice(2, 0, hashedPassword); // Sisipkan hashedPassword setelah email
-  }
+    // Jika ada password baru, update password
+    if (password && password.trim() !== '') {
+      const bcrypt = await import('bcrypt');
+      const saltRounds = 12;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
+      updateSql = updateSql.replace('SET', 'SET password_hash = ?,');
+      params.splice(2, 0, hashedPassword);
+    }
 
-  updateSql += ` WHERE user_code = ?`;
-  params.push(user_code);
+    updateSql += ` WHERE user_code = ?`;
+    params.push(user_code);
 
-  await query(updateSql, params);
+    await query(updateSql, params);
 
-  // Get current roles untuk audit
-  const currentRoles = await query(
-    'SELECT role_code FROM user_roles WHERE user_code = ? AND is_deleted = 0',
-    [user_code]
-  );
-  const oldRoles = currentRoles.map(r => r.role_code);
+    // Get current roles untuk audit
+    const currentRoles = await query(
+      'SELECT role_code FROM user_roles WHERE user_code = ? AND is_deleted = 0',
+      [user_code]
+    );
+    const oldRoles = currentRoles.map(r => r.role_code);
 
-  // Update roles - soft delete existing, then add new
-  await query(
-    'UPDATE user_roles SET is_deleted = 1, deleted_at = NOW() WHERE user_code = ?',
-    [user_code]
-  );
-
-  if (roles && roles.length > 0) {
-    for (const role_code of roles) {
-      const rolePermissionCode = `UR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    // ============================================
+    // FIXED LOGIC: UPDATE ROLES TANPA DUPLICATE ERROR
+    // ============================================
+    
+    // 1. Soft delete roles yang TIDAK ADA di array roles baru
+    if (roles.length > 0) {
+      const placeholders = roles.map(() => '?').join(',');
       await query(
-        `INSERT INTO user_roles 
-         (user_role_code, user_code, role_code, created_by)
-         VALUES (?, ?, ?, ?)`,
-        [rolePermissionCode, user_code, role_code, decoded.user_code]
+        `UPDATE user_roles 
+         SET is_deleted = 1, deleted_at = NOW(), updated_by = ?
+         WHERE user_code = ? 
+         AND is_deleted = 0 
+         AND role_code NOT IN (${placeholders})`,
+        [decoded.user_code, user_code, ...roles]
+      );
+    } else {
+      // Jika roles array kosong, delete semua roles user ini
+      await query(
+        `UPDATE user_roles 
+         SET is_deleted = 1, deleted_at = NOW(), updated_by = ?
+         WHERE user_code = ? AND is_deleted = 0`,
+        [decoded.user_code, user_code]
       );
     }
+
+    // 2. Handle roles yang ADA di array roles baru
+    if (roles.length > 0) {
+      // Get ALL roles untuk user ini (termasuk yang deleted)
+      const allExisting = await query(
+        'SELECT role_code FROM user_roles WHERE user_code = ?',
+        [user_code]
+      );
+      const existingRoleCodes = allExisting.map(r => r.role_code);
+      
+      for (const role_code of roles) {
+        const userRoleCode = `UR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        if (existingRoleCodes.includes(role_code)) {
+          // Jika role sudah ada di database (baik aktif atau deleted)
+          // UPDATE untuk mengaktifkan kembali
+          await query(
+            `UPDATE user_roles 
+             SET is_deleted = 0, deleted_at = NULL, updated_at = NOW(), 
+                 updated_by = ?, user_role_code = ?
+             WHERE user_code = ? AND role_code = ?`,
+            [decoded.user_code, userRoleCode, user_code, role_code]
+          );
+        } else {
+          // Jika role benar-benar baru
+          // INSERT baru
+          await query(
+            `INSERT INTO user_roles 
+             (user_role_code, user_code, role_code, created_by)
+             VALUES (?, ?, ?, ?)`,
+            [userRoleCode, user_code, role_code, decoded.user_code]
+          );
+        }
+      }
+    }
+
+    // Log audit
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'update',
+      'user',
+      user_code,
+      name,
+      { 
+        ...oldUser[0], 
+        roles: oldRoles 
+      },
+      { 
+        name, 
+        email, 
+        department, 
+        position, 
+        status, 
+        roles 
+      },
+      'Updated user account'
+    );
+
+    return Response.json({
+      success: true,
+      message: 'User berhasil diupdate'
+    });
+
+  } catch (error) {
+    console.error('❌ Update user error:', error);
+    
+    if (error.code === 'ER_DUP_ENTRY') {
+      return Response.json({ 
+        error: 'Kombinasi user dan role sudah ada. Silakan refresh dan coba lagi.' 
+      }, { status: 400 });
+    }
+    
+    return Response.json({ 
+      error: 'Gagal mengupdate user. ' + error.message 
+    }, { status: 500 });
   }
-
-  // Log audit
-  await createAuditLog(
-    decoded.user_code,
-    decoded.name,
-    'update',
-    'user',
-    user_code,
-    name,
-    { ...oldUser[0], roles: oldRoles },
-    { name, email, department, position, status, roles },
-    'Updated user account'
-  );
-
-  return Response.json({
-    success: true,
-    message: 'User berhasil diupdate'
-  });
 }
 
-// Update role - FIXED
 // Update role - FIXED VERSION dengan handle duplicate entry
 async function handleUpdateRole(role_code, roleData, decoded) {
   try {
@@ -778,7 +845,7 @@ async function handleUpdateRole(role_code, roleData, decoded) {
     });
 
   } catch (error) {
-    console.error('❌ PATCH RBAC error:', error);
+    console.error('❌ Update role error:', error);
     
     // Return error message yang lebih spesifik
     if (error.code === 'ER_DUP_ENTRY') {
