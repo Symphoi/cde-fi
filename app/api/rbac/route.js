@@ -653,74 +653,144 @@ async function handleUpdateUser(user_code, userData, decoded) {
 }
 
 // Update role - FIXED
+// Update role - FIXED VERSION dengan handle duplicate entry
 async function handleUpdateRole(role_code, roleData, decoded) {
-  const { name, description, permissions } = roleData;
+  try {
+    const { name, description, permissions = [] } = roleData;
 
-  // ✅ VALIDASI
-  if (!name) {
-    return Response.json({ error: 'Nama role harus diisi' }, { status: 400 });
-  }
+    // ✅ VALIDASI
+    if (!name) {
+      return Response.json({ error: 'Nama role harus diisi' }, { status: 400 });
+    }
 
-  // Get old role data untuk audit
-  const oldRole = await query(
-    'SELECT name, description FROM roles WHERE role_code = ?',
-    [role_code]
-  );
+    // Get old role data untuk audit
+    const oldRole = await query(
+      'SELECT name, description FROM roles WHERE role_code = ?',
+      [role_code]
+    );
 
-  if (oldRole.length === 0) {
-    return Response.json({ error: 'Role tidak ditemukan' }, { status: 404 });
-  }
+    if (oldRole.length === 0) {
+      return Response.json({ error: 'Role tidak ditemukan' }, { status: 404 });
+    }
 
-  // Update role
-  await query(
-    `UPDATE roles 
-     SET name = ?, description = ?, updated_at = NOW(), updated_by = ?
-     WHERE role_code = ?`,
-    [name, description, decoded.user_code, role_code]
-  );
+    // Update role
+    await query(
+      `UPDATE roles 
+       SET name = ?, description = ?, updated_at = NOW(), updated_by = ?
+       WHERE role_code = ?`,
+      [name, description, decoded.user_code, role_code]
+    );
 
-  // Get current permissions untuk audit
-  const currentPermissions = await query(
-    'SELECT permission_code FROM role_permissions WHERE role_code = ? AND is_deleted = 0',
-    [role_code]
-  );
-  const oldPermissions = currentPermissions.map(p => p.permission_code);
+    // Get current permissions untuk audit
+    const currentPermissions = await query(
+      'SELECT permission_code FROM role_permissions WHERE role_code = ? AND is_deleted = 0',
+      [role_code]
+    );
+    const oldPermissions = currentPermissions.map(p => p.permission_code);
 
-  // Update permissions - soft delete existing, then add new
-  await query(
-    'UPDATE role_permissions SET is_deleted = 1, deleted_at = NOW() WHERE role_code = ?',
-    [role_code]
-  );
-
-  if (permissions && permissions.length > 0) {
-    for (const permission_code of permissions) {
-      const rolePermissionCode = `RP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    // ====================================================
+    // FIXED LOGIC: UPDATE PERMISSIONS TANPA DUPLICATE ERROR
+    // ====================================================
+    
+    // 1. Soft delete permissions yang TIDAK ADA di array permissions baru
+    if (permissions.length > 0) {
+      // Buat placeholders untuk query IN clause
+      const placeholders = permissions.map(() => '?').join(',');
+      
       await query(
-        `INSERT INTO role_permissions 
-         (role_permission_code, role_code, permission_code, created_by)
-         VALUES (?, ?, ?, ?)`,
-        [rolePermissionCode, role_code, permission_code, decoded.user_code]
+        `UPDATE role_permissions 
+         SET is_deleted = 1, deleted_at = NOW(), updated_by = ?
+         WHERE role_code = ? 
+         AND is_deleted = 0 
+         AND permission_code NOT IN (${placeholders})`,
+        [decoded.user_code, role_code, ...permissions]
+      );
+    } else {
+      // Jika permissions array kosong, delete semua permissions role ini
+      await query(
+        `UPDATE role_permissions 
+         SET is_deleted = 1, deleted_at = NOW(), updated_by = ?
+         WHERE role_code = ? AND is_deleted = 0`,
+        [decoded.user_code, role_code]
       );
     }
+
+    // 2. Handle permissions yang ADA di array permissions baru
+    if (permissions.length > 0) {
+      // Get ALL permissions untuk role ini (termasuk yang deleted)
+      const allExisting = await query(
+        'SELECT permission_code FROM role_permissions WHERE role_code = ?',
+        [role_code]
+      );
+      const existingPermCodes = allExisting.map(p => p.permission_code);
+      
+      for (const permission_code of permissions) {
+        // Generate unique role_permission_code
+        const rolePermissionCode = `RP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        if (existingPermCodes.includes(permission_code)) {
+          // Jika permission sudah ada di database (baik aktif atau deleted)
+          // UPDATE untuk mengaktifkan kembali
+          await query(
+            `UPDATE role_permissions 
+             SET is_deleted = 0, deleted_at = NULL, updated_at = NOW(), 
+                 updated_by = ?, role_permission_code = ?
+             WHERE role_code = ? AND permission_code = ?`,
+            [decoded.user_code, rolePermissionCode, role_code, permission_code]
+          );
+        } else {
+          // Jika permission benar-benar baru
+          // INSERT baru
+          await query(
+            `INSERT INTO role_permissions 
+             (role_permission_code, role_code, permission_code, created_by)
+             VALUES (?, ?, ?, ?)`,
+            [rolePermissionCode, role_code, permission_code, decoded.user_code]
+          );
+        }
+      }
+    }
+
+    // 3. Log audit
+    await createAuditLog(
+      decoded.user_code,
+      decoded.name,
+      'update',
+      'role',
+      role_code,
+      name,
+      { 
+        name: oldRole[0].name, 
+        description: oldRole[0].description, 
+        permissions: oldPermissions 
+      },
+      { 
+        name, 
+        description, 
+        permissions 
+      },
+      'Updated role and permissions'
+    );
+
+    return Response.json({
+      success: true,
+      message: 'Role berhasil diupdate'
+    });
+
+  } catch (error) {
+    console.error('❌ PATCH RBAC error:', error);
+    
+    // Return error message yang lebih spesifik
+    if (error.code === 'ER_DUP_ENTRY') {
+      return Response.json({ 
+        error: 'Terjadi duplikasi data. Silakan coba lagi atau hubungi administrator.' 
+      }, { status: 400 });
+    }
+    
+    return Response.json({ 
+      error: 'Gagal mengupdate role. ' + error.message 
+    }, { status: 500 });
   }
-
-  // Log audit
-  await createAuditLog(
-    decoded.user_code,
-    decoded.name,
-    'update',
-    'role',
-    role_code,
-    name,
-    { ...oldRole[0], permissions: oldPermissions },
-    { name, description, permissions },
-    'Updated role'
-  );
-
-  return Response.json({
-    success: true,
-    message: 'Role berhasil diupdate'
-  });
 }
 
 // ==================== DELETE - Soft delete user/role ====================
