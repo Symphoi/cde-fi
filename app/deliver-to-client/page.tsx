@@ -864,30 +864,57 @@ export default function DeliveryTrackingPage() {
       setLoading(false)
     }
   }
-
-  /* -------------------- Export Functions -------------------- */
-  const exportDOToPDF = async (doId: string) => {
-    try {
-      const doItem = doData.find(d => d.id === doId)
-      if (!doItem) {
-        toast.error('DO tidak ditemukan')
-        return
-      }
-
-      const result = await DeliveryOrderService.exportDeliveryOrder(doItem.doNumber, 'pdf')
-      
-      if (result.success) {
-        // Generate PDF from the data
-        generatePDF(result.data)
-        toast.success(`PDF untuk DO ${doItem.doNumber} berhasil dibuat!`)
-      } else {
-        throw new Error(result.error || 'Failed to export delivery order')
-      }
-    } catch (error: any) {
-      console.error('❌ Error exporting DO:', error)
-      toast.error(error.message || 'Gagal mengekspor DO')
+const exportDOToPDF = async (doId: string) => {
+  try {
+    const doItem = doData.find(d => d.id === doId)
+    if (!doItem) {
+      toast.error('DO tidak ditemukan')
+      return
     }
+
+    console.log('🔄 Requesting PDF from backend for:', doItem.doNumber);
+    
+    const result = await DeliveryOrderService.exportDeliveryOrder(doItem.doNumber, 'pdf')
+    
+    if (result.success) {
+      console.log('📊 Backend response:', {
+        purchaseOrdersCount: result.data?.purchase_orders?.length || 0,
+        companyInfo: result.data?.company_info,
+        deliveryOrder: result.data?.delivery_order
+      });
+      
+      if (result.data?.pdf_base64) {
+        // Decode base64 ke HTML
+        const htmlContent = atob(result.data.pdf_base64);
+        
+        // Buka preview di tab baru dan langsung print dialog
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) {
+          toast.error('Tidak dapat membuka jendela baru. Izinkan popup untuk situs ini.');
+          return;
+        }
+        
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        
+        // Auto print setelah konten load
+        printWindow.onload = () => {
+          printWindow.focus();
+          printWindow.print();
+        };
+        
+        toast.success(`PDF untuk DO ${doItem.doNumber} siap dicetak!`);
+      } else {
+        toast.error('Backend tidak mengembalikan data PDF');
+      }
+    } else {
+      throw new Error(result.error || 'Failed to export delivery order');
+    }
+  } catch (error: any) {
+    console.error('❌ Error exporting DO:', error);
+    toast.error(error.message || 'Gagal mengekspor DO');
   }
+}
 
   const exportInvoiceForDO = async (doId: string) => {
     try {

@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { Search, Plus, Edit, Trash2, RefreshCw, Building, Check, X, Loader2, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
+import { Search, Plus, Edit, Trash2, RefreshCw, Building, Check, X, Loader2, ChevronLeft, ChevronRight, Sparkles, Image as ImageIcon, Upload, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 
 // Types
@@ -26,6 +26,7 @@ interface Company {
   email?: string
   website?: string
   tax_id?: string
+  logo_url?: string
   status: 'active' | 'inactive'
   is_active: boolean
   created_at: string
@@ -45,6 +46,12 @@ interface CompanyFormData {
   email: string
   website: string
   tax_id: string
+}
+
+interface LogoFile {
+  file: File | null
+  preview: string | null
+  uploaded: boolean
 }
 
 interface PaginationInfo {
@@ -125,42 +132,104 @@ class CompanyService {
     return this.fetchWithAuth(`/api/companies?${params}`);
   }
 
-  // Create company
-  static async createCompany(data: CompanyFormData) {
-    return this.fetchWithAuth('/api/companies', {
+  // Create company (with logo)
+  static async createCompany(formData: FormData): Promise<{success: boolean; message: string; data?: any}> {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      toast.error('Session expired. Please login again.');
+      window.location.href = '/login';
+      throw new Error('No authentication token');
+    }
+
+    const response = await fetch('/api/companies', {
       method: 'POST',
-      body: JSON.stringify(data)
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData
     });
+
+    return this.handleResponse(response);
   }
 
-  // Update company
-  static async updateCompany(data: CompanyFormData & { id: number; status: 'active' | 'inactive' }) {
-    return this.fetchWithAuth('/api/companies', {
+  // Update company (with logo)
+  static async updateCompany(formData: FormData): Promise<{success: boolean; message: string; data?: any}> {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      toast.error('Session expired. Please login again.');
+      window.location.href = '/login';
+      throw new Error('No authentication token');
+    }
+
+    const response = await fetch('/api/companies', {
       method: 'PUT',
-      body: JSON.stringify(data)
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData
     });
+
+    return this.handleResponse(response);
   }
 
   // Delete company
-  static async deleteCompany(id: number) {
+  static async deleteCompany(id: number): Promise<{success: boolean; message: string}> {
     return this.fetchWithAuth(`/api/companies?id=${id}`, {
       method: 'DELETE'
     });
   }
 
   // Generate company code
-  static async generateCompanyCode() {
+  static async generateCompanyCode(): Promise<{success: boolean; data: {code: string}}> {
     return this.fetchWithAuth('/api/companies/generate-code');
+  }
+
+  // Upload logo only
+  static async uploadLogo(companyId: number, file: File): Promise<{success: boolean; message: string}> {
+    const formData = new FormData();
+    formData.append('logo', file);
+    formData.append('id', companyId.toString());
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      toast.error('Session expired. Please login again.');
+      window.location.href = '/login';
+      throw new Error('No authentication token');
+    }
+
+    const response = await fetch('/api/companies/logo', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData
+    });
+
+    return this.handleResponse(response);
+  }
+
+  // Delete logo
+  static async deleteLogo(companyId: number): Promise<{success: boolean; message: string}> {
+    return this.fetchWithAuth(`/api/companies/logo?id=${companyId}`, {
+      method: 'DELETE'
+    });
   }
 }
 
 export default function CompaniesPage() {
   const [companies, setCompanies] = useState<Company[]>([])
-  const [loading, setLoading] = useState(true)
-  const [submitting, setSubmitting] = useState(false)
+  const [loading, setLoading] = useState<boolean>(true)
+  const [submitting, setSubmitting] = useState<boolean>(false)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
+  const [searchTerm, setSearchTerm] = useState<string>('')
+  const [statusFilter, setStatusFilter] = useState<string>('')
+  
+  // Logo state
+  const [logoFile, setLogoFile] = useState<LogoFile>({
+    file: null,
+    preview: null,
+    uploaded: false
+  })
   
   // Pagination state
   const [pagination, setPagination] = useState<PaginationInfo>({
@@ -171,7 +240,7 @@ export default function CompaniesPage() {
   })
 
   // Form state
-  const [showForm, setShowForm] = useState(false)
+  const [showForm, setShowForm] = useState<boolean>(false)
   const [editingCompany, setEditingCompany] = useState<Company | null>(null)
   const [formData, setFormData] = useState<CompanyFormData>({
     company_code: '',
@@ -189,7 +258,7 @@ export default function CompaniesPage() {
   })
 
   // Delete confirmation modal
-  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false)
   const [companyToDelete, setCompanyToDelete] = useState<Company | null>(null)
 
   // Fetch data dengan pagination
@@ -235,6 +304,43 @@ export default function CompaniesPage() {
       setFormData(prev => ({ ...prev, company_code: companyCode }))
       toast.success('Company code generated successfully')
     }
+  }
+
+  // Logo handlers
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Validate file type
+    const validTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif', 'image/webp']
+    if (!validTypes.includes(file.type)) {
+      toast.error('Please upload an image file (JPEG, PNG, GIF, WebP)')
+      return
+    }
+
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('File size too large. Maximum 5MB allowed.')
+      return
+    }
+
+    const preview = URL.createObjectURL(file)
+    setLogoFile({
+      file,
+      preview,
+      uploaded: false
+    })
+  }
+
+  const removeLogo = () => {
+    if (logoFile.preview) {
+      URL.revokeObjectURL(logoFile.preview)
+    }
+    setLogoFile({
+      file: null,
+      preview: null,
+      uploaded: false
+    })
   }
 
   // Input validation functions
@@ -289,6 +395,11 @@ export default function CompaniesPage() {
       website: '',
       tax_id: ''
     })
+    setLogoFile({
+      file: null,
+      preview: null,
+      uploaded: false
+    })
     setShowForm(true)
   }
 
@@ -308,6 +419,20 @@ export default function CompaniesPage() {
       website: company.website || '',
       tax_id: company.tax_id || ''
     })
+    // Set logo preview if exists
+    if (company.logo_url) {
+      setLogoFile({
+        file: null,
+        preview: company.logo_url,
+        uploaded: true
+      })
+    } else {
+      setLogoFile({
+        file: null,
+        preview: null,
+        uploaded: false
+      })
+    }
     setShowForm(true)
   }
 
@@ -349,68 +474,97 @@ export default function CompaniesPage() {
     try {
       setSubmitting(true)
       
-      if (editingCompany) {
-        const result = await CompanyService.updateCompany({
-          ...formData,
-          id: editingCompany.id,
-          status: editingCompany.status
-        })
-        toast.success(result.message || 'Company updated successfully')
-      } else {
-        const result = await CompanyService.createCompany(formData)
-        toast.success(result.message || 'Company created successfully')
+      // Create FormData object
+      const formDataObj = new FormData();
+      
+      // Add company data
+      formDataObj.append('data', JSON.stringify({
+        ...formData,
+        id: editingCompany?.id || 0,
+        status: editingCompany?.status || 'active'
+      }));
+      
+      // Add logo file if selected
+      if (logoFile.file) {
+        formDataObj.append('logo', logoFile.file);
       }
 
-      setShowForm(false)
-      setEditingCompany(null)
-      await fetchCompanies()
+      let result;
+      if (editingCompany) {
+        result = await CompanyService.updateCompany(formDataObj);
+        toast.success(result.message || 'Company updated successfully');
+      } else {
+        result = await CompanyService.createCompany(formDataObj);
+        toast.success(result.message || 'Company created successfully');
+      }
+
+      setShowForm(false);
+      setEditingCompany(null);
+      setLogoFile({
+        file: null,
+        preview: null,
+        uploaded: false
+      });
+      await fetchCompanies();
     } catch (error: any) {
-      console.error('Error saving company:', error)
-      toast.error(error.message || 'Failed to save company')
+      console.error('Error saving company:', error);
+      toast.error(error.message || 'Failed to save company');
     } finally {
-      setSubmitting(false)
+      setSubmitting(false);
     }
   }
 
   const closeForm = () => {
-    setShowForm(false)
-    setEditingCompany(null)
-    setSubmitting(false)
+    setShowForm(false);
+    setEditingCompany(null);
+    setSubmitting(false);
+    // Clean up logo preview URL
+    if (logoFile.preview && !logoFile.uploaded) {
+      URL.revokeObjectURL(logoFile.preview);
+    }
+    setLogoFile({
+      file: null,
+      preview: null,
+      uploaded: false
+    });
   }
 
   const handleDeleteClick = (company: Company) => {
-    setCompanyToDelete(company)
-    setShowDeleteModal(true)
+    setCompanyToDelete(company);
+    setShowDeleteModal(true);
   }
 
   const handleDeleteConfirm = async () => {
-    if (!companyToDelete) return
+    if (!companyToDelete) return;
 
     try {
-      setActionLoading(companyToDelete.company_code)
-      const result = await CompanyService.deleteCompany(companyToDelete.id)
-      toast.success(result.message || 'Company deleted successfully')
-      setShowDeleteModal(false)
-      setCompanyToDelete(null)
-      await fetchCompanies()
+      setActionLoading(companyToDelete.company_code);
+      const result = await CompanyService.deleteCompany(companyToDelete.id);
+      toast.success(result.message || 'Company deleted successfully');
+      setShowDeleteModal(false);
+      setCompanyToDelete(null);
+      await fetchCompanies();
     } catch (error: any) {
-      console.error('Error deleting company:', error)
-      toast.error(error.message || 'Failed to delete company')
+      console.error('Error deleting company:', error);
+      toast.error(error.message || 'Failed to delete company');
     } finally {
-      setActionLoading(null)
+      setActionLoading(null);
     }
   }
 
   const handleDeleteCancel = () => {
-    setShowDeleteModal(false)
-    setCompanyToDelete(null)
+    setShowDeleteModal(false);
+    setCompanyToDelete(null);
   }
 
   const toggleStatus = async (company: Company) => {
     try {
-      setActionLoading(company.company_code)
-      const newStatus = company.status === 'active' ? 'inactive' : 'active'
-      await CompanyService.updateCompany({
+      setActionLoading(company.company_code);
+      const newStatus = company.status === 'active' ? 'inactive' : 'active';
+      
+      // Create form data for update
+      const formDataObj = new FormData();
+      formDataObj.append('data', JSON.stringify({
         company_code: company.company_code,
         name: company.name,
         description: company.description || '',
@@ -425,14 +579,16 @@ export default function CompaniesPage() {
         tax_id: company.tax_id || '',
         id: company.id,
         status: newStatus
-      })
-      toast.success(`Company ${newStatus === 'active' ? 'activated' : 'deactivated'}`)
-      await fetchCompanies()
+      }));
+
+      await CompanyService.updateCompany(formDataObj);
+      toast.success(`Company ${newStatus === 'active' ? 'activated' : 'deactivated'}`);
+      await fetchCompanies();
     } catch (error: any) {
-      console.error('Error updating company status:', error)
-      toast.error(error.message || 'Failed to update company status')
+      console.error('Error updating company status:', error);
+      toast.error(error.message || 'Failed to update company status');
     } finally {
-      setActionLoading(null)
+      setActionLoading(null);
     }
   }
 
@@ -451,14 +607,51 @@ export default function CompaniesPage() {
     )
   }
 
-  // Format date
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('id-ID', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    })
-  }
+  // Logo preview component
+  const LogoPreview = () => {
+    if (logoFile.preview) {
+      return (
+        <div className="relative">
+          <img 
+            src={logoFile.preview} 
+            alt="Logo preview" 
+            className="w-32 h-32 object-contain border rounded-md"
+          />
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            className="absolute -top-2 -right-2 h-6 w-6 p-0 rounded-full"
+            onClick={removeLogo}
+          >
+            <XCircle className="h-4 w-4" />
+          </Button>
+          <p className="text-xs text-gray-500 mt-1">
+            Click remove to change logo
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="border-2 border-dashed border-gray-300 rounded-md p-6 text-center">
+        <ImageIcon className="h-12 w-12 text-gray-400 mx-auto mb-3" />
+        <p className="text-sm text-gray-600 mb-2">Upload company logo</p>
+        <p className="text-xs text-gray-500 mb-3">
+          PNG, JPG, GIF up to 5MB
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => document.getElementById('logo-upload')?.click()}
+        >
+          <Upload className="h-4 w-4 mr-2" />
+          Select Image
+        </Button>
+      </div>
+    );
+  };
 
   // Pagination component
   const PaginationControls = () => (
@@ -512,11 +705,11 @@ export default function CompaniesPage() {
         </div>
       </div>
     </div>
-  )
+  );
 
   // Delete Confirmation Modal
   const DeleteConfirmationModal = () => {
-    if (!showDeleteModal || !companyToDelete) return null
+    if (!showDeleteModal || !companyToDelete) return null;
 
     return (
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -553,8 +746,8 @@ export default function CompaniesPage() {
           </div>
         </div>
       </div>
-    )
-  }
+    );
+  };
 
   return (
     <div className="min-h-screen bg-white p-6">
@@ -633,6 +826,7 @@ export default function CompaniesPage() {
                   <TableHeader className="bg-gray-50">
                     <TableRow>
                       <TableHead className="w-12 text-center font-semibold text-gray-900">No</TableHead>
+                      <TableHead className="w-24 text-center font-semibold text-gray-900">Logo</TableHead>
                       <TableHead className="w-32 font-semibold text-gray-900">Company Code</TableHead>
                       <TableHead className="min-w-40 font-semibold text-gray-900">Name</TableHead>
                       <TableHead className="min-w-48 font-semibold text-gray-900">Email</TableHead>
@@ -645,7 +839,7 @@ export default function CompaniesPage() {
                   <TableBody>
                     {companies.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="text-center py-12">
+                        <TableCell colSpan={9} className="text-center py-12">
                           <div className="flex flex-col items-center justify-center text-gray-500">
                             <Building className="h-12 w-12 mb-4 text-gray-300" />
                             <p className="text-lg font-medium mb-2">
@@ -666,6 +860,22 @@ export default function CompaniesPage() {
                         <TableRow key={company.id} className="hover:bg-gray-50/50">
                           <TableCell className="text-center text-gray-600 font-medium">
                             {(pagination.page - 1) * pagination.limit + index + 1}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {company.logo_url ? (
+                              <img 
+                                src={company.logo_url} 
+                                alt={`${company.name} logo`}
+                                className="h-8 w-8 object-contain mx-auto rounded"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).src = '/default-logo.png'
+                                }}
+                              />
+                            ) : (
+                              <div className="h-8 w-8 mx-auto bg-gray-100 rounded-full flex items-center justify-center">
+                                <Building className="h-4 w-4 text-gray-400" />
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell>
                             <span className="font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded text-sm">
@@ -767,7 +977,24 @@ export default function CompaniesPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
+              <div className="space-y-6">
+                {/* Hidden file input for logo */}
+                <input
+                  id="logo-upload"
+                  type="file"
+                  accept="image/*"
+                  onChange={handleLogoUpload}
+                  className="hidden"
+                />
+
+                {/* Logo Section */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">
+                    Company Logo
+                  </Label>
+                  <LogoPreview />
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Company Code */}
                   <div className="space-y-2">

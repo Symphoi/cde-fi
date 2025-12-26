@@ -15,12 +15,10 @@ export async function GET(request) {
     let attempts = 0;
     const maxAttempts = 10;
 
-    // Generate unique company code
     while (!isUnique && attempts < maxAttempts) {
       const randomSuffix = Math.random().toString(36).substring(2, 8).toUpperCase();
       companyCode = `COMP${randomSuffix}`;
       
-      // Check if code already exists
       const existingCompany = await query(
         'SELECT company_code FROM companies WHERE company_code = ? AND is_deleted = 0',
         [companyCode]
