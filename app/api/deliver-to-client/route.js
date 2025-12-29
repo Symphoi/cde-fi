@@ -1003,72 +1003,212 @@ async function generatePDF(exportData, user) {
       logoBase64 = await getLogoBase64(company_info.logo_url);
     }
 
-    // Format currency
+    // PERBAIKAN 1: Format currency tanpa encoding issue
     const formatCurrency = (amount) => {
-      return new Intl.NumberFormat("id-ID", {
-        style: "currency",
-        currency: "IDR",
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 0,
-      }).format(amount || 0);
+      // Pastikan amount adalah number
+      const numAmount = Number(amount);
+      if (isNaN(numAmount) || numAmount === null || numAmount === undefined) {
+        return "Rp 0";
+      }
+      
+      // Format angka dengan separator ribuan
+      const formatted = new Intl.NumberFormat("id-ID").format(numAmount);
+      return `Rp ${formatted}`;
+    };
+
+    // PERBAIKAN 2: Pastikan item_total dihitung dengan benar
+    const calculateItemTotal = (quantity, price) => {
+      const qty = Number(quantity) || 0;
+      const prc = Number(price) || 0;
+      return qty * prc;
     };
 
     // Format date
     const formatDate = (dateString) => {
       if (!dateString) return "-";
-      return new Date(dateString).toLocaleDateString("id-ID", {
-        day: "2-digit",
-        month: "long",
-        year: "numeric",
-      });
+      try {
+        return new Date(dateString).toLocaleDateString("id-ID", {
+          day: "2-digit",
+          month: "long",
+          year: "numeric",
+        });
+      } catch (error) {
+        return dateString;
+      }
     };
 
     // Calculate totals
     const poTotal = purchase_orders.reduce(
-      (sum, item) => sum + (item.quantity * item.purchase_price),
+      (sum, item) => sum + calculateItemTotal(item.quantity, item.purchase_price),
       0
     );
-    const grandTotal = poTotal + (delivery_order.shipping_cost || 0);
+    
+    const shippingCost = Number(delivery_order.shipping_cost) || 0;
+    const grandTotal = poTotal + shippingCost;
 
-    // Tentukan siapa yang menandatangani (gunakan sales rep jika ada, fallback ke default)
+    // Tentukan siapa yang menandatangani
     const signerName = delivery_order.sales_rep || "Manager Logistik";
     const signerTitle = delivery_order.sales_rep ? "Sales Representative" : "Manager Logistik";
     const signerContact = delivery_order.sales_rep_email || "";
 
-    // Generate HTML dengan logo
+    // PERBAIKAN 3: HTML dengan charset UTF-8 dan proper encoding
     const htmlContent = `
       <!DOCTYPE html>
       <html>
       <head>
         <meta charset="UTF-8">
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
         <style>
-          body { font-family: Arial, sans-serif; margin: 40px; }
-          .header { display: flex; align-items: center; margin-bottom: 10px; border-bottom: 2px solid #2c3e50; padding-bottom: 10px; }
-          .logo { width: 160px; height: 160px; margin-right: 20px; object-fit: contain; }
-          .company-info { flex: 1; }
-          .company-name { font-size: 24px; font-weight: bold; color: #2c3e50; }
-          .company-address { font-size: 12px; color: #7f8c8d; margin-top: 5px; }
-          .company-contact { font-size: 11px; color: #95a5a6; }
-          .title { text-align: center; font-size: 20px; margin: 30px 0; font-weight: bold; color: #2c3e50; }
-          .document-info { text-align: center; margin: 10px 0; }
-          .document-code { font-size: 18px; font-weight: bold; color: #3498db; }
-          .section { margin-bottom: 20px; }
-          .section-title { font-weight: bold; margin-bottom: 10px; color: #2c3e50; border-bottom: 1px solid #eee; padding-bottom: 5px; }
-          .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px; }
-          .label { font-weight: bold; color: #555; min-width: 150px; display: inline-block; }
-          .value { margin-bottom: 8px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
-          th { background-color: #f8f9fa; padding: 10px; text-align: left; border: 1px solid #dee2e6; color: #2c3e50; }
-          td { padding: 10px; border: 1px solid #dee2e6; }
-          .footer { margin-top: 50px; text-align: center; font-size: 10px; color: #95a5a6; border-top: 1px solid #eee; padding-top: 10px; }
-          .signature { margin-top: 60px; float: right; text-align: center; }
-          .signature-line { width: 200px; border-top: 1px solid #333; margin: 0 auto; padding-top: 5px; }
-          .signature-left { margin-top: 60px; float: left; margin-right: 100px; text-align: center; }
-          .total-row { background-color: #f8f9fa; font-weight: bold; }
-          .amount { text-align: right; }
-          .po-header { background-color: #e9ecef; font-weight: bold; padding: 8px; margin-top: 15px; border-radius: 4px; }
-          .po-subtotal { font-weight: bold; background-color: #f8f9fa; }
-          .signer-info { font-size: 11px; color: #95a5a6; margin-top: 5px; }
+          body { 
+            font-family: Arial, sans-serif; 
+            margin: 40px; 
+            line-height: 1.6;
+          }
+          .header { 
+            display: flex; 
+            align-items: center; 
+            margin-bottom: 10px; 
+            border-bottom: 2px solid #2c3e50; 
+            padding-bottom: 10px; 
+          }
+          .logo { 
+            width: 160px; 
+            height: 160px; 
+            margin-right: 20px; 
+            object-fit: contain; 
+          }
+          .company-info { 
+            flex: 1; 
+          }
+          .company-name { 
+            font-size: 24px; 
+            font-weight: bold; 
+            color: #2c3e50; 
+            margin-bottom: 5px;
+          }
+          .company-address { 
+            font-size: 12px; 
+            color: #7f8c8d; 
+            margin-bottom: 3px;
+          }
+          .company-contact { 
+            font-size: 11px; 
+            color: #95a5a6; 
+          }
+          .title { 
+            text-align: center; 
+            font-size: 20px; 
+            margin: 30px 0; 
+            font-weight: bold; 
+            color: #2c3e50; 
+          }
+          .document-info { 
+            text-align: center; 
+            margin: 10px 0; 
+          }
+          .document-code { 
+            font-size: 18px; 
+            font-weight: bold; 
+            color: #3498db; 
+          }
+          .section { 
+            margin-bottom: 20px; 
+          }
+          .section-title { 
+            font-weight: bold; 
+            margin-bottom: 10px; 
+            color: #2c3e50; 
+            border-bottom: 1px solid #eee; 
+            padding-bottom: 5px; 
+            font-size: 16px;
+          }
+          .grid { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 20px; 
+            margin-bottom: 15px; 
+          }
+          .label { 
+            font-weight: bold; 
+            color: #555; 
+            min-width: 150px; 
+            display: inline-block; 
+          }
+          .value { 
+            margin-bottom: 8px; 
+          }
+          table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 10px; 
+            font-size: 12px; 
+          }
+          th { 
+            background-color: #f8f9fa; 
+            padding: 10px; 
+            text-align: left; 
+            border: 1px solid #dee2e6; 
+            color: #2c3e50; 
+          }
+          td { 
+            padding: 10px; 
+            border: 1px solid #dee2e6; 
+          }
+          .footer { 
+            margin-top: 50px; 
+            text-align: center; 
+            font-size: 10px; 
+            color: #95a5a6; 
+            border-top: 1px solid #eee; 
+            padding-top: 10px; 
+          }
+          .signature { 
+            margin-top: 60px; 
+            float: right; 
+            text-align: center; 
+            width: 200px;
+          }
+          .signature-line { 
+            width: 200px; 
+            border-top: 1px solid #333; 
+            margin: 0 auto; 
+            padding-top: 5px; 
+          }
+          .signature-left { 
+            margin-top: 60px; 
+            float: left; 
+            margin-right: 100px; 
+            text-align: center; 
+            width: 200px;
+          }
+          .total-row { 
+            background-color: #f8f9fa; 
+            font-weight: bold; 
+          }
+          .amount { 
+            text-align: right; 
+            white-space: nowrap;
+          }
+          .po-header { 
+            background-color: #e9ecef; 
+            font-weight: bold; 
+            padding: 8px; 
+            margin-top: 15px; 
+            border-radius: 4px; 
+            font-size: 14px;
+          }
+          .po-subtotal { 
+            font-weight: bold; 
+            background-color: #f8f9fa; 
+          }
+          .signer-info { 
+            font-size: 11px; 
+            color: #95a5a6; 
+            margin-top: 5px; 
+          }
+          .text-right {
+            text-align: right;
+          }
         </style>
       </head>
       <body>
@@ -1082,7 +1222,7 @@ async function generatePDF(exportData, user) {
             <div class="company-name">${company_info.name}</div>
             <div class="company-address">${company_info.address}</div>
             <div class="company-contact">
-              Telp: ${company_info.phone} | Email: ${company_info.email} | ${company_info.tax_id ? `NPWP: ${company_info.tax_id}` : ""}
+              Telp: ${company_info.phone} | Email: ${company_info.email} ${company_info.tax_id ? `| NPWP: ${company_info.tax_id}` : ""}
             </div>
           </div>
         </div>
@@ -1114,17 +1254,12 @@ async function generatePDF(exportData, user) {
         </div>
         
         <div class="section">
-          <div class="section-title">Daftar Purchase Order</div>
           
           ${grouped_purchase_orders.length > 0 ? grouped_purchase_orders.map(po => `
-            <div class="po-header">
-              PO: ${po.po_code} | Supplier: ${po.supplier_name} | Tanggal: ${formatDate(po.date)}
-            </div>
             <table>
               <thead>
                 <tr>
                   <th>Produk</th>
-                  <th>Kode</th>
                   <th>Qty</th>
                   <th>Harga</th>
                   <th>Subtotal</th>
@@ -1133,16 +1268,15 @@ async function generatePDF(exportData, user) {
               <tbody>
                 ${po.items.map(item => `
                   <tr>
-                    <td>${item.product_name}</td>
-                    <td>${item.product_code}</td>
-                    <td>${item.quantity}</td>
-                    <td class="amount">${formatCurrency(item.purchase_price)}</td>
-                    <td class="amount">${formatCurrency(item.item_total)}</td>
+                    <td>${item.product_name || "-"}</td>
+                    <td>${item.quantity || 0}</td>
+                    <td class="amount">${formatCurrency(item.purchase_price || 0)}</td>
+                    <td class="amount">${formatCurrency(calculateItemTotal(item.quantity, item.purchase_price))}</td>
                   </tr>
                 `).join('')}
                 <tr class="po-subtotal">
-                  <td colspan="4" style="text-align: right;"><strong>Subtotal PO ${po.po_code}:</strong></td>
-                  <td class="amount"><strong>${formatCurrency(po.items.reduce((sum, item) => sum + item.item_total, 0))}</strong></td>
+                  <td colspan="3" class="text-right"><strong>Total :</strong></td>
+                  <td colspan="2" class="amount"><strong>${formatCurrency(po.items.reduce((sum, item) => sum + calculateItemTotal(item.quantity, item.purchase_price), 0))}</strong></td>
                 </tr>
               </tbody>
             </table>
@@ -1156,15 +1290,15 @@ async function generatePDF(exportData, user) {
             <table style="margin-top: 20px;">
               <tbody>
                 <tr class="total-row">
-                  <td colspan="4" style="text-align: right;"><strong>Total Nilai PO:</strong></td>
+                  <td colspan="4" class="text-right"><strong>Total Nilai PO:</strong></td>
                   <td class="amount"><strong>${formatCurrency(poTotal)}</strong></td>
                 </tr>
                 <tr class="total-row">
-                  <td colspan="4" style="text-align: right;"><strong>Biaya Pengiriman:</strong></td>
-                  <td class="amount"><strong>${formatCurrency(delivery_order.shipping_cost || 0)}</strong></td>
+                  <td colspan="4" class="text-right"><strong>Biaya Pengiriman:</strong></td>
+                  <td class="amount"><strong>${formatCurrency(shippingCost)}</strong></td>
                 </tr>
                 <tr class="total-row">
-                  <td colspan="4" style="text-align: right;"><strong>GRAND TOTAL:</strong></td>
+                  <td colspan="4" class="text-right"><strong>GRAND TOTAL:</strong></td>
                   <td class="amount"><strong>${formatCurrency(grandTotal)}</strong></td>
                 </tr>
               </tbody>
@@ -1186,13 +1320,11 @@ async function generatePDF(exportData, user) {
           <div class="signature-line"></div>
           <div style="margin-top: 5px; font-weight: bold;">${signerName}</div>
           <div class="signer-info">${signerTitle}</div>
-          ${signerContact ? `<div class="signer-info">${signerContact}</div>` : ''}
           <div class="signer-info">${company_info.name}</div>
         </div>
         
         <div class="footer">
           <div>Dokumen ini dicetak oleh: ${user.name}  pada ${new Date().toLocaleString("id-ID")}</div>
-          <div>${company_info.name} - Delivery Order System | Halaman 1 dari 1</div>
           <div>Total: ${grouped_purchase_orders.length} PO, ${purchase_orders.length} items</div>
           <div>Sales Representative: ${delivery_order.sales_rep || "Tidak tersedia"}</div>
         </div>

@@ -1,7 +1,11 @@
 import { query } from '@/app/lib/db';
 import { verifyToken } from '@/app/lib/auth';
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, readFile } from 'fs/promises';
 import path from 'path';
+
+// ================================
+// HELPER FUNCTIONS
+// ================================
 
 // Helper function untuk audit log
 async function createAuditLog(userCode, userName, action, resourceType, resourceCode, notes) {
@@ -249,9 +253,490 @@ async function createJournalEntryForPayment(paymentCode, poCode, amount, company
   }
 }
 
+// Helper function untuk get company info dari project code
+async function getCompanyInfoFromProject(projectCode) {
+  try {
+    const result = await query(
+      `SELECT 
+        c.company_code,
+        c.name as company_name,
+        c.address as company_address,
+        c.phone as company_phone,
+        c.email as company_email,
+        c.website as company_website,
+        c.logo_url,
+        c.tax_id
+       FROM projects p
+       LEFT JOIN companies c ON p.company_code = c.company_code
+       WHERE p.project_code = ? AND p.is_deleted = 0 AND c.is_deleted = 0`,
+      [projectCode]
+    );
+
+    if (result.length > 0) {
+      return result[0];
+    }
+
+    // Fallback: get default company
+    const defaultCompany = await query(
+      `SELECT 
+        company_code,
+        name as company_name,
+        address as company_address,
+        phone as company_phone,
+        email as company_email,
+        website as company_website,
+        logo_url,
+        tax_id
+       FROM companies WHERE is_deleted = 0 ORDER BY id LIMIT 1`
+    );
+
+    return defaultCompany.length > 0
+      ? defaultCompany[0]
+      : {
+          company_code: "DEFAULT",
+          company_name: "PT. MAKMUR SEJAHTERA ABADI",
+          company_address: "Jl. Sudirman No. 123, Jakarta Pusat",
+          company_phone: "(021) 12345678",
+          company_email: "info@company.com",
+          company_website: "www.company.com",
+          logo_url: null,
+          tax_id: null,
+        };
+  } catch (error) {
+    console.error("Error getting company info from project:", error);
+    return null;
+  }
+}
+
+// Helper function untuk get logo base64 (sama dengan DO)
+async function getLogoBase64(logoPath) {
+  try {
+    if (!logoPath) {
+      console.log('⚠️ No logo path provided');
+      return null;
+    }
+    
+    console.log('🔄 Processing logo path:', logoPath);
+    
+    // Handle semua kemungkinan format path
+    let actualPath = logoPath;
+    
+    // Jika path dimulai dengan "/", hapus
+    if (actualPath.startsWith('/')) {
+      actualPath = actualPath.substring(1);
+    }
+    
+    // Build full path
+    const fullPath = path.join(process.cwd(), 'public', actualPath);
+    console.log('📁 Full system path:', fullPath);
+    
+    // Read file
+    const logoBuffer = await readFile(fullPath);
+    console.log('✅ Logo file read successfully, size:', logoBuffer.length, 'bytes');
+    
+    const fileExtension = logoPath.split('.').pop();
+    const base64 = `data:image/${fileExtension};base64,${logoBuffer.toString('base64')}`;
+    
+    return base64;
+  } catch (error) {
+    console.error('❌ Failed to load logo:', error.message);
+    console.error('Logo path was:', logoPath);
+    
+    // Fallback: return null agar PDF tetap generate tanpa logo
+    return null;
+  }
+}
+
 // ================================
-// GET ALL SUPPLIERS ENDPOINT
+// PDF GENERATOR FOR PO (SAME TEMPLATE AS DO)
 // ================================
+
+async function generatePOPDF(exportData, user) {
+  try {
+    const { purchase_order, items, payments, company_info } = exportData;
+
+    // Get logo base64 jika ada
+    let logoBase64 = null;
+    if (company_info.logo_url) {
+      logoBase64 = await getLogoBase64(company_info.logo_url);
+    }
+
+    // Format currency
+    const formatCurrency = (amount) => {
+      const numAmount = Number(amount) || 0;
+      return new Intl.NumberFormat("id-ID").format(numAmount);
+    };
+
+    // Format date
+    const formatDate = (dateString) => {
+      if (!dateString) return "-";
+      try {
+        return new Date(dateString).toLocaleDateString("id-ID", {
+          day: "2-digit",
+          month: "long",
+          year: "numeric",
+        });
+      } catch (error) {
+        return dateString;
+      }
+    };
+
+    // Calculate totals
+    const subtotal = items.reduce((sum, item) => 
+      sum + (Number(item.purchase_price) * Number(item.quantity)), 0);
+    
+    const totalPaid = payments.reduce((sum, payment) => 
+      sum + Number(payment.amount), 0);
+    
+    const remainingBalance = subtotal - totalPaid;
+
+    // Get status color
+    const getStatusColor = (status) => {
+      const colors = {
+        'submitted': 'background-color: #e3f2fd; color: #1565c0;',
+        'approved_spv': 'background-color: #fff3cd; color: #856404;',
+        'approved_finance': 'background-color: #d4edda; color: #155724;',
+        'paid': 'background-color: #d4edda; color: #155724;',
+        'rejected': 'background-color: #f8d7da; color: #721c24;',
+        'cancelled': 'background-color: #f8d7da; color: #721c24;',
+        'default': 'background-color: #e9ecef; color: #495057;'
+      };
+      return colors[status] || colors['default'];
+    };
+
+    // HTML Content (template sama dengan DO)
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+        <style>
+          body { 
+            font-family: Arial, sans-serif; 
+            margin: 40px; 
+            line-height: 1.6;
+          }
+          .header { 
+            display: flex; 
+            align-items: center; 
+            margin-bottom: 10px; 
+            border-bottom: 2px solid #2c3e50; 
+            padding-bottom: 10px; 
+          }
+          .logo { 
+            width: 160px; 
+            height: 160px; 
+            margin-right: 20px; 
+            object-fit: contain; 
+          }
+          .company-info { 
+            flex: 1; 
+          }
+          .company-name { 
+            font-size: 24px; 
+            font-weight: bold; 
+            color: #2c3e50; 
+            margin-bottom: 5px;
+          }
+          .company-address { 
+            font-size: 12px; 
+            color: #7f8c8d; 
+            margin-bottom: 3px;
+          }
+          .company-contact { 
+            font-size: 11px; 
+            color: #95a5a6; 
+          }
+          .title { 
+            text-align: center; 
+            font-size: 20px; 
+            margin: 30px 0; 
+            font-weight: bold; 
+            color: #2c3e50; 
+          }
+          .document-info { 
+            text-align: center; 
+            margin: 10px 0; 
+          }
+          .document-code { 
+            font-size: 18px; 
+            font-weight: bold; 
+            color: #3498db; 
+          }
+          .section { 
+            margin-bottom: 20px; 
+          }
+          .section-title { 
+            font-weight: bold; 
+            margin-bottom: 10px; 
+            color: #2c3e50; 
+            border-bottom: 1px solid #eee; 
+            padding-bottom: 5px; 
+            font-size: 16px;
+          }
+          .grid { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 20px; 
+            margin-bottom: 15px; 
+          }
+          .label { 
+            font-weight: bold; 
+            color: #555; 
+            min-width: 150px; 
+            display: inline-block; 
+          }
+          .value { 
+            margin-bottom: 8px; 
+          }
+          table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 10px; 
+            font-size: 12px; 
+          }
+          th { 
+            background-color: #f8f9fa; 
+            padding: 10px; 
+            text-align: left; 
+            border: 1px solid #dee2e6; 
+            color: #2c3e50; 
+          }
+          td { 
+            padding: 10px; 
+            border: 1px solid #dee2e6; 
+          }
+          .footer { 
+            margin-top: 50px; 
+            text-align: center; 
+            font-size: 10px; 
+            color: #95a5a6; 
+            border-top: 1px solid #eee; 
+            padding-top: 10px; 
+          }
+          .signature { 
+            margin-top: 60px; 
+            float: right; 
+            text-align: center; 
+            width: 200px;
+          }
+          .signature-line { 
+            width: 200px; 
+            border-top: 1px solid #333; 
+            margin: 0 auto; 
+            padding-top: 5px; 
+          }
+          .signature-left { 
+            margin-top: 60px; 
+            float: left; 
+            margin-right: 100px; 
+            text-align: center; 
+            width: 200px;
+          }
+          .total-row { 
+            background-color: #f8f9fa; 
+            font-weight: bold; 
+          }
+          .amount { 
+            text-align: right; 
+            white-space: nowrap;
+          }
+          .text-right {
+            text-align: right;
+          }
+          .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+          }
+          .page-break { page-break-before: always; }
+          .notes-box {
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            margin-top: 10px;
+          }
+        </style>
+      </head>
+      <body>
+        <!-- HEADER -->
+        <div class="header">
+          ${logoBase64 ? `<img class="logo" src="${logoBase64}" alt="Company Logo">` : ""}
+          <div class="company-info">
+            <div class="company-name">${company_info.company_name}</div>
+            <div class="company-address">${company_info.company_address}</div>
+            <div class="company-contact">
+              Telp: ${company_info.company_phone} | Email: ${company_info.company_email} 
+              ${company_info.tax_id ? `| NPWP: ${company_info.tax_id}` : ""}
+            </div>
+          </div>
+        </div>
+        
+        <!-- TITLE -->
+        <div class="title">PURCHASE ORDER ${purchase_order.po_code}</div>
+        
+        
+        <!-- PO INFORMATION -->
+        <div class="section">
+          <div class="section-title">Informasi Purchase Order</div>
+          <div class="grid">
+            <div>
+              <div class="value"><span class="label">Nomor PO:</span> ${purchase_order.po_code}</div>
+              <div class="value"><span class="label">Nomor SO:</span> ${purchase_order.so_reference}</div>
+              <div class="value"><span class="label">Kontak Supplier:</span> ${purchase_order.supplier_contact || "-"}</div>
+            </div>
+            <div>
+              <div class="value"><span class="label">Tanggal PO:</span> ${formatDate(purchase_order.date)}</div>
+              <div class="value"><span class="label">Project:</span> ${purchase_order.project_code || "-"}</div>
+
+              <div class="value"><span class="label">Supplier:</span> ${purchase_order.supplier_name}</div>
+              </div>
+            </div>
+          </div>
+          
+          ${purchase_order.notes ? `
+              <div class="notes-box">
+                <span class="label">Catatan:</span> ${purchase_order.notes}
+            </div>
+          ` : ""}
+        </div>
+        
+        <!-- ITEMS TABLE -->
+        <div class="section">
+          <div class="section-title">Daftar Barang</div>
+          <table>
+            <thead>
+              <tr>
+                <th>No</th>
+                <th>Nama Barang</th>
+                <th>SKU</th>
+                <th>Qty</th>
+                <th>Harga Satuan</th>
+                <th class="text-right">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map((item, index) => `
+                <tr>
+                  <td>${index + 1}</td>
+                  <td>${item.product_name || "-"}</td>
+                  <td>${item.product_code || "-"}</td>
+                  <td>${item.quantity || 0}</td>
+                  <td>Rp ${formatCurrency(item.purchase_price || 0)}</td>
+                  <td class="amount">Rp ${formatCurrency(Number(item.purchase_price) * Number(item.quantity))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+            <tfoot>
+              <tr class="total-row">
+                <td colspan="5" class="text-right"><strong>SUBTOTAL:</strong></td>
+                <td class="amount"><strong>Rp ${formatCurrency(subtotal)}</strong></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        
+        <!-- PAYMENT INFORMATION -->
+        ${payments.length > 0 ? `
+          <div class="section">
+            <div class="section-title">Riwayat Pembayaran</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>No</th>
+                  <th>Kode Pembayaran</th>
+                  <th>Tanggal</th>
+                  <th>Metode</th>
+                  <th>Referensi</th>
+                  <th class="text-right">Jumlah</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${payments.map((payment, index) => `
+                  <tr>
+                    <td>${index + 1}</td>
+                    <td>${payment.payment_code || "-"}</td>
+                    <td>${formatDate(payment.payment_date)}</td>
+                    <td>${payment.payment_method || "-"}</td>
+                    <td>${payment.reference_number || "-"}</td>
+                    <td class="amount">Rp ${formatCurrency(payment.amount)}</td>
+                
+                  </tr>
+                `).join('')}
+              </tbody>
+              <tfoot>
+                <tr class="total-row">
+                  <td colspan="5" class="text-right"><strong>TOTAL DIBAYAR:</strong></td>
+                  <td class="amount"><strong>Rp ${formatCurrency(totalPaid)}</strong></td>
+                </tr>
+                ${remainingBalance > 0 ? `
+                  <tr class="total-row" style="background-color: #fff3cd;">
+                    <td colspan="5" class="text-right"><strong>SISA HUTANG:</strong></td>
+                    <td class="amount"><strong>Rp ${formatCurrency(remainingBalance)}</strong></td>
+                    <td></td>
+                  </tr>
+                ` : ''}
+              </tfoot>
+            </table>
+          </div>
+        ` : ""}
+        
+        <!-- BANK INFORMATION -->
+        ${purchase_order.supplier_bank ? `
+          <div class="section">
+            <div class="section-title">Informasi Bank Supplier</div>
+            <div style="padding: 15px; background-color: #e8f4fd; border-radius: 4px;">
+              <div class="value"><span class="label">Bank:</span> ${purchase_order.supplier_bank}</div>
+              ${purchase_order.supplier_bank_account ? `
+                <div class="value"><span class="label">No. Rekening:</span> ${purchase_order.supplier_bank_account}</div>
+              ` : ""}
+              ${purchase_order.supplier_bank_holder ? `
+                <div class="value"><span class="label">Atas Nama:</span> ${purchase_order.supplier_bank_holder}</div>
+              ` : ""}
+            </div>
+          </div>
+        ` : ""}
+        
+        <!-- SIGNATURES -->
+        <div style="clear: both;"></div>
+        
+        <div class="signature">
+          <div style="margin-bottom: 60px;">Disetujui oleh Supplier:</div>
+          <div class="signature-line"></div>
+          <div style="margin-top: 5px; font-weight: bold;">${purchase_order.supplier_name}</div>
+          <div style="font-size: 11px; color: #95a5a6;">Supplier</div>
+        </div>
+        
+        <div class="signature-left">
+          <div style="margin-bottom: 60px;">Dibuat oleh:</div>
+          <div class="signature-line"></div>
+          <div style="margin-top: 5px; font-weight: bold;">${user.name}</div>
+          <div style="font-size: 11px; color: #95a5a6;">${company_info.company_name}</div>
+        </div>
+        
+        <!-- FOOTER -->
+        <div class="footer">
+          <div>Dokumen ini dicetak oleh: ${user.name} pada ${new Date().toLocaleString("id-ID")}</div>
+          <div>Total: ${items.length} items</div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    return Buffer.from(htmlContent).toString("base64");
+  } catch (error) {
+    console.error("PO PDF generation error:", error);
+    throw new Error("Failed to generate PO PDF");
+  }
+}
+
+// ================================
+// ENDPOINT HANDLERS
+// ================================
+
 async function handleGetSuppliers(decoded) {
   try {
     const suppliers = await query(
@@ -282,9 +767,6 @@ async function handleGetSuppliers(decoded) {
   }
 }
 
-// ================================
-// GET ALL BANK ACCOUNTS ENDPOINT
-// ================================
 async function handleGetBankAccounts(decoded) {
   try {
     const bankAccounts = await query(
@@ -314,6 +796,10 @@ async function handleGetBankAccounts(decoded) {
   }
 }
 
+// ================================
+// MAIN API ENDPOINTS
+// ================================
+
 // GET all purchase orders
 export async function GET(request) {
   try {
@@ -337,6 +823,99 @@ export async function GET(request) {
       return await handleGetBankAccounts(decoded);
     }
 
+    // Handle PDF export
+    if (endpoint === 'pdf' || endpoint === 'export-pdf') {
+      const poCode = searchParams.get('po_code');
+      
+      if (!poCode) {
+        return Response.json({ error: 'PO code is required' }, { status: 400 });
+      }
+
+      try {
+        // Get PO data dengan detail
+        const poDetails = await query(
+          `SELECT 
+            po.po_code,
+            po.so_code,
+            po.so_reference,
+            po.supplier_name,
+            po.supplier_contact,
+            po.supplier_bank,
+            po.total_amount,
+            po.status,
+            po.notes,
+            po.date,
+            po.priority,
+            so.customer_name,
+            so.project_code
+          FROM purchase_orders po
+          LEFT JOIN sales_orders so ON po.so_code = so.so_code
+          WHERE po.po_code = ? AND po.is_deleted = 0`,
+          [poCode]
+        );
+
+        if (poDetails.length === 0) {
+          return Response.json({ error: 'Purchase order not found' }, { status: 404 });
+        }
+
+        // Get items
+        const items = await query(
+          `SELECT 
+            product_name,
+            product_code,
+            quantity,
+            purchase_price
+          FROM purchase_order_items 
+          WHERE po_code = ? AND is_deleted = 0`,
+          [poCode]
+        );
+
+        // Get payments
+        const payments = await query(
+          `SELECT 
+            payment_code,
+            payment_date,
+            payment_method,
+            reference_number,
+            amount,
+            status
+          FROM purchase_order_payments 
+          WHERE po_code = ? AND is_deleted = 0`,
+          [poCode]
+        );
+
+        // Get company info
+        const companyInfo = await getCompanyInfoFromProject(poDetails[0].project_code);
+
+        const exportData = {
+          purchase_order: poDetails[0],
+          items: items,
+          payments: payments,
+          company_info: companyInfo
+        };
+
+        // Generate PDF
+        const pdfBase64 = await generatePOPDF(exportData, decoded);
+
+        return Response.json({
+          success: true,
+          data: {
+            pdf_base64: pdfBase64,
+            ...exportData
+          },
+          message: `PDF generated for PO ${poCode}`
+        });
+
+      } catch (error) {
+        console.error('Export PO PDF error:', error);
+        return Response.json(
+          { error: error.message || 'Internal server error' },
+          { status: 500 }
+        );
+      }
+    }
+
+    // Default: Get purchase orders with pagination
     const status = searchParams.get('status');
     const search = searchParams.get('search');
     const page = parseInt(searchParams.get('page')) || 1;
@@ -473,7 +1052,7 @@ export async function GET(request) {
   }
 }
 
-// CREATE purchase order - SUPPORT BOTH JSON AND FORM DATA
+// CREATE purchase order
 export async function POST(request) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -500,7 +1079,7 @@ export async function POST(request) {
       
       poData = JSON.parse(dataField);
       
-      // Get all files - FIXED: Gunakan check yang compatible dengan Node.js
+      // Get all files
       const fileFields = formData.getAll('files');
       files = fileFields.filter(file => {
         return file && typeof file === 'object' && 'size' in file && file.size > 0;
@@ -520,7 +1099,6 @@ export async function POST(request) {
       supplier_bank = null,
       notes = null,
       items = [],
-      priority = 'medium',
       customer_ref = null
     } = poData;
 
@@ -605,7 +1183,7 @@ export async function POST(request) {
       );
     }
 
-    // HANDLE FILE UPLOADS JIKA ADA - FIXED VERSION
+    // HANDLE FILE UPLOADS JIKA ADA
     if (files.length > 0) {
       for (let file of files) {
         const timestamp = Date.now();
@@ -654,7 +1232,7 @@ export async function POST(request) {
       message: `Purchase order created successfully${files.length > 0 ? ' with ' + files.length + ' files' : ''}`,
       po_code: poCode,
       files_uploaded: files.length,
-      so_updated: existingPOs[0].po_count === 1 // Tambah info bahwa SO di-update
+      so_updated: existingPOs[0].po_count === 1
     });
 
   } catch (error) {
@@ -767,9 +1345,7 @@ export async function PATCH(request) {
   }
 }
 
-// ================================
-// PAYMENTS ENDPOINT - FIXED VERSION
-// ================================
+// PAYMENTS ENDPOINT
 export async function PUT(request) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -886,12 +1462,10 @@ export async function PUT(request) {
       await createJournalEntryForPayment(paymentCode, po_code, amount, company_bank_code, decoded);
     }
 
-    // Handle file uploads untuk payment documents - FIXED VERSION
+    // Handle file uploads untuk payment documents
     const fileFields = formData.getAll('files');
     
-    // FIX: Gunakan check yang compatible dengan Node.js environment
     const files = fileFields.filter(file => {
-      // Di Node.js, file dari formData memiliki type dan size properties
       return file && typeof file === 'object' && 'size' in file && file.size > 0;
     });
 
@@ -979,9 +1553,7 @@ export async function PUT(request) {
   }
 }
 
-// ================================
 // SALES ORDERS ENDPOINT
-// ================================
 export async function OPTIONS(request) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');

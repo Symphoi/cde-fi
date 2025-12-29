@@ -415,32 +415,44 @@ export default function PurchaseOrderPage() {
 
   // Download PDF function
   const downloadPDF = async (poCode: string) => {
-    try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(`/api/purchase-orders?endpoint=pdf&po_code=${poCode}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-
-      if (response.ok) {
-        const blob = await response.blob()
-        const url = window.URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `PO-${poCode}.pdf`
-        document.body.appendChild(a)
-        a.click()
-        window.URL.revokeObjectURL(url)
-        document.body.removeChild(a)
-      } else {
-        throw new Error('PDF download failed')
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`/api/purchase-orders?endpoint=pdf&po_code=${poCode}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
       }
-    } catch (error) {
-      console.error('PDF download error:', error)
-      alert('Failed to download PDF. Please try again.')
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      
+      if (result.success && result.data?.pdf_base64) {
+        // Decode base64 ke HTML
+        const htmlContent = atob(result.data.pdf_base64);
+        
+        // Buka preview di tab baru
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) {
+          alert('Tidak dapat membuka jendela baru. Izinkan popup untuk situs ini.');
+          return;
+        }
+        
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        
+        // Auto print setelah konten load
+        printWindow.onload = () => {
+          printWindow.focus();
+          printWindow.print();
+        };
+        
+        console.log(`PDF untuk PO ${poCode} siap dicetak!`);
+      }
     }
+  } catch (error) {
+    console.error('PDF download error:', error);
   }
+};
 
   // Filter logic
   const filteredSO = salesOrders.filter(so => {

@@ -253,7 +253,6 @@ const generatePDF = (doData: any) => {
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Delivery Order - ${delivery_order.do_code}</title>
       <style>
         body { 
           font-family: Arial, sans-serif; 
@@ -270,10 +269,6 @@ const generatePDF = (doData: any) => {
           font-size: 24px;
           font-weight: bold;
           margin-bottom: 10px;
-        }
-        .document-title {
-          font-size: 20px;
-          color: #666;
         }
         .section { 
           margin-bottom: 25px; 
@@ -345,7 +340,6 @@ const generatePDF = (doData: any) => {
     <body>
       <div class="header">
         <div class="company-name">YOUR COMPANY NAME</div>
-        <div class="document-title">DELIVERY ORDER</div>
       </div>
 
       <div class="section">
