@@ -704,8 +704,9 @@ export async function PATCH(request) {
       const uncoveredItems = await checkSOItemCoverage(doItem.so_code);
 
       if (uncoveredItems.length === 0) {
+        // ============== PERBAIKAN: Ganti 'ready_to_invoice' jadi 'delivered' ==============
         await query(
-          `UPDATE sales_orders SET status = 'ready_to_invoice' WHERE so_code = ? AND is_deleted = 0`,
+          `UPDATE sales_orders SET status = 'delivered' WHERE so_code = ? AND is_deleted = 0`,
           [doItem.so_code]
         );
 
@@ -715,7 +716,7 @@ export async function PATCH(request) {
           "update",
           "sales_order",
           doItem.so_code,
-          "Auto-updated to ready_to_invoice status - all POs delivered and items covered"
+          "Auto-updated to delivered status - all POs delivered and items covered"
         );
       }
     }

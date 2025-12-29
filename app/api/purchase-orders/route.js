@@ -1099,6 +1099,8 @@ export async function POST(request) {
       supplier_bank = null,
       notes = null,
       items = [],
+      priority = '-',
+
       customer_ref = null
     } = poData;
 
