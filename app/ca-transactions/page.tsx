@@ -229,11 +229,6 @@ export default function CATransactionsPage() {
 
     const today = new Date()
     today.setHours(0, 0, 0, 0)
-    
-    if (date > today) {
-      toast.error('Tanggal tidak boleh lebih dari hari ini')
-      return
-    }
 
     if (newTransaction.amount <= 0) {
       toast.error('Amount harus lebih dari 0')

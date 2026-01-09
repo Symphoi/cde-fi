@@ -41,19 +41,35 @@ export async function GET(request) {
     const ca_code = searchParams.get('ca_code');
 
     if (action === 'dropdowns') {
-      const categories = [
-        { value: 'transportation', label: 'Transportation' },
-        { value: 'accommodation', label: 'Accommodation' },
-        { value: 'meals', label: 'Meals' },
-        { value: 'entertainment', label: 'Entertainment' },
-        { value: 'office_supplies', label: 'Office Supplies' },
-        { value: 'other', label: 'Other' }
-      ];
+      const categories_query = await query(
+      `SELECT 
+        t.category_code,
+        t.name,
+        t.description,
+        t.is_active,
+        t.is_deleted,
+        t.id
+       FROM reimbursement_categories t
+       WHERE t.category_code LIKE '%'
+       AND t.is_deleted = 0
+       ORDER BY t.id DESC` 
+    );
 
-      return Response.json({
-        success: true,
-        data: { categories }
-      });
+      // Transform data dari database ke format dropdown
+      const dropdownCategories = categories_query.map(category => ({
+        value: category.category_code,
+        label: category.name 
+      }));
+      
+
+      // Jika ada hasil dari database, gunakan
+      if (dropdownCategories.length > 0) {
+        return Response.json({
+          success: true,
+          data: { categories: dropdownCategories }
+        });
+      }
+      
     }
 
     if (ca_code) {
@@ -90,7 +106,7 @@ export async function GET(request) {
         remaining_amount,
         status
        FROM cash_advances 
-       WHERE status = 'active' 
+       WHERE status IN ('active', 'approved')
        AND is_deleted = 0
        AND remaining_amount > 0
        ORDER BY created_at DESC`

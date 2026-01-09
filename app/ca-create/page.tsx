@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Search, Plus, FileText, Calendar, User, DollarSign, ChevronLeft, ChevronRight, Eye, Loader2, Save, X, CheckCircle, XCircle } from 'lucide-react'
+import { Search, Plus, FileText, Calendar, User, DollarSign, ChevronLeft, ChevronRight, Eye, Loader2, Save, X, CheckCircle, XCircle, Users } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -58,10 +58,16 @@ interface CashAdvanceForm {
   total_amount: number
   request_date: Date | undefined
   project_code?: string
+  user_code: string
 }
 
 interface Project {
   project_code: string
+  name: string
+}
+
+interface User {
+  user_code: string
   name: string
 }
 
@@ -106,6 +112,7 @@ export default function CashAdvancePage() {
   const [loading, setLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState<string | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
+  const [users, setUsers] = useState<User[]>([])
   const [currentUser, setCurrentUser] = useState({ name: '', department: '' })
   const [stats, setStats] = useState({ 
     pending: 0, 
@@ -121,7 +128,8 @@ export default function CashAdvancePage() {
     purpose: '',
     total_amount: 0,
     request_date: new Date(),
-    project_code: ''
+    project_code: '',
+    user_code: ''
   })
 
   const itemsPerPage = 8
@@ -142,6 +150,7 @@ export default function CashAdvancePage() {
       const result = await response.json()
       if (result.success) {
         setProjects(result.data.projects || [])
+        setUsers(result.data.users || [])
       }
     } catch (error) {
       console.error('Error fetching dropdown data:', error)
@@ -218,6 +227,11 @@ export default function CashAdvancePage() {
   }
 
   const handleCreateCA = async () => {
+    if (!form.user_code) {
+      alert('Pilih karyawan terlebih dahulu');
+      return;
+    }
+
     if (!form.request_date) {
       alert('Request Date harus diisi');
       return;
@@ -247,7 +261,8 @@ export default function CashAdvancePage() {
           purpose: '',
           total_amount: 0,
           request_date: new Date(),
-          project_code: ''
+          project_code: '',
+          user_code: ''
         })
         setActiveTab('history')
         fetchMyCashAdvances()
@@ -368,6 +383,30 @@ export default function CashAdvancePage() {
               <CardTitle>Buat Cash Advance Baru</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Form Pilih User */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-lg border">
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Pilih Karyawan *</label>
+                  <select
+                    value={form.user_code}
+                    onChange={(e) => setForm(prev => ({ ...prev, user_code: e.target.value }))}
+                    className="w-full border rounded-md px-3 py-2 text-sm"
+                  >
+                    <option value="">-- Pilih Karyawan --</option>
+                    {users.map(user => (
+                      <option key={user.user_code} value={user.user_code}>
+                        {user.name}
+                      </option>
+                    ))}
+                  </select>
+                  {form.user_code && (
+                    <p className="text-sm text-green-600 mt-2">
+                      Dipilih: {users.find(u => u.user_code === form.user_code)?.name}
+                    </p>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium mb-2 block">Purpose *</label>
@@ -375,6 +414,7 @@ export default function CashAdvancePage() {
                     placeholder="Tujuan penggunaan cash advance"
                     value={form.purpose}
                     onChange={(e) => setForm(prev => ({ ...prev, purpose: e.target.value }))}
+                    disabled={!form.user_code}
                   />
                 </div>
                 <div>
@@ -384,6 +424,7 @@ export default function CashAdvancePage() {
                     placeholder="0"
                     value={form.total_amount}
                     onChange={(e) => setForm(prev => ({ ...prev, total_amount: Number(e.target.value) }))}
+                    disabled={!form.user_code}
                   />
                 </div>
               </div>
@@ -396,6 +437,7 @@ export default function CashAdvancePage() {
                       <Button
                         variant="outline"
                         className="w-full justify-start text-left font-normal"
+                        disabled={!form.user_code}
                       >
                         <Calendar className="mr-2 h-4 w-4" />
                         {form.request_date ? format(form.request_date, "PPP") : "Pilih tanggal"}
@@ -417,6 +459,7 @@ export default function CashAdvancePage() {
                     value={form.project_code}
                     onChange={(e) => setForm(prev => ({ ...prev, project_code: e.target.value }))}
                     className="w-full border rounded-md px-3 py-2 text-sm"
+                    disabled={!form.user_code}
                   >
                     <option value="">Pilih Project</option>
                     {projects.map(project => (
@@ -431,7 +474,7 @@ export default function CashAdvancePage() {
               <div className="flex gap-2 pt-4">
                 <Button 
                   onClick={handleCreateCA}
-                  disabled={loading || !form.purpose || !form.total_amount || !form.request_date}
+                  disabled={loading || !form.user_code || !form.purpose || !form.total_amount || !form.request_date}
                   className="bg-blue-600 hover:bg-blue-700"
                 >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
@@ -443,7 +486,8 @@ export default function CashAdvancePage() {
                     purpose: '',
                     total_amount: 0,
                     request_date: new Date(),
-                    project_code: ''
+                    project_code: '',
+                    user_code: ''
                   })}
                 >
                   <X className="h-4 w-4 mr-2" />
@@ -456,7 +500,7 @@ export default function CashAdvancePage() {
 
         {activeTab === 'history' && (
           <>
-            {/* Statistics Cards - DITAMBAH COMPLETED & REJECTED */}
+            {/* Statistics Cards */}
             <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
               <Card className="bg-white border-blue-200">
                 <CardContent className="p-6">
@@ -583,6 +627,7 @@ export default function CashAdvancePage() {
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          <TableHead className="w-12 text-center">No</TableHead>
                           <TableHead>CA Number</TableHead>
                           <TableHead>Purpose</TableHead>
                           <TableHead>Amount</TableHead>
@@ -592,7 +637,7 @@ export default function CashAdvancePage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {currentItems.map((ca) => (
+                        {currentItems.map((ca, index) => (
                           <TableRow 
                             key={ca.ca_code} 
                             className={`hover:bg-gray-50 cursor-pointer ${
@@ -600,6 +645,9 @@ export default function CashAdvancePage() {
                             }`}
                             onClick={() => handleRowClick(ca)}
                           >
+                            <TableCell className="text-center text-gray-500">
+                              {indexOfFirstItem + index + 1}
+                            </TableCell>
                             <TableCell className="font-semibold">
                               {ca.ca_code}
                             </TableCell>
@@ -673,7 +721,7 @@ export default function CashAdvancePage() {
               </CardContent>
             </Card>
 
-            {/* Detail Panel - TRANSACTIONS LANGSUNG TAMPIL */}
+            {/* Detail Panel */}
             {selectedCA && (
               <Card className="border-blue-200 border-2">
                 <CardHeader className="bg-blue-50 border-b border-blue-100">
@@ -731,7 +779,7 @@ export default function CashAdvancePage() {
                     </div>
                   </div>
 
-                  {/* TRANSACTIONS SECTION - LANGSUNG TAMPIL TANPA TOMBOL */}
+                  {/* TRANSACTIONS SECTION */}
                   {(selectedCA.status !== 'draft' && selectedCA.status !== 'submitted' && selectedCA.status !== 'rejected') && (
                     <div className="mt-8 pt-6 border-t">
                       <h3 className="text-lg font-semibold mb-4">Transactions</h3>
@@ -740,6 +788,7 @@ export default function CashAdvancePage() {
                           <Table>
                             <TableHeader>
                               <TableRow>
+                                <TableHead className="w-12 text-center">No</TableHead>
                                 <TableHead>Date</TableHead>
                                 <TableHead>Description</TableHead>
                                 <TableHead>Category</TableHead>
@@ -747,8 +796,11 @@ export default function CashAdvancePage() {
                               </TableRow>
                             </TableHeader>
                             <TableBody>
-                              {selectedCA.transactions.map((transaction) => (
+                              {selectedCA.transactions.map((transaction, index) => (
                                 <TableRow key={transaction.id}>
+                                  <TableCell className="text-center text-gray-500">
+                                    {index + 1}
+                                  </TableCell>
                                   <TableCell>{formatDateDisplay(transaction.transaction_date)}</TableCell>
                                   <TableCell>{transaction.description}</TableCell>
                                   <TableCell>

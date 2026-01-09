@@ -107,27 +107,27 @@ const getNavItems = (hasAnyPermissionFn: (permissions: string[]) => boolean) => 
         {
           name: "Create Sales Order",
           path: "/salesorder",
-          requiredPermissions: ["TRANS_CREATE"]
+          requiredPermissions: ["SO_CREATE"]
         },
         {
           name: "Create Purchase Order",
           path: "/purchaseorder",
-          requiredPermissions: ["TRANS_CREATE"]
+          requiredPermissions: ["PO_CREATE"]
         },
         {
           name: "Approval Purchase Order",
           path: "/approval-transactions",
-          requiredPermissions: ["TRANS_UPDATE"]
+          requiredPermissions: ["PO_APPROV"]
         },
         {
           name: "Deliver to Client",
           path: "/deliver-to-client",
-          requiredPermissions: ["DEL_CREATE"]
+          requiredPermissions: ["DO_CREATE"]
         },
         {
           name: "Invoice & Payment",
           path: "/invoice-payment",
-          requiredPermissions: ["TRANS_VIEW"]
+          requiredPermissions: ["INV_CREATE"]
         },
       ],
     },
