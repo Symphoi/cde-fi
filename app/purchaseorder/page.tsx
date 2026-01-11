@@ -144,6 +144,14 @@ interface CompanyBank {
   currency: string
 }
 
+interface POAttachmentFormData {
+  id: string
+  name: string
+  type: 'sales_order' | 'other'
+  file: File
+  notes?: string
+}
+
 // Helper function untuk format Rupiah
 const formatRupiah = (amount: number): string => {
   return new Intl.NumberFormat('id-ID', {
@@ -243,6 +251,9 @@ export default function PurchaseOrderPage() {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [poForms, setPoForms] = useState<POFormData[]>([])
   const [poLoading, setPoLoading] = useState(false)
+  const [poAttachment, setPoAttachment] = useState<File | null>(null)
+  const [poAttachmentNotes, setPoAttachmentNotes] = useState('')
+  const poFileInputRef = useRef<HTMLInputElement>(null)
 
   // State untuk Payment
   const [showPaymentForm, setShowPaymentForm] = useState(false)
@@ -415,44 +426,44 @@ export default function PurchaseOrderPage() {
 
   // Download PDF function
   const downloadPDF = async (poCode: string) => {
-  try {
-    const token = localStorage.getItem('token');
-    const response = await fetch(`/api/purchase-orders?endpoint=pdf&po_code=${poCode}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      
-      if (result.success && result.data?.pdf_base64) {
-        // Decode base64 ke HTML
-        const htmlContent = atob(result.data.pdf_base64);
-        
-        // Buka preview di tab baru
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) {
-          alert('Tidak dapat membuka jendela baru. Izinkan popup untuk situs ini.');
-          return;
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/purchase-orders?endpoint=pdf&po_code=${poCode}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
         }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
         
-        printWindow.document.write(htmlContent);
-        printWindow.document.close();
-        
-        // Auto print setelah konten load
-        printWindow.onload = () => {
-          printWindow.focus();
-          printWindow.print();
-        };
-        
-        console.log(`PDF untuk PO ${poCode} siap dicetak!`);
+        if (result.success && result.data?.pdf_base64) {
+          // Decode base64 ke HTML
+          const htmlContent = atob(result.data.pdf_base64);
+          
+          // Buka preview di tab baru
+          const printWindow = window.open('', '_blank');
+          if (!printWindow) {
+            alert('Tidak dapat membuka jendela baru. Izinkan popup untuk situs ini.');
+            return;
+          }
+          
+          printWindow.document.write(htmlContent);
+          printWindow.document.close();
+          
+          // Auto print setelah konten load
+          printWindow.onload = () => {
+            printWindow.focus();
+            printWindow.print();
+          };
+          
+          console.log(`PDF untuk PO ${poCode} siap dicetak!`);
+        }
       }
+    } catch (error) {
+      console.error('PDF download error:', error);
     }
-  } catch (error) {
-    console.error('PDF download error:', error);
-  }
-};
+  };
 
   // Filter logic
   const filteredSO = salesOrders.filter(so => {
@@ -611,6 +622,27 @@ export default function PurchaseOrderPage() {
     return Object.keys(errors).length === 0
   }
 
+  // Handlers untuk upload dokumen PO
+  const handlePOFileUpload = () => {
+    poFileInputRef.current?.click()
+  }
+
+  const handlePOFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setPoAttachment(file)
+      setFormErrors(prev => ({ ...prev, po_document: '' }))
+    }
+  }
+
+  const removePOAttachment = () => {
+    setPoAttachment(null)
+    setPoAttachmentNotes('')
+    if (poFileInputRef.current) {
+      poFileInputRef.current.value = ''
+    }
+  }
+
   // Handlers untuk PO
   const handleCreatePO = (so: SalesOrder) => {
     // Cek dulu apakah masih bisa buat PO
@@ -622,6 +654,8 @@ export default function PurchaseOrderPage() {
     setSelectedSO(so)
     setShowCreateForm(true)
     setPoForms([])
+    setPoAttachment(null)
+    setPoAttachmentNotes('')
     setFormErrors({})
   }
 
@@ -729,13 +763,21 @@ export default function PurchaseOrderPage() {
           customer_ref: selectedSO.so_code
         }
 
+        const formData = new FormData()
+        formData.append('data', JSON.stringify(poData))
+        
+        // Add attachment if exists
+        if (poAttachment) {
+          formData.append('attachment', poAttachment)
+          formData.append('attachment_notes', poAttachmentNotes)
+        }
+
         const response = await fetch('/api/purchase-orders', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
           },
-          body: JSON.stringify(poData)
+          body: formData
         })
 
         if (!response.ok) {
@@ -749,6 +791,8 @@ export default function PurchaseOrderPage() {
 
       alert(`Successfully created ${Object.keys(formsBySupplier).length} Purchase Order(s)!`)
       setPoForms([])
+      setPoAttachment(null)
+      setPoAttachmentNotes('')
       setShowCreateForm(false)
       setSelectedSO(null)
       fetchData() // Refresh data
@@ -1062,6 +1106,8 @@ export default function PurchaseOrderPage() {
   useEffect(() => {
     setSelectedSO(null)
     setPoForms([])
+    setPoAttachment(null)
+    setPoAttachmentNotes('')
     setShowCreateForm(false)
     setSelectedPO(null)
     setShowPaymentForm(false)
@@ -1558,6 +1604,8 @@ export default function PurchaseOrderPage() {
                     setShowCreateForm(false)
                     setSelectedSO(null)
                     setPoForms([])
+                    setPoAttachment(null)
+                    setPoAttachmentNotes('')
                   }}
                 >
                   <ChevronUp className="h-4 w-4" />
@@ -1619,137 +1667,228 @@ export default function PurchaseOrderPage() {
 
                 {/* PO Forms */}
                 {poForms.length > 0 && (
-                  <Card>
-                    <CardHeader className="pb-3">
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-lg">PO Forms ({poForms.length})</CardTitle>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="space-y-4">
-                        {poForms.map((form, index) => {
-                          const item = selectedSO.items.find(item => item.so_item_code === form.itemId)
-                          if (!item) return null
+                  <>
 
-                          const remaining = getRemainingQuantity(form.itemId, form.sku)
-
-                          return (
-                            <div key={form.id} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 p-4 border rounded-lg relative">
-                              {/* Nomor Form di garis card kiri atas */}
-                              <div className="absolute -top-2 -left-2">
-                                <div className="w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-sm">
-                                  {index + 1}
-                                </div>
-                              </div>
-                              
-                              {poForms.length > 1 && (
-                                <Button 
-                                  variant="ghost" 
-                                  size="sm" 
-                                  className="absolute top-2 right-2"
-                                  onClick={() => removePOForm(form.id)}
-                                >
-                                  <Trash2 className="h-4 w-4 text-red-500" />
-                                </Button>
-                              )}
-
-                              <div className="space-y-1">
-                                <Label className="text-sm">Product Name</Label>
-                                <div className="p-2 bg-gray-50 rounded border text-sm font-medium">
-                                  {form.productName}
-                                </div>
-                              </div>
-
-                              <div className="space-y-1">
-                                <Label className="text-sm">Supplier Name *</Label>
-                                <select
-                                  value={form.supplier}
-                                  onChange={(e) => updatePOForm(form.id, 'supplier', e.target.value)}
-                                  className="w-full border rounded px-2 py-1"
-                                >
-                                  <option value="">Pilih Supplier</option>
-                                  {suppliers.map(supplier => (
-                                    <option 
-                                      key={`${supplier.supplier_code}-${form.id}`}
-                                      value={supplier.supplier_name}
-                                    >
-                                      {supplier.supplier_name}
-                                    </option>
-                                  ))}
-                                </select>
-                                {formErrors[`supplier_${index}`] && (
-                                  <p className="text-red-500 text-xs mt-1">{formErrors[`supplier_${index}`]}</p>
-                                )}
-                              </div>
-
-                              <div className="space-y-1">
-                                <Label className="text-sm">Purchase Price *</Label>
-                                <Input
-                                  type="number"
-                                  value={form.purchasePrice || ''}
-                                  onChange={(e) => updatePOForm(form.id, 'purchasePrice', parseInt(e.target.value) || 0)}
-                                  placeholder="Enter purchase price"
-                                />
-                                {formErrors[`price_${index}`] && (
-                                  <p className="text-red-500 text-xs mt-1">{formErrors[`price_${index}`]}</p>
-                                )}
-                              </div>
-
-                              <div className="space-y-1">
-                                <Label className="text-sm">Quantity *</Label>
-                                <Input
-                                  type="number"
-                                  value={form.quantity || ''}
-                                  onChange={(e) => updatePOForm(form.id, 'quantity', parseInt(e.target.value) || 0)}
-                                  placeholder="Enter quantity"
-                                  min="1"
-                                  max={remaining + form.quantity}
-                                />
-                                <p className="text-xs text-gray-500 mt-1">
-                                  Remaining: {remaining} pcs
-                                </p>
-                                {formErrors[`quantity_${index}`] && (
-                                  <p className="text-red-500 text-xs mt-1">{formErrors[`quantity_${index}`]}</p>
-                                )}
-                              </div>
-
-                              <div className="space-y-1">
-                                <Label className="text-sm">Notes</Label>
-                                <Input
-                                  value={form.notes}
-                                  onChange={(e) => updatePOForm(form.id, 'notes', e.target.value)}
-                                  placeholder="Additional notes"
-                                />
-                              </div>
-                            </div>
-                          )
-                        })}
-
-                        {/* Submit Button */}
-                        <div className="w-full pt-4">
-                          <Button 
-                            onClick={submitAllPOs} 
-                            size="lg" 
-                            className="w-full"
-                            disabled={poLoading}
-                          >
-                            {poLoading ? (
-                              <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Creating Purchase Orders...
-                              </>
-                            ) : (
-                              `Create ${poForms.length} Purchase Order(s)`
-                            )}
-                          </Button>
-                          {formErrors.general && (
-                            <p className="text-red-500 text-sm mt-2 text-center">{formErrors.general}</p>
-                          )}
+                    {/* PO Forms List */}
+                    <Card>
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="text-lg">PO Forms ({poForms.length})</CardTitle>
                         </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-4">
+                          {poForms.map((form, index) => {
+                            const item = selectedSO.items.find(item => item.so_item_code === form.itemId)
+                            if (!item) return null
+
+                            const remaining = getRemainingQuantity(form.itemId, form.sku)
+
+                            return (
+                              <div key={form.id} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 p-4 border rounded-lg relative">
+                                {/* Nomor Form di garis card kiri atas */}
+                                <div className="absolute -top-2 -left-2">
+                                  <div className="w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-sm">
+                                    {index + 1}
+                                  </div>
+                                </div>
+                                
+                                {poForms.length > 1 && (
+                                  <Button 
+                                    variant="ghost" 
+                                    size="sm" 
+                                    className="absolute top-2 right-2"
+                                    onClick={() => removePOForm(form.id)}
+                                  >
+                                    <Trash2 className="h-4 w-4 text-red-500" />
+                                  </Button>
+                                )}
+
+                                <div className="space-y-1">
+                                  <Label className="text-sm">Product Name</Label>
+                                  <div className="p-2 bg-gray-50 rounded border text-sm font-medium">
+                                    {form.productName}
+                                  </div>
+                                </div>
+
+                                <div className="space-y-1">
+                                  <Label className="text-sm">Supplier Name *</Label>
+                                  <select
+                                    value={form.supplier}
+                                    onChange={(e) => updatePOForm(form.id, 'supplier', e.target.value)}
+                                    className="w-full border rounded px-2 py-1"
+                                  >
+                                    <option value="">Pilih Supplier</option>
+                                    {suppliers.map(supplier => (
+                                      <option 
+                                        key={`${supplier.supplier_code}-${form.id}`}
+                                        value={supplier.supplier_name}
+                                      >
+                                        {supplier.supplier_name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {formErrors[`supplier_${index}`] && (
+                                    <p className="text-red-500 text-xs mt-1">{formErrors[`supplier_${index}`]}</p>
+                                  )}
+                                </div>
+
+                                <div className="space-y-1">
+                                  <Label className="text-sm">Purchase Price *</Label>
+                                  <Input
+                                    type="number"
+                                    value={form.purchasePrice || ''}
+                                    onChange={(e) => updatePOForm(form.id, 'purchasePrice', parseInt(e.target.value) || 0)}
+                                    placeholder="Enter purchase price"
+                                  />
+                                  {formErrors[`price_${index}`] && (
+                                    <p className="text-red-500 text-xs mt-1">{formErrors[`price_${index}`]}</p>
+                                  )}
+                                </div>
+
+                                <div className="space-y-1">
+                                  <Label className="text-sm">Quantity *</Label>
+                                  <Input
+                                    type="number"
+                                    value={form.quantity || ''}
+                                    onChange={(e) => updatePOForm(form.id, 'quantity', parseInt(e.target.value) || 0)}
+                                    placeholder="Enter quantity"
+                                    min="1"
+                                    max={remaining + form.quantity}
+                                  />
+                                  <p className="text-xs text-gray-500 mt-1">
+                                    Remaining: {remaining} pcs
+                                  </p>
+                                  {formErrors[`quantity_${index}`] && (
+                                    <p className="text-red-500 text-xs mt-1">{formErrors[`quantity_${index}`]}</p>
+                                  )}
+                                </div>
+
+                                <div className="space-y-1">
+                                  <Label className="text-sm">Notes</Label>
+                                  <Input
+                                    value={form.notes}
+                                    onChange={(e) => updatePOForm(form.id, 'notes', e.target.value)}
+                                    placeholder="Additional notes"
+                                  />
+                                </div>
+                              </div>
+                            )
+                          })}
+
+                        
+                        </div>
+                      </CardContent>
+                    </Card>
+                    {/* Document Upload Section */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Document Upload</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-4">
+                          <div className="space-y-3">
+                            <Label className="font-semibold">
+                              Purchase Order Document *
+                            </Label>
+                            <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
+                              {poAttachment ? (
+                                <div className="space-y-4">
+                                  <div className="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg">
+                                    <div className="flex items-center gap-3">
+                                      <FileText className="h-5 w-5 text-green-600" />
+                                      <div>
+                                        <div className="font-medium">{poAttachment.name}</div>
+                                        <div className="text-sm text-gray-500">
+                                          {(poAttachment.size / 1024 / 1024).toFixed(2)} MB
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={removePOAttachment}
+                                      className="h-8 w-8 p-0 text-red-600 hover:bg-red-50"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                  
+                                  <div className="space-y-2">
+                                    <Label htmlFor="attachmentNotes">
+                                      Notes (Optional)
+                                    </Label>
+                                    <Textarea
+                                      id="attachmentNotes"
+                                      value={poAttachmentNotes}
+                                      onChange={(e) => setPoAttachmentNotes(e.target.value)}
+                                      placeholder="Add notes about this document..."
+                                      rows={2}
+                                    />
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-center gap-3">
+                                  <Upload className="h-12 w-12 text-gray-400" />
+                                  <div className="text-center">
+                                    <p className="font-medium text-gray-700">Upload Purchase Order Document</p>
+                                    <p className="text-sm text-gray-500 mt-1">
+                                      Supported formats: PDF, DOC, DOCX, XLS, XLSX, JPG, PNG
+                                    </p>
+                                    <p className="text-xs text-gray-400 mt-1">
+                                      Max file size: 10MB
+                                    </p>
+                                  </div>
+                                  <Button
+                                    variant="outline"
+                                    onClick={handlePOFileUpload}
+                                    className="mt-2"
+                                  >
+                                    <Upload className="h-4 w-4 mr-2" />
+                                    Select File
+                                  </Button>
+                                  <input
+                                    ref={poFileInputRef}
+                                    type="file"
+                                    className="hidden"
+                                    onChange={handlePOFileInputChange}
+                                    accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-500">
+                              * Upload dokumen pembelian seperti invoice dari supplier atau dokumen pendukung lainnya
+                            </p>
+                          </div>
+                        </div>
+                      </CardContent>
+                      
+                    </Card>
+  {/* Submit Button */}
+                          <div className="w-full pt-4">
+                            <Button 
+                              onClick={submitAllPOs} 
+                              size="lg" 
+                              className="w-full"
+                              disabled={poLoading}
+                            >
+                              {poLoading ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  Creating Purchase Orders...
+                                </>
+                              ) : (
+                                `Create ${poForms.length} Purchase Order(s)`
+                              )}
+                            </Button>
+                            {formErrors.general && (
+                              <p className="text-red-500 text-sm mt-2 text-center">{formErrors.general}</p>
+                            )}
+                          </div>
+                  </>
                 )}
+                
               </div>
             </CardContent>
           </Card>

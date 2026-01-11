@@ -51,16 +51,18 @@ type NavItem = {
 // ======================== PERMISSION HOOK ========================
 const usePermissions = () => {
   const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [userData, setUserData] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    console.log('[SIDEBAR] Loading permissions from localStorage');
-    const userData = localStorage.getItem('user');
-    if (userData) {
+    console.log('[SIDEBAR] Loading user data from localStorage');
+    const userDataStr = localStorage.getItem('user');
+    if (userDataStr) {
       try {
-        const parsed = JSON.parse(userData);
+        const parsed = JSON.parse(userDataStr);
+        setUserData(parsed);
         setPermissions(parsed.permissions || []);
-        console.log('[SIDEBAR] Loaded permissions:', parsed.permissions?.length || 0, 'permissions');
+        console.log('[SIDEBAR] Loaded user:', parsed.name, 'Role:', parsed.role?.name);
       } catch (error) {
         console.error('[SIDEBAR] Error parsing user data:', error);
       }
@@ -86,7 +88,7 @@ const usePermissions = () => {
     return has;
   }, [permissions, loading]);
 
-  return { permissions, loading, hasPermission, hasAnyPermission };
+  return { permissions, userData, loading, hasPermission, hasAnyPermission };
 };
 
 // ======================== NAV ITEMS DENGAN PERMISSIONS ========================
@@ -107,27 +109,27 @@ const getNavItems = (hasAnyPermissionFn: (permissions: string[]) => boolean) => 
         {
           name: "Create Sales Order",
           path: "/salesorder",
-          requiredPermissions: ["TRANS_CREATE"]
+          requiredPermissions: ["SO_CREATE"]
         },
         {
           name: "Create Purchase Order",
           path: "/purchaseorder",
-          requiredPermissions: ["TRANS_CREATE"]
+          requiredPermissions: ["PO_CREATE"]
         },
         {
           name: "Approval Purchase Order",
           path: "/approval-transactions",
-          requiredPermissions: ["TRANS_UPDATE"]
+          requiredPermissions: ["PO_APPROV"]
         },
         {
           name: "Deliver to Client",
           path: "/deliver-to-client",
-          requiredPermissions: ["DEL_CREATE"]
+          requiredPermissions: ["DO_CREATE"]
         },
         {
           name: "Invoice & Payment",
           path: "/invoice-payment",
-          requiredPermissions: ["TRANS_VIEW"]
+          requiredPermissions: ["INV_CREATE"]
         },
       ],
     },
@@ -359,7 +361,7 @@ const getNavItems = (hasAnyPermissionFn: (permissions: string[]) => boolean) => 
 const AppSidebar: React.FC = () => {
   const { isExpanded, isMobileOpen, isHovered, setIsHovered } = useSidebar();
   const pathname = usePathname();
-  const { hasPermission, hasAnyPermission, loading } = usePermissions();
+  const { hasPermission, hasAnyPermission, loading, userData } = usePermissions();
   
   const [openSubmenu, setOpenSubmenu] = useState<{
     type: "main" | "others";
@@ -654,6 +656,36 @@ const AppSidebar: React.FC = () => {
           </div>
         </nav>
       </div>
+
+      {/* DISPLAY USER YANG LOGIN - TAMBAHAN DI BAWAH SIDEBAR */}
+      {(isExpanded || isHovered || isMobileOpen) && userData && (
+        <div className="mt-auto mb-6 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+          <div className="flex items-center">
+            <div className="flex-shrink-0">
+              <div className="w-10 h-10 bg-brand-100 dark:bg-brand-900 rounded-full flex items-center justify-center">
+                <UserRound className="w-5 h-5 text-brand-600 dark:text-brand-400" />
+              </div>
+            </div>
+            <div className="ml-3">
+              <p className="text-sm font-medium text-gray-900 dark:text-white">
+                {userData.name || userData.email}
+              </p> 
+              {/* <p className="text-xs text-gray-500 dark:text-gray-400">
+                {userData.role?.name || "No Role"}
+              </p> */}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Display user dalam mode collapsed */}
+      {(!isExpanded && !isHovered && !isMobileOpen) && userData && (
+        <div className="mt-auto mb-6 flex justify-center">
+          <div className="w-10 h-10 bg-brand-100 dark:bg-brand-900 rounded-full flex items-center justify-center">
+            <UserRound className="w-5 h-5 text-brand-600 dark:text-brand-400" />
+          </div>
+        </div>
+      )}
     </aside>
   );
 };

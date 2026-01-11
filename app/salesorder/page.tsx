@@ -4,6 +4,8 @@ import { useState, useRef, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CustomDialogContent } from "@/components/custom-dialog";
+
 import {
   Table,
   TableBody,
@@ -15,6 +17,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Search,
   Plus,
@@ -25,7 +28,6 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
-  MapPin,
   Building,
   Phone,
   Mail,
@@ -34,22 +36,23 @@ import {
   Loader2,
   User,
   Package,
-  BarChart3,
   Filter,
-  Calendar,
+  Calculator,
   DollarSign,
-  ShoppingCart,
+  Percent,
+  Package2,
+  MapPin,
 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { CustomDialogContent } from "@/components/custom-dialog";
 
-// Type definitions matching backend
+// Type definitions
 interface Customer {
   customer_code: string;
   customer_name: string;
@@ -71,8 +74,6 @@ interface Product {
 interface SalesOrder {
   so_code: string;
   customer_code?: string;
-  customer_data?: any;
-  created_at: string;
   customer_name: string;
   customer_phone: string;
   customer_email: string;
@@ -86,22 +87,15 @@ interface SalesOrder {
   total_amount: number;
   tax_amount: number;
   shipping_cost: number;
-  status:
-    | "submitted"
-    | "processing"
-    | "shipped"
-    | "delivered"
-    | "completed"
-    | "cancelled";
+  status: string;
   notes?: string;
   ar_code?: string;
   invoice_number?: string;
-  journal_code?: string;
-  accounting_status?: "not_posted" | "posted" | "reconciled";
   tax_configuration?: "excluded" | "included";
   items: SalesOrderItem[];
   taxes: SalesOrderTax[];
   attachments: Attachment[];
+  created_at: string;
 }
 
 interface SalesOrderItem {
@@ -141,6 +135,7 @@ interface TaxType {
   description?: string;
   tax_rate: number;
   tax_type: string;
+  is_active: boolean;
 }
 
 interface User {
@@ -169,7 +164,7 @@ interface CreateSalesOrderRequest {
   tax_amount: number;
   shipping_cost: number;
   notes?: string;
-  tax_configuration?: "excluded" | "included";
+  tax_configuration: "excluded" | "included";
   items: {
     product_name: string;
     product_code: string;
@@ -185,17 +180,6 @@ interface CreateSalesOrderRequest {
   }[];
 }
 
-interface SalesOrderResponse {
-  success: boolean;
-  data: SalesOrder[];
-  pagination?: {
-    page: number;
-    limit: number;
-    total: number;
-    totalPages: number;
-  };
-}
-
 // Format Rupiah function
 const formatRupiah = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -206,41 +190,22 @@ const formatRupiah = (amount: number) => {
   }).format(amount);
 };
 
-// Stat Card Component
-const StatCard = ({ title, value, icon: Icon, color }: { title: string; value: number; icon: any; color: string }) => (
-  <Card className={`border-l-4 ${color} hover:shadow-md transition-shadow`}>
-    <CardContent className="p-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-gray-600">{title}</p>
-          <p className="text-2xl font-bold text-gray-900 mt-1">{value}</p>
-        </div>
-        <div className={`p-3 rounded-full ${color.replace('border-l-', 'bg-').replace('-400', '-100')}`}>
-          <Icon className={`h-6 w-6 ${color.replace('border-l-', 'text-').replace('-400', '-600')}`} />
-        </div>
-      </div>
-    </CardContent>
-  </Card>
-);
-
 export default function SalesOrderPage() {
-  // Refs untuk file input
+  // Refs
   const salesOrderFileRef = useRef<HTMLInputElement>(null);
   const otherFilesRef = useRef<HTMLInputElement>(null);
 
-  // State untuk toggle form
+  // State untuk UI
   const [showCreateForm, setShowCreateForm] = useState(false);
-
-  // State untuk modal detail
   const [selectedSO, setSelectedSO] = useState<SalesOrder | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
 
-  // State untuk data dari backend
+  // State untuk data
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  // State untuk pagination dan filter
+  // State untuk filter
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [searchTerm, setSearchTerm] = useState("");
@@ -269,7 +234,10 @@ export default function SalesOrderPage() {
     taxes: [],
   });
 
-  // State untuk multiple item forms
+  // State untuk tax configuration
+  const [taxConfig, setTaxConfig] = useState<"included" | "excluded">("included");
+
+  // State untuk items
   const [itemForms, setItemForms] = useState([
     {
       id: "1",
@@ -288,199 +256,126 @@ export default function SalesOrderPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [taxTypes, setTaxTypes] = useState<TaxType[]>([]);
 
+  // State untuk selected taxes
+  const [selectedTaxIds, setSelectedTaxIds] = useState<number[]>([]);
+
+  // State untuk summary values
+  const [summary, setSummary] = useState({
+    subtotal: 0,
+    taxAmount: 0,
+    grandTotal: 0,
+    taxDetails: [] as { name: string; rate: number; amount: number }[],
+  });
+
   // State untuk loading
   const [loadingTaxTypes, setLoadingTaxTypes] = useState(false);
   const [loadingCustomers, setLoadingCustomers] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
 
-  // State untuk tax input mode (rate/amount)
-  const [taxInputMode, setTaxInputMode] = useState<{
-    [key: string]: "rate" | "amount";
-  }>({});
-
   // State untuk file names
   const [salesOrderFileName, setSalesOrderFileName] = useState("");
   const [otherFileNames, setOtherFileNames] = useState<string[]>([]);
 
-  // State untuk modal tambah baru
-  const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
-  const [showAddProductModal, setShowAddProductModal] = useState(false);
+  // ===============================
+  // 🧮 FUNGSI PERHITUNGAN PAJAK
+  // ===============================
 
-  // Calculate stats
-  const stats = {
-    total: salesOrders.length,
-    submitted: salesOrders.filter(so => so.status === 'submitted').length,
-    processing: salesOrders.filter(so => so.status === 'processing').length,
-    shipped: salesOrders.filter(so => so.status === 'shipped').length,
-    delivered: salesOrders.filter(so => so.status === 'delivered').length,
-    completed: salesOrders.filter(so => so.status === 'completed').length,
-    cancelled: salesOrders.filter(so => so.status === 'cancelled').length,
-    totalAmount: salesOrders.reduce((sum, so) => sum + so.total_amount, 0)
+  // Fungsi untuk menghitung semua nilai
+  const calculateAllValues = () => {
+    // 1. Hitung subtotal dari items
+    const subtotal = itemForms.reduce((sum, form) => {
+      const formSubtotal = form.quantity * form.unit_price;
+      return sum + (isNaN(formSubtotal) ? 0 : formSubtotal);
+    }, 0);
+
+    // 2. Hitung detail pajak yang dipilih
+    const taxDetails = selectedTaxIds.map(taxId => {
+      const taxType = taxTypes.find(t => t.id === taxId);
+      if (taxType) {
+        const taxAmount = (taxType.tax_rate * subtotal) / 100;
+        return {
+          name: taxType.name,
+          rate: taxType.tax_rate,
+          amount: taxAmount
+        };
+      }
+      return { name: "", rate: 0, amount: 0 };
+    }).filter(tax => tax.name); // Hapus yang kosong
+
+    // 3. Hitung total tax amount
+    const taxAmount = taxDetails.reduce((sum, tax) => sum + tax.amount, 0);
+
+    // 4. Hitung grand total
+    const grandTotal = taxConfig === 'excluded' 
+      ? subtotal + taxAmount 
+      : subtotal; // Tax sudah termasuk
+
+    return { subtotal, taxAmount, grandTotal, taxDetails };
   };
 
-  // Auto-set tax configuration berdasarkan customer type
+  // Fungsi untuk update semua perhitungan
+  const updateAllCalculations = () => {
+    const calculations = calculateAllValues();
+    
+    // Update summary state
+    setSummary(calculations);
+
+    // Update subtotal untuk item forms
+    const updatedItemForms = itemForms.map(form => ({
+      ...form,
+      subtotal: form.quantity * form.unit_price
+    }));
+    
+    if (JSON.stringify(updatedItemForms) !== JSON.stringify(itemForms)) {
+      setItemForms(updatedItemForms);
+    }
+
+    // Update newSO dengan hasil kalkulasi
+    const updatedTaxes = selectedTaxIds.map(taxId => {
+      const taxType = taxTypes.find(t => t.id === taxId);
+      const taxAmount = taxType ? (taxType.tax_rate * calculations.subtotal) / 100 : 0;
+      return {
+        tax_code: taxType?.tax_code || "",
+        tax_name: taxType?.name || "",
+        tax_rate: taxType?.tax_rate || 0,
+        tax_amount: taxAmount
+      };
+    });
+
+    setNewSO(prev => ({
+      ...prev,
+      total_amount: calculations.grandTotal,
+      tax_amount: calculations.taxAmount,
+      tax_configuration: taxConfig,
+      items: updatedItemForms.map(form => ({
+        product_name: form.product_name,
+        product_code: form.product_code,
+        quantity: form.quantity,
+        unit_price: form.unit_price,
+        subtotal: form.subtotal
+      })),
+      taxes: updatedTaxes
+    }));
+  };
+
+  // Effect untuk auto-update semua perhitungan
   useEffect(() => {
-    if (newSO.customer_type === "government") {
-      setNewSO((prev) => ({ ...prev, tax_configuration: "excluded" }));
-    } else {
-      setNewSO((prev) => ({ ...prev, tax_configuration: "included" }));
-    }
-  }, [newSO.customer_type]);
+    updateAllCalculations();
+  }, [itemForms, selectedTaxIds, taxConfig, taxTypes]);
 
-  // Fetch users dari backend
-  const fetchUsers = async () => {
+  // ===============================
+  // 📞 API CALLS
+  // ===============================
+
+
+  const downloadAttachment = async (attachment: Attachment) => {
     try {
-      setLoadingUsers(true);
-      const token = localStorage.getItem("token");
-      const response = await fetch("/api/sales-orders?action=get-users", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success) {
-          setUsers(data.data);
-        }
-      }
+      window.open(`/api/attachments/${attachment.id}`, "_blank");
     } catch (error) {
-      console.error("Error fetching users:", error);
-      toast.error("❌ Failed to load users");
-    } finally {
-      setLoadingUsers(false);
+      toast.error("Failed to download file");
     }
   };
-
-  // Fetch sales orders dari backend
-  const fetchSalesOrders = async () => {
-    try {
-      setLoading(true);
-      const token = localStorage.getItem("token");
-
-      if (!token) {
-        toast.error("Please login first");
-        window.location.href = "/login";
-        return;
-      }
-
-      let url = `/api/sales-orders?page=${currentPage}&limit=${itemsPerPage}`;
-
-      if (statusFilter !== "all") {
-        url += `&status=${statusFilter}`;
-      }
-
-      if (searchTerm) {
-        url += `&search=${encodeURIComponent(searchTerm)}`;
-      }
-
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (response.status === 401) {
-        localStorage.removeItem("token");
-        toast.error("Session expired, please login again");
-        window.location.href = "/login";
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch sales orders");
-      }
-
-      const data: SalesOrderResponse = await response.json();
-
-      if (data.success) {
-        setSalesOrders(data.data);
-      } else {
-        throw new Error("Failed to load sales orders");
-      }
-    } catch (error) {
-      console.error("Error fetching sales orders:", error);
-      toast.error("❌ Failed to load sales orders");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Fetch customers dari backend
-  const fetchCustomers = async () => {
-    try {
-      setLoadingCustomers(true);
-      const token = localStorage.getItem("token");
-      const response = await fetch("/api/customers", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success) {
-          setCustomers(data.data);
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching customers:", error);
-    } finally {
-      setLoadingCustomers(false);
-    }
-  };
-
-  // Fetch products dari backend
-  const fetchProducts = async () => {
-    try {
-      setLoadingProducts(true);
-      const token = localStorage.getItem("token");
-      const response = await fetch("/api/products", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success) {
-          setProducts(data.data);
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching products:", error);
-    } finally {
-      setLoadingProducts(false);
-    }
-  };
-
-  // Fetch projects dari backend
-  const fetchProjects = async () => {
-    try {
-      const token = localStorage.getItem("token");
-      const response = await fetch("/api/projects", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success) {
-          setProjects(data.data);
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching projects:", error);
-    }
-  };
-
   // Fetch tax types
   const fetchTaxTypes = async () => {
     try {
@@ -497,17 +392,158 @@ export default function SalesOrderPage() {
         const data = await response.json();
         if (data.success) {
           setTaxTypes(data.data);
+          // Auto-select aktif taxes
+          const activeTaxIds = data.data
+            .filter((tax: TaxType) => tax.is_active)
+            .map((tax: TaxType) => tax.id);
+          setSelectedTaxIds(activeTaxIds);
         }
       }
     } catch (error) {
       console.error("Error fetching tax types:", error);
-      toast.error("❌ Failed to load tax types");
+      toast.error("❌ Gagal memuat jenis pajak");
     } finally {
       setLoadingTaxTypes(false);
     }
   };
 
-  // Initial data fetch
+  // Fetch sales orders
+  const fetchSalesOrders = async () => {
+    try {
+      setLoading(true);
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        toast.error("Silakan login terlebih dahulu");
+        window.location.href = "/login";
+        return;
+      }
+
+      let url = `/api/sales-orders?page=${currentPage}&limit=${itemsPerPage}`;
+      if (statusFilter !== "all") url += `&status=${statusFilter}`;
+      if (searchTerm) url += `&search=${encodeURIComponent(searchTerm)}`;
+
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("token");
+        toast.error("Sesi telah berakhir, silakan login kembali");
+        window.location.href = "/login";
+        return;
+      }
+
+      if (!response.ok) throw new Error("Failed to fetch sales orders");
+
+      const data = await response.json();
+      if (data.success) {
+        setSalesOrders(data.data);
+      } else {
+        throw new Error("Failed to load sales orders");
+      }
+    } catch (error) {
+      console.error("Error fetching sales orders:", error);
+      toast.error("❌ Gagal memuat sales orders");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch customers
+  const fetchCustomers = async () => {
+    try {
+      setLoadingCustomers(true);
+      const token = localStorage.getItem("token");
+      const response = await fetch("/api/customers", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) setCustomers(data.data);
+      }
+    } catch (error) {
+      console.error("Error fetching customers:", error);
+    } finally {
+      setLoadingCustomers(false);
+    }
+  };
+
+  // Fetch products
+  const fetchProducts = async () => {
+    try {
+      setLoadingProducts(true);
+      const token = localStorage.getItem("token");
+      const response = await fetch("/api/products", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) setProducts(data.data);
+      }
+    } catch (error) {
+      console.error("Error fetching products:", error);
+    } finally {
+      setLoadingProducts(false);
+    }
+  };
+
+  // Fetch projects
+  const fetchProjects = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const response = await fetch("/api/projects", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) setProjects(data.data);
+      }
+    } catch (error) {
+      console.error("Error fetching projects:", error);
+    }
+  };
+
+  // Fetch users
+  const fetchUsers = async () => {
+    try {
+      setLoadingUsers(true);
+      const token = localStorage.getItem("token");
+      const response = await fetch("/api/sales-orders?action=get-users", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) setUsers(data.data);
+      }
+    } catch (error) {
+      console.error("Error fetching users:", error);
+      toast.error("❌ Gagal memuat pengguna");
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  // Initial fetch
   useEffect(() => {
     fetchSalesOrders();
     fetchCustomers();
@@ -517,42 +553,11 @@ export default function SalesOrderPage() {
     fetchUsers();
   }, [currentPage, itemsPerPage, statusFilter, searchTerm]);
 
-  // Filter logic untuk client-side filtering tambahan
-  const filteredSO = salesOrders.filter((so) => {
-    const matchesSearch =
-      so.so_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      so.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      so.customer_phone.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      so.customer_email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      so.sales_order_doc?.toLowerCase().includes(searchTerm.toLowerCase());
+  // ===============================
+  // 🎛️ HANDLERS
+  // ===============================
 
-    const matchesStatus = statusFilter === "all" || so.status === statusFilter;
-
-    return matchesSearch && matchesStatus;
-  });
-
-  // Pagination logic
-  const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = filteredSO.slice(indexOfFirstItem, indexOfLastItem);
-  const totalPages = Math.ceil(filteredSO.length / itemsPerPage);
-
-  // Pagination functions
-  const paginate = (pageNumber: number) => setCurrentPage(pageNumber);
-
-  const nextPage = () => {
-    if (currentPage < totalPages) {
-      setCurrentPage(currentPage + 1);
-    }
-  };
-
-  const prevPage = () => {
-    if (currentPage > 1) {
-      setCurrentPage(currentPage - 1);
-    }
-  };
-
-  // Update item form field
+  // Update item form dengan auto-update
   const updateItemForm = (
     id: string,
     field: keyof (typeof itemForms)[0],
@@ -562,13 +567,9 @@ export default function SalesOrderPage() {
       prev.map((form) => {
         if (form.id === id) {
           const updatedForm = { ...form, [field]: value };
-
-          // Auto-calculate subtotal if quantity or unit_price changes
           if (field === "quantity" || field === "unit_price") {
-            updatedForm.subtotal =
-              Number(updatedForm.quantity) * Number(updatedForm.unit_price);
+            updatedForm.subtotal = Number(updatedForm.quantity) * Number(updatedForm.unit_price);
           }
-
           return updatedForm;
         }
         return form;
@@ -576,7 +577,7 @@ export default function SalesOrderPage() {
     );
   };
 
-  // Add new item form
+  // Add/remove item form dengan auto-update
   const addItemForm = () => {
     const newId = (itemForms.length + 1).toString();
     setItemForms((prev) => [
@@ -592,62 +593,55 @@ export default function SalesOrderPage() {
     ]);
   };
 
-  // Remove item form
   const removeItemForm = (id: string) => {
     if (itemForms.length > 1) {
       setItemForms((prev) => prev.filter((form) => form.id !== id));
     }
   };
 
-  // Toggle tax input mode
-  const toggleTaxInputMode = (taxCode: string) => {
-    setTaxInputMode((prev) => ({
-      ...prev,
-      [taxCode]: prev[taxCode] === "rate" ? "amount" : "rate",
-    }));
-  };
-
-  // Update tax value
-  const updateTaxValue = (taxCode: string, value: number) => {
-    const mode = taxInputMode[taxCode] || "amount";
-
-    setNewSO((prev) => {
-      const updatedTaxes = prev.taxes.map((tax) => {
-        if (tax.tax_code === taxCode) {
-          if (mode === "rate") {
-            // Input rate → calculate amount
-            const tax_amount = (value * prev.total_amount) / 100;
-            return { ...tax, tax_rate: value, tax_amount };
-          } else {
-            // Input amount → calculate rate
-            const tax_rate =
-              prev.total_amount > 0 ? (value / prev.total_amount) * 100 : 0;
-            return { ...tax, tax_amount: value, tax_rate };
-          }
-        }
-        return tax;
-      });
-      return { ...prev, taxes: updatedTaxes };
+  // Tax selection handler dengan auto-update
+  const toggleTaxSelection = (taxId: number) => {
+    setSelectedTaxIds(prev => {
+      if (prev.includes(taxId)) {
+        return prev.filter(id => id !== taxId);
+      } else {
+        return [...prev, taxId];
+      }
     });
   };
 
-  // Update total amount
-  const updateTotalAmount = (amount: number) => {
-    setNewSO((prev) => {
-      // Update taxes when total amount changes
-      const updatedTaxes = prev.taxes.map((tax) => {
-        if (taxInputMode[tax.tax_code] === "rate") {
-          // Recalculate amount based on rate
-          const tax_amount = (tax.tax_rate * amount) / 100;
-          return { ...tax, tax_amount };
-        }
-        // If input mode is amount, keep the amount but recalculate rate
-        const tax_rate = amount > 0 ? (tax.tax_amount / amount) * 100 : 0;
-        return { ...tax, tax_rate };
-      });
+  // Handle tax configuration change
+  const handleTaxConfigChange = (value: boolean) => {
+    setTaxConfig(value ? "excluded" : "included");
+  };
 
-      return { ...prev, total_amount: amount, taxes: updatedTaxes };
-    });
+  // Handle customer selection
+  const handleCustomerSelect = (customerCode: string) => {
+    const customer = customers.find((c) => c.customer_code === customerCode);
+    if (customer) {
+      setNewSO((prev) => ({
+        ...prev,
+        customer_code: customer.customer_code,
+        customer_name: customer.customer_name,
+        customer_phone: customer.phone,
+        customer_email: customer.email,
+        customer_type: customer.customer_type,
+        billing_address: customer.billing_address || "",
+        shipping_address: customer.shipping_address || "",
+      }));
+    }
+  };
+
+  // Handle product selection
+  const handleProductSelect = (itemId: string, productCode: string) => {
+    const product = products.find((p) => p.product_code === productCode);
+    if (product) {
+      updateItemForm(itemId, "product_name", product.product_name);
+      updateItemForm(itemId, "product_code", product.product_code);
+      if (product.unit_price && product.unit_price > 0) {
+        updateItemForm(itemId, "unit_price", product.unit_price);
+      }
+    }
   };
 
   // Handle sales rep selection
@@ -663,79 +657,15 @@ export default function SalesOrderPage() {
     }
   };
 
-  // Handlers
-  const toggleTax = (taxCode: string) => {
-    const taxType = taxTypes.find((t) => t.tax_code === taxCode);
-    if (!taxType) return;
-
-    if (newSO.taxes.find((tax) => tax.tax_code === taxCode)) {
-      setNewSO((prev) => ({
-        ...prev,
-        taxes: prev.taxes.filter((tax) => tax.tax_code !== taxCode),
-      }));
-      // Remove from input mode
-      setTaxInputMode((prev) => {
-        const newMode = { ...prev };
-        delete newMode[taxCode];
-        return newMode;
-      });
-    } else {
-      setNewSO((prev) => ({
-        ...prev,
-        taxes: [
-          ...prev.taxes,
-          {
-            tax_code: taxCode,
-            tax_name: taxType.name,
-            tax_rate: 0,
-            tax_amount: 0,
-          },
-        ],
-      }));
-      // Default to amount input mode
-      setTaxInputMode((prev) => ({
-        ...prev,
-        [taxCode]: "amount",
-      }));
-    }
+  // Handle shipping address change
+  const handleShippingAddressChange = (value: string) => {
+    setNewSO(prev => ({
+      ...prev,
+      shipping_address: value
+    }));
   };
 
-  // Select customer handler
-  const handleCustomerSelect = (customerCode: string) => {
-    if (customerCode === "new") {
-      setShowAddCustomerModal(true);
-      return;
-    }
-
-    const customer = customers.find((c) => c.customer_code === customerCode);
-    if (customer) {
-      setNewSO((prev) => ({
-        ...prev,
-        customer_code: customer.customer_code,
-        customer_name: customer.customer_name,
-        customer_phone: customer.phone,
-        customer_email: customer.email,
-        customer_type: customer.customer_type,
-        billing_address: customer.billing_address || "",
-      }));
-    }
-  };
-
-  // Select product handler untuk item form
-  const handleProductSelect = (itemId: string, productCode: string) => {
-    if (productCode === "new") {
-      setShowAddProductModal(true);
-      return;
-    }
-
-    const product = products.find((p) => p.product_code === productCode);
-    if (product) {
-      updateItemForm(itemId, "product_name", product.product_name);
-      updateItemForm(itemId, "product_code", product.product_code);
-      // Harga tetap input manual
-    }
-  };
-
+  // File handlers
   const handleFileUpload = (type: "sales_order" | "other") => {
     if (type === "sales_order") {
       salesOrderFileRef.current?.click();
@@ -744,7 +674,6 @@ export default function SalesOrderPage() {
     }
   };
 
-  // Handle file input change
   const handleFileInputChange = (
     e: React.ChangeEvent<HTMLInputElement>,
     type: "sales_order" | "other"
@@ -760,65 +689,30 @@ export default function SalesOrderPage() {
     }
   };
 
-  // Clear file inputs
-  const clearFileInputs = () => {
-    setSalesOrderFileName("");
-    setOtherFileNames([]);
-    if (salesOrderFileRef.current) salesOrderFileRef.current.value = "";
-    if (otherFilesRef.current) otherFilesRef.current.value = "";
-  };
-
   // Form validation
   const validateForm = () => {
     const errors: string[] = [];
 
-    // Required fields
-    if (!newSO.customer_name.trim()) errors.push("Customer name is required");
-    if (!newSO.customer_phone.trim()) errors.push("Customer phone is required");
-    if (!newSO.total_amount || newSO.total_amount <= 0)
-      errors.push("Total amount must be greater than 0");
-
-    // Validate items
+    if (!newSO.customer_name.trim()) errors.push("Nama customer wajib diisi");
+    if (!newSO.customer_phone.trim()) errors.push("Nomor telepon customer wajib diisi");
+    
     const validItems = itemForms.filter(
-      (form) =>
-        form.product_name &&
-        form.product_code &&
-        form.quantity > 0 &&
-        form.unit_price > 0
+      (form) => form.product_name && form.product_code && form.quantity > 0 && form.unit_price > 0
     );
 
     if (validItems.length === 0) {
-      errors.push("At least one valid item is required");
+      errors.push("Minimal satu item produk wajib diisi");
     }
 
-    // ✅ NEW: Document Validation
     if (!salesOrderFileName) {
-      errors.push("Sales Order Document is required");
-    }
-
-    // ✅ NEW: File Type Validation
-    if (salesOrderFileName) {
-      const allowedExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx'];
-      const fileExt = salesOrderFileName.toLowerCase().substring(salesOrderFileName.lastIndexOf('.'));
-      if (!allowedExtensions.includes(fileExt)) {
-        errors.push("Sales Order Document must be PDF, Word, or Excel file");
-      }
-    }
-
-    // ✅ NEW: File Size Validation (max 10MB)
-    if (salesOrderFileRef.current?.files?.[0]) {
-      const fileSize = salesOrderFileRef.current.files[0].size;
-      const maxSize = 10 * 1024 * 1024; // 10MB
-      if (fileSize > maxSize) {
-        errors.push("Sales Order Document must be less than 10MB");
-      }
+      errors.push("Dokumen Sales Order wajib diupload");
     }
 
     return errors;
   };
 
+  // Submit SO
   const submitSO = async () => {
-    // Validate form
     const errors = validateForm();
     if (errors.length > 0) {
       errors.forEach((error) => toast.error(error));
@@ -828,11 +722,7 @@ export default function SalesOrderPage() {
     // Prepare items data
     const itemsData = itemForms
       .filter(
-        (form) =>
-          form.product_name &&
-          form.product_code &&
-          form.quantity > 0 &&
-          form.unit_price > 0
+        (form) => form.product_name && form.product_code && form.quantity > 0 && form.unit_price > 0
       )
       .map((form) => ({
         product_name: form.product_name,
@@ -847,26 +737,25 @@ export default function SalesOrderPage() {
       const token = localStorage.getItem("token");
 
       if (!token) {
-        toast.error("Please login first");
+        toast.error("Silakan login terlebih dahulu");
         window.location.href = "/login";
         return;
       }
 
-      // PREPARE FORM DATA
+      // Prepare form data
       const formData = new FormData();
-
-      // Append SO data sebagai JSON string
       const requestData: CreateSalesOrderRequest = {
         ...newSO,
         project_code: newSO.project_code || undefined,
         items: itemsData,
-        tax_amount: newSO.taxes.reduce((sum, tax) => sum + tax.tax_amount, 0),
-        shipping_cost: newSO.shipping_cost || 0,
+        tax_amount: summary.taxAmount,
+        shipping_cost: 0,
+        total_amount: summary.grandTotal,
+        tax_configuration: taxConfig,
       };
 
       formData.append("data", JSON.stringify(requestData));
 
-      // APPEND FILES JIKA ADA
       if (salesOrderFileRef.current?.files?.[0]) {
         formData.append("sales_order_doc", salesOrderFileRef.current.files[0]);
       }
@@ -877,7 +766,7 @@ export default function SalesOrderPage() {
         }
       }
 
-      // KIRIM SEBAGAI FORM DATA
+      // Submit
       const response = await fetch("/api/sales-orders", {
         method: "POST",
         headers: {
@@ -889,7 +778,7 @@ export default function SalesOrderPage() {
       const result = await response.json();
 
       if (response.ok && result.success) {
-        toast.success(`Sales Order ${result.so_code} created successfully!`);
+        toast.success(`Sales Order ${result.so_code} berhasil dibuat!`);
 
         // Reset form
         setNewSO({
@@ -912,52 +801,43 @@ export default function SalesOrderPage() {
           items: [],
           taxes: [],
         });
-        setItemForms([
-          {
-            id: "1",
-            product_name: "",
-            product_code: "",
-            quantity: 1,
-            unit_price: 0,
-            subtotal: 0,
-          },
-        ]);
+        setItemForms([{
+          id: "1",
+          product_name: "",
+          product_code: "",
+          quantity: 1,
+          unit_price: 0,
+          subtotal: 0,
+        }]);
+        setTaxConfig("included");
+        setSelectedTaxIds([]);
+        setSummary({
+          subtotal: 0,
+          taxAmount: 0,
+          grandTotal: 0,
+          taxDetails: [],
+        });
         setShowCreateForm(false);
-        setTaxInputMode({});
+        setSalesOrderFileName("");
+        setOtherFileNames([]);
 
-        // Clear file inputs
-        clearFileInputs();
-
-        // Refresh sales orders list
+        // Refresh list
         fetchSalesOrders();
       } else {
-        throw new Error(result.error || "Failed to create sales order");
+        throw new Error(result.error || "Gagal membuat sales order");
       }
     } catch (error) {
       console.error("Create SO error:", error);
-      toast.error("Failed to create sales order");
+      toast.error("Gagal membuat sales order");
     } finally {
       setSubmitting(false);
     }
   };
 
-  const getStatusColor = (status: string) => {
-    const colors = {
-      submitted: "bg-blue-100 text-blue-800",
-      processing: "bg-yellow-100 text-yellow-800",
-      shipped: "bg-purple-100 text-purple-800",
-      delivered: "bg-green-100 text-green-800",
-      completed: "bg-green-100 text-green-800",
-      cancelled: "bg-red-100 text-red-800",
-    };
-    return colors[status as keyof typeof colors] || colors.submitted;
-  };
-
+  // View detail
   const viewDetail = async (soCode: string) => {
     try {
       const token = localStorage.getItem("token");
-
-      // PAKAI QUERY PARAMETER
       const response = await fetch(
         `/api/sales-orders?so_code=${encodeURIComponent(soCode)}`,
         {
@@ -974,160 +854,28 @@ export default function SalesOrderPage() {
           setSelectedSO(data.data);
           setShowDetailModal(true);
         }
-      } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to fetch order details");
       }
     } catch (error) {
       console.error("Error fetching order details:", error);
-      toast.error("Failed to load order details");
+      toast.error("Gagal memuat detail order");
     }
   };
 
-  const downloadAttachment = async (attachment: Attachment) => {
-    try {
-      window.open(`/api/attachments/${attachment.id}`, "_blank");
-    } catch (error) {
-      toast.error("Failed to download file");
-    }
-  };
-
-  // Komponen Pagination
-  const Pagination = () => {
-    const pageNumbers = [];
-    const maxVisiblePages = 5;
-    let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
-    const endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
-
-    if (endPage - startPage + 1 < maxVisiblePages) {
-      startPage = Math.max(1, endPage - maxVisiblePages + 1);
-    }
-
-    for (let i = startPage; i <= endPage; i++) {
-      pageNumbers.push(i);
-    }
-
-    return (
-      
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t">
-        <div className="text-sm text-gray-600">
-          Showing <span className="font-semibold">{indexOfFirstItem + 1}</span>{" "}
-          to{" "}
-          <span className="font-semibold">
-            {Math.min(indexOfLastItem, filteredSO.length)}
-          </span>{" "}
-          of <span className="font-semibold">{filteredSO.length}</span> results
-        </div>
-        
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={prevPage}
-            disabled={currentPage === 1}
-            className="flex items-center gap-1"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Previous
-          </Button>
-
-          <div className="flex gap-1">
-            {pageNumbers.map((number) => (
-              <Button
-                key={number}
-                variant={currentPage === number ? "default" : "outline"}
-                size="sm"
-                onClick={() => paginate(number)}
-                className="w-8 h-8 p-0 min-w-8"
-              >
-                {number}
-              </Button>
-            ))}
-          </div>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={nextPage}
-            disabled={currentPage === totalPages}
-            className="flex items-center gap-1"
-          >
-            Next
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Label htmlFor="itemsPerPage" className="text-sm whitespace-nowrap">
-            Items per page:
-          </Label>
-          <select
-            id="itemsPerPage"
-            value={itemsPerPage}
-            onChange={(e) => {
-              setItemsPerPage(Number(e.target.value));
-              setCurrentPage(1);
-            }}
-            className="border rounded px-2 py-1 text-sm"
-          >
-            <option value={5}>5</option>
-            <option value={10}>10</option>
-            <option value={20}>20</option>
-            <option value={50}>50</option>
-          </select>
-        </div>
-      </div>
-    );
-  };
+  // ===============================
+  // 🎨 RENDER
+  // ===============================
 
   return (
     <div className="min-h-screen bg-gray-50/30">
       <div className="max-w-[99vw] mx-auto p-4 space-y-6">
         
-         <div className="mb-6">
+        {/* Header */}
+        <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900">Sales Order</h1>
-          <p className="text-gray-600 mt-2">Process customer Sales Order </p>
+          <p className="text-gray-600 mt-2">Proses Sales Order Customer</p>
         </div>
 
-        {/* Status Breakdown */}
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5" />
-              Order Status Breakdown
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              <div className="text-center p-3 bg-blue-50 rounded-lg">
-                <div className="text-2xl font-bold text-blue-600">{stats.submitted}</div>
-                <div className="text-sm text-blue-800">Submitted</div>
-              </div>
-              <div className="text-center p-3 bg-yellow-50 rounded-lg">
-                <div className="text-2xl font-bold text-yellow-600">{stats.processing}</div>
-                <div className="text-sm text-yellow-800">Processing</div>
-              </div>
-              {/* <div className="text-center p-3 bg-purple-50 rounded-lg">
-                <div className="text-2xl font-bold text-purple-600">{stats.shipped}</div>
-                <div className="text-sm text-purple-800">Shipped</div>
-              </div>
-              <div className="text-center p-3 bg-green-50 rounded-lg">
-                <div className="text-2xl font-bold text-green-600">{stats.delivered}</div>
-                <div className="text-sm text-green-800">Delivered</div>
-              </div> */}
-              <div className="text-center p-3 bg-green-50 rounded-lg">
-                <div className="text-2xl font-bold text-green-600">{stats.completed}</div>
-                <div className="text-sm text-green-800">Completed</div>
-              </div>
-              <div className="text-center p-3 bg-red-50 rounded-lg">
-                <div className="text-2xl font-bold text-red-600">{stats.cancelled}</div>
-                <div className="text-sm text-red-800">Cancelled</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Previous Sales Orders - Full Width Table */}
+        {/* Sales Orders Table */}
         <Card className="mb-6">
           <CardHeader>
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -1136,13 +884,12 @@ export default function SalesOrderPage() {
                 Sales Orders
               </CardTitle>
 
-              {/* Search and Filters */}
               <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto">
-                {/* Search Input */}
+                {/* Search */}
                 <div className="relative flex-1 sm:flex-none">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                   <Input
-                    placeholder="Search orders..."
+                    placeholder="Cari order..."
                     value={searchTerm}
                     onChange={(e) => {
                       setSearchTerm(e.target.value);
@@ -1161,141 +908,121 @@ export default function SalesOrderPage() {
                   }}
                   className="border rounded px-3 py-2 text-sm"
                 >
-                  <option value="all">All Status</option>
+                  <option value="all">Semua Status</option>
                   <option value="submitted">Submitted</option>
                   <option value="processing">Processing</option>
-                  <option value="shipped">Shipped</option>
-                  <option value="delivered">Delivered</option>
                   <option value="completed">Completed</option>
                   <option value="cancelled">Cancelled</option>
                 </select>
 
-                {/* Reset Filters */}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setSearchTerm("");
-                    setStatusFilter("all");
-                    setCurrentPage(1);
-                  }}
-                  className="whitespace-nowrap"
-                >
-                  <Filter className="h-4 w-4 mr-2" />
-                  Reset Filters
-                </Button>
-
-                {/* Create New SO Button */}
+                {/* Create Button */}
                 <Button
                   onClick={() => setShowCreateForm(true)}
                   className="whitespace-nowrap"
                 >
                   <Plus className="h-4 w-4 mr-2" />
-                  New Sales Order
+                  Sales Order Baru
                 </Button>
               </div>
             </div>
           </CardHeader>
           <CardContent>
-            {/* Loading State */}
-            {loading && (
+            {loading ? (
               <div className="flex justify-center items-center py-8">
                 <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
-                <span className="ml-2">Loading sales orders...</span>
+                <span className="ml-2">Memuat sales orders...</span>
               </div>
-            )}
-
-            {!loading && (
+            ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-12 text-center">No</TableHead>
+                      <TableHead className="w-12">No</TableHead>
                       <TableHead>SO Number</TableHead>
-                      <TableHead>SO From Client</TableHead>
-                      <TableHead>Date</TableHead>
+                      <TableHead>Tanggal</TableHead>
                       <TableHead>Customer</TableHead>
-                      <TableHead>Customer Phone</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Total Amount</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
+                      <TableHead className="text-right">Aksi</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {currentItems.length > 0 ? (
-                      currentItems.map((so, index) => (
-                        <TableRow key={so.so_code} className="hover:bg-gray-50">
-                          <TableCell className="text-center font-medium">
-                            {indexOfFirstItem + index + 1}
-                          </TableCell>
-                          <TableCell className="font-medium">
-                            {so.so_code}
-                          </TableCell>
-                          <TableCell className="font-medium">
-                            {so.sales_order_doc || "-"}
-                          </TableCell>
-                          <TableCell>
-                            {new Date(so.created_at).toLocaleDateString()}
-                          </TableCell>
-                          <TableCell>{so.customer_name}</TableCell>
-                          <TableCell>{so.customer_phone}</TableCell>
-                          <TableCell>
-                            <Badge className={getStatusColor(so.status)}>
-                              {so.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="font-semibold">
-                            {formatRupiah(so.total_amount)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => viewDetail(so.so_code)}
-                            >
-                              <Eye className="h-4 w-4 mr-1" />
-                              View
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell
-                          colSpan={9}
-                          className="text-center py-8 text-gray-500"
-                        >
-                          <div className="flex flex-col items-center gap-2">
-                            <FileText className="h-12 w-12 text-gray-300" />
-                            <p>No sales orders found.</p>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setShowCreateForm(true)}
-                            >
-                              Create First Sales Order
-                            </Button>
-                          </div>
+                    {salesOrders.map((so, index) => (
+                      <TableRow key={so.so_code}>
+                        <TableCell className="font-medium">
+                          {(currentPage - 1) * itemsPerPage + index + 1}
+                        </TableCell>
+                        <TableCell className="font-medium">{so.so_code}</TableCell>
+                        <TableCell>
+                          {new Date(so.created_at).toLocaleDateString('id-ID')}
+                        </TableCell>
+                        <TableCell>{so.customer_name}</TableCell>
+                        <TableCell>
+                          <Badge variant={
+                            so.status === 'completed' ? 'default' :
+                            so.status === 'processing' ? 'secondary' :
+                            so.status === 'cancelled' ? 'destructive' : 'outline'
+                          }>
+                            {so.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-semibold">
+                          {formatRupiah(so.total_amount)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => viewDetail(so.so_code)}
+                          >
+                            <Eye className="h-4 w-4 mr-1" />
+                            Lihat
+                          </Button>
                         </TableCell>
                       </TableRow>
-                    )}
+                    ))}
                   </TableBody>
                 </Table>
+
+                {/* Pagination */}
+                <div className="flex items-center justify-between mt-4">
+                  <div className="text-sm text-gray-600">
+                    Menampilkan {(currentPage - 1) * itemsPerPage + 1} sampai {Math.min(currentPage * itemsPerPage, salesOrders.length)} dari {salesOrders.length} data
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                      disabled={currentPage === 1}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                      Sebelumnya
+                    </Button>
+                    <span className="text-sm">
+                      Halaman {currentPage} dari {Math.ceil(salesOrders.length / itemsPerPage)}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCurrentPage(prev => prev + 1)}
+                      disabled={currentPage >= Math.ceil(salesOrders.length / itemsPerPage)}
+                    >
+                      Berikutnya
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
               </div>
             )}
-
-            {/* Pagination */}
-            {!loading && filteredSO.length > 0 && <Pagination />}
           </CardContent>
         </Card>
 
-        {/* Create New Sales Order - Collapsible */}
+        {/* Create Form */}
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
-                Create New Sales Order
-              </CardTitle>
+              <CardTitle>Buat Sales Order Baru</CardTitle>
               <Button
                 variant="outline"
                 onClick={() => setShowCreateForm(!showCreateForm)}
@@ -1305,7 +1032,7 @@ export default function SalesOrderPage() {
                 ) : (
                   <ChevronDown className="h-4 w-4" />
                 )}
-                {showCreateForm ? "Hide Form" : "Show Form"}
+                {showCreateForm ? "Sembunyikan Form" : "Tampilkan Form"}
               </Button>
             </div>
           </CardHeader>
@@ -1313,17 +1040,15 @@ export default function SalesOrderPage() {
           {showCreateForm && (
             <CardContent>
               <div className="space-y-6">
-                {/* Customer and Transaction Data */}
+                {/* Basic Info */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Customer Dropdown */}
+                  {/* Customer */}
                   <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="customerSelect">Select Customer *</Label>
+                    <Label>Pilih Customer *</Label>
                     <select
-                      id="customerSelect"
                       value={newSO.customer_code || ""}
                       onChange={(e) => handleCustomerSelect(e.target.value)}
                       className="w-full border rounded-md px-3 py-2"
-                      disabled={loadingCustomers}
                     >
                       <option value="">Pilih Customer</option>
                       {customers.map((customer) => (
@@ -1334,104 +1059,30 @@ export default function SalesOrderPage() {
                           {customer.customer_name} - {customer.phone}
                         </option>
                       ))}
-                      <option value="new" className="font-bold text-blue-600">
-                        + Tambah Customer Baru
-                      </option>
                     </select>
-                    {loadingCustomers && (
-                      <div className="flex items-center gap-2 text-sm text-gray-500">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        Loading customers...
-                      </div>
-                    )}
                   </div>
 
-                  {/* Sales Representative Dropdown */}
+                  {/* Sales Rep */}
                   <div className="space-y-2">
-                    <Label htmlFor="salesRepSelect">Sales Representative</Label>
+                    <Label>Sales Representative</Label>
                     <select
-                      id="salesRepSelect"
-                      value={
-                        users.find((user) => user.name === newSO.sales_rep)
-                          ?.user_code || ""
-                      }
+                      value={users.find((user) => user.name === newSO.sales_rep)?.user_code || ""}
                       onChange={(e) => handleSalesRepSelect(e.target.value)}
                       className="w-full border rounded-md px-3 py-2"
-                      disabled={loadingUsers}
                     >
-                      <option value="">Pilih Sales Representative</option>
+                      <option value="">Pilih Sales Rep</option>
                       {users.map((user) => (
                         <option key={user.user_code} value={user.user_code}>
                           {user.name} - {user.email}
                         </option>
                       ))}
                     </select>
-                    {loadingUsers && (
-                      <div className="flex items-center gap-2 text-sm text-gray-500">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        Loading sales representatives...
-                      </div>
-                    )}
-                    {newSO.sales_rep && (
-                      <div className="text-sm text-green-600">
-                        Selected: {newSO.sales_rep}{" "}
-                        {newSO.sales_rep_email && `(${newSO.sales_rep_email})`}
-                      </div>
-                    )}
                   </div>
 
-                  {/* Customer Type Display */}
+                  {/* Project */}
                   <div className="space-y-2">
-                    <Label htmlFor="customerType">Customer Type</Label>
-                    <div className="flex items-center gap-2 p-2 border rounded-md bg-gray-50">
-                      <User className="h-4 w-4 text-gray-500" />
-                      <span className="capitalize">{newSO.customer_type}</span>
-                      <Badge
-                        className={
-                          newSO.customer_type === "government"
-                            ? "bg-orange-100 text-orange-800"
-                            : "bg-blue-100 text-blue-800"
-                        }
-                      >
-                        {newSO.customer_type === "government"
-                          ? "Tax Excluded"
-                          : "Tax Included"}
-                      </Badge>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="totalAmount">Total Amount *</Label>
-                    <Input
-                      id="totalAmount"
-                      type="number"
-                      value={newSO.total_amount || ""}
-                      onChange={(e) =>
-                        updateTotalAmount(parseInt(e.target.value) || 0)
-                      }
-                      placeholder="Enter total amount"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="salesOrderDoc">No SO (From Client)</Label>
-                    <Input
-                      id="salesOrderDoc"
-                      value={newSO.sales_order_doc}
-                      onChange={(e) =>
-                        setNewSO((prev) => ({
-                          ...prev,
-                          sales_order_doc: e.target.value,
-                        }))
-                      }
-                      placeholder="No SO document"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="projectSelect">Project</Label>
+                    <Label>Proyek</Label>
                     <select
-                      id="projectSelect"
                       value={newSO.project_code || ""}
                       onChange={(e) =>
                         setNewSO((prev) => ({
@@ -1441,155 +1092,54 @@ export default function SalesOrderPage() {
                       }
                       className="w-full border rounded-md px-3 py-2"
                     >
-                      <option value="">Pilih Project</option>
+                      <option value="">Pilih Proyek</option>
                       {projects.map((project) => (
-                        <option
-                          key={project.project_code}
-                          value={project.project_code}
-                        >
-                          {project.name}{" "}
-                          {project.company_name
-                            ? `(${project.company_name})`
-                            : ""}
+                        <option key={project.project_code} value={project.project_code}>
+                          {project.name}
                         </option>
                       ))}
                     </select>
                   </div>
 
+                  {/* SO Document */}
                   <div className="space-y-2">
-                    <Label htmlFor="shippingAddress">Shipping Address</Label>
+                    <Label>No SO (Dari Klien)</Label>
                     <Input
-                      id="shippingAddress"
-                      value={newSO.shipping_address}
+                      value={newSO.sales_order_doc}
                       onChange={(e) =>
                         setNewSO((prev) => ({
                           ...prev,
-                          shipping_address: e.target.value,
+                          sales_order_doc: e.target.value,
                         }))
                       }
-                      placeholder="Shipping address"
+                      placeholder="Nomor dokumen SO"
                     />
                   </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="shippingCost">Shipping Cost</Label>
-                    <Input
-                      id="shippingCost"
-                      type="number"
-                      value={newSO.shipping_cost || ""}
-                      onChange={(e) =>
-                        setNewSO((prev) => ({
-                          ...prev,
-                          shipping_cost: parseInt(e.target.value) || 0,
-                        }))
-                      }
-                      placeholder="Shipping cost"
+                  {/* Shipping Address */}
+                  <div className="space-y-2 md:col-span-2">
+                    <Label className="flex items-center gap-2">
+                      <MapPin className="h-4 w-4" />
+                      Alamat Pengiriman
+                    </Label>
+                    <textarea
+                      value={newSO.shipping_address || ""}
+                      onChange={(e) => handleShippingAddressChange(e.target.value)}
+                      placeholder="Masukkan alamat pengiriman..."
+                      rows={3}
+                      className="w-full border rounded-md px-3 py-2"
                     />
                   </div>
                 </div>
 
-                {/* Tax Section */}
-                {loadingTaxTypes ? (
-                  <div className="flex justify-center py-4">
-                    <Loader2 className="h-6 w-6 animate-spin" />
-                    <span className="ml-2">Loading tax types...</span>
-                  </div>
-                ) : (
-                  taxTypes.map((tax) => (
-                    <div
-                      key={tax.tax_code}
-                      className="flex items-center justify-between p-3 border rounded-lg"
-                    >
-                      <div className="flex items-center gap-3 flex-1">
-                        <Switch
-                          checked={
-                            !!newSO.taxes.find(
-                              (t) => t.tax_code === tax.tax_code
-                            )
-                          }
-                          onCheckedChange={() => toggleTax(tax.tax_code)}
-                        />
-                        <div className="flex-1">
-                          <div className="font-medium">{tax.name}</div>
-                          {tax.description && (
-                            <div className="text-sm text-gray-500">
-                              {tax.description}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => toggleTaxInputMode(tax.tax_code)}
-                          className="text-xs"
-                        >
-                          {taxInputMode[tax.tax_code] === "rate"
-                            ? "Rate"
-                            : "Amount"}
-                        </Button>
-
-                        <div className="w-32">
-                          {taxInputMode[tax.tax_code] === "rate" ? (
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={
-                                newSO.taxes.find(
-                                  (t) => t.tax_code === tax.tax_code
-                                )?.tax_rate || ""
-                              }
-                              onChange={(e) =>
-                                updateTaxValue(
-                                  tax.tax_code,
-                                  parseFloat(e.target.value) || 0
-                                )
-                              }
-                              placeholder="Rate %"
-                              disabled={
-                                !newSO.taxes.find(
-                                  (t) => t.tax_code === tax.tax_code
-                                )
-                              }
-                            />
-                          ) : (
-                            <Input
-                              type="number"
-                              value={
-                                newSO.taxes.find(
-                                  (t) => t.tax_code === tax.tax_code
-                                )?.tax_amount || ""
-                              }
-                              onChange={(e) =>
-                                updateTaxValue(
-                                  tax.tax_code,
-                                  parseInt(e.target.value) || 0
-                                )
-                              }
-                              placeholder="Amount"
-                              disabled={
-                                !newSO.taxes.find(
-                                  (t) => t.tax_code === tax.tax_code
-                                )
-                              }
-                            />
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-
-                {/* Product Items Section */}
+                {/* Product Items */}
                 <Card>
-                  <CardHeader className="pb-3">
+                  <CardHeader>
                     <div className="flex items-center justify-between">
-                      <CardTitle className="text-lg">Product Items</CardTitle>
+                      <CardTitle>Produk Items</CardTitle>
                       <Button onClick={addItemForm} variant="outline" size="sm">
                         <Plus className="h-4 w-4 mr-2" />
-                        Add Item Form
+                        Tambah Item
                       </Button>
                     </div>
                   </CardHeader>
@@ -1600,12 +1150,6 @@ export default function SalesOrderPage() {
                           key={form.id}
                           className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 p-4 border rounded-lg relative"
                         >
-                          <div className="absolute -top-2 -left-2">
-                            <div className="w-6 h-6 bg-cyan-700 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-sm">
-                              {index + 1}
-                            </div>
-                          </div>
-
                           {itemForms.length > 1 && (
                             <Button
                               variant="ghost"
@@ -1617,75 +1161,60 @@ export default function SalesOrderPage() {
                             </Button>
                           )}
 
-                          {/* Product Dropdown */}
                           <div className="space-y-1 md:col-span-2">
-                            <Label className="text-sm">Select Product</Label>
+                            <Label>Pilih Produk *</Label>
                             <select
                               value={form.product_code}
                               onChange={(e) =>
                                 handleProductSelect(form.id, e.target.value)
                               }
-                              className="w-full border rounded px-2 py-1 text-sm"
-                              disabled={loadingProducts}
+                              className="w-full border rounded px-2 py-1"
                             >
-                              <option value="">Pilih Product</option>
+                              <option value="">Pilih Produk</option>
                               {products.map((product) => (
                                 <option
                                   key={product.product_code}
                                   value={product.product_code}
                                 >
-                                  {product.product_name} -{" "}
-                                  {product.product_code}
+                                  {product.product_name} - {product.product_code}
                                 </option>
                               ))}
-                              <option
-                                value="new"
-                                className="font-bold text-blue-600"
-                              >
-                                + Tambah Product Baru
-                              </option>
                             </select>
                           </div>
 
                           <div className="space-y-1">
-                            <Label className="text-sm">Quantity</Label>
+                            <Label>Quantity *</Label>
                             <Input
                               type="number"
+                              min="1"
                               value={form.quantity || ""}
                               onChange={(e) =>
-                                updateItemForm(
-                                  form.id,
-                                  "quantity",
-                                  parseInt(e.target.value) || 0
-                                )
+                                updateItemForm(form.id, "quantity", parseInt(e.target.value) || 0)
                               }
-                              placeholder="Enter quantity"
+                              placeholder="Qty"
                             />
                           </div>
 
                           <div className="space-y-1">
-                            <Label className="text-sm">Unit Price</Label>
+                            <Label>Harga Satuan *</Label>
                             <Input
                               type="number"
+                              min="0"
                               value={form.unit_price || ""}
                               onChange={(e) =>
-                                updateItemForm(
-                                  form.id,
-                                  "unit_price",
-                                  parseInt(e.target.value) || 0
-                                )
+                                updateItemForm(form.id, "unit_price", parseInt(e.target.value) || 0)
                               }
-                              placeholder="Enter unit price"
+                              placeholder="Harga"
                             />
                           </div>
 
-                          <div className="space-y-1 md:col-span-2">
-                            <Label className="text-sm">Subtotal</Label>
+                          <div className="md:col-span-2 space-y-1">
+                            <Label>Subtotal</Label>
                             <Input
-                              type="number"
-                              value={form.subtotal || ""}
+                              type="text"
+                              value={formatRupiah(form.subtotal)}
                               readOnly
-                              className="bg-gray-50"
+                              className="bg-gray-50 font-semibold"
                             />
                           </div>
                         </div>
@@ -1694,47 +1223,174 @@ export default function SalesOrderPage() {
                   </CardContent>
                 </Card>
 
-                {/* Document Upload Sections */}
+                {/* SIMPLE TAX CONFIGURATION */}
+                <div className="space-y-4">
+                  <div className="border-b pb-2">
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                      Konfigurasi Pajak
+                    </h3>
+                  </div>
+
+                  {/* Tax Toggle - Simple */}
+                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <Switch
+                        checked={taxConfig === 'excluded'}
+                        onCheckedChange={handleTaxConfigChange}
+                        className="data-[state=checked]:bg-green-600"
+                      />
+                      <div>
+                        <Label className="font-medium">Metode Perhitungan Pajak</Label>
+                        <p className="text-sm text-gray-600">
+                          {taxConfig === 'included' 
+                            ? 'Pajak sudah termasuk dalam harga' 
+                            : 'Pajak ditambahkan ke total'}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant={taxConfig === 'included' ? 'default' : 'secondary'}>
+                      {taxConfig === 'included' ? 'Tax Included' : 'Tax Excluded'}
+                    </Badge>
+                  </div>
+
+                  {/* SIMPLIFIED TAX SELECTION */}
+                  <div className="p-3 border rounded-lg">
+                    <div className="flex items-center justify-between mb-3">
+                      <Label className="font-medium">Pilih Pajak</Label>
+                      <Badge variant="outline" className="text-xs">
+                        {selectedTaxIds.length} dipilih
+                      </Badge>
+                    </div>
+                    
+                    {loadingTaxTypes ? (
+                      <div className="flex justify-center py-2">
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        <span>Memuat pajak...</span>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                        {taxTypes.map((tax) => (
+                          <div
+                            key={tax.id}
+                            className={`flex items-center p-2 border rounded cursor-pointer transition-colors ${
+                              selectedTaxIds.includes(tax.id)
+                                ? 'bg-blue-50 border-blue-200'
+                                : 'bg-white hover:bg-gray-50'
+                            }`}
+                            onClick={() => toggleTaxSelection(tax.id)}
+                          >
+                            <Checkbox
+                              checked={selectedTaxIds.includes(tax.id)}
+                              onCheckedChange={() => toggleTaxSelection(tax.id)}
+                              className="h-4 w-4 mr-2"
+                            />
+                            <div className="flex-1">
+                              <div className="text-sm font-medium">{tax.name}</div>
+                              <div className="text-xs text-gray-500 flex items-center gap-1">
+                                <Percent className="h-3 w-3" />
+                                {tax.tax_rate}%
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* SIMPLE SUMMARY CARD WITH TAX DETAILS */}
+                <Card className="border shadow-sm">
+                  <CardContent className="p-4">
+                    <div className="space-y-4">
+                      {/* Header */}
+                      <div className="flex items-center justify-between border-b pb-2">
+                        <h3 className="font-bold text-lg flex items-center gap-2">
+                          <Calculator className="h-5 w-5" />
+                          Ringkasan Order
+                        </h3>
+                        <Badge variant="outline" className="text-xs">
+                          Pajak: {taxConfig === 'included' ? 'Termasuk' : 'Ditambahkan'}
+                        </Badge>
+                      </div>
+
+                      {/* Summary Items */}
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center">
+                          <div className="flex items-center gap-2 text-gray-600">
+                            <Package2 className="h-4 w-4" />
+                            <span>Subtotal Items</span>
+                          </div>
+                          <span className="font-semibold">{formatRupiah(summary.subtotal)}</span>
+                        </div>
+
+
+                        {/* Tax Details */}
+                        {summary.taxDetails.length > 0 && (
+                          <div className="space-y-2">
+                            
+                            {/* Total Tax */}
+                        <div className="flex justify-between items-center">
+                          <div className="flex items-center gap-2 text-gray-600">
+                            <Percent className="h-4 w-4" />
+                            <span>Total Pajak</span>
+                          </div>
+                          <span className="font-semibold">{formatRupiah(summary.taxAmount)}</span>
+                        </div>
+                            <div className="pl-6 space-y-1">
+                              {summary.taxDetails.map((tax, index) => (
+                                <div key={index} className="flex justify-between items-center text-sm">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-gray-600">{tax.name}</span>
+                                    <Badge variant="outline" className="text-xs">
+                                      {tax.rate}%
+                                    </Badge>
+                                  </div>
+                                  <span className="text-red-600 font-medium">
+                                    {formatRupiah(tax.amount)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Grand Total */}
+                        <div className="border-t pt-3">
+                          <div className="flex justify-between items-center">
+                            <div className="font-bold text-lg">Grand Total</div>
+                            <div className="text-2xl font-bold text-blue-700">
+                              {formatRupiah(summary.grandTotal)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Document Upload */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Sales Order Document Upload */}
+                  {/* Sales Order Doc */}
                   <div className="space-y-3">
-                    <Label className="font-semibold flex items-center gap-1">
-                      Sales Order Document (From Client)
-                      <span className="text-red-500">*</span>
+                    <Label className="font-semibold">
+                      Dokumen Sales Order (Dari Klien) *
                     </Label>
                     <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
                       <div className="flex flex-col items-center gap-3">
                         <Upload className="h-8 w-8 text-gray-400" />
-                        
-                        {/* Error State */}
-                        {!salesOrderFileName && (
-                          <div className="text-sm text-red-500 text-center">
-                            Sales Order Document is required
-                          </div>
-                        )}
-                        
                         <Button
                           variant="outline"
                           onClick={() => handleFileUpload("sales_order")}
-                          className="cursor-pointer"
                         >
                           <Upload className="h-4 w-4 mr-2" />
-                          Upload Sales Order Document
+                          Upload Dokumen
                         </Button>
-
-                        {/* File Indicator */}
                         {salesOrderFileName && (
-                          <div className="text-center">
-                            <Badge
-                              variant="secondary"
-                              className="bg-green-100 text-green-800"
-                            >
-                              <FileText className="h-3 w-3 mr-1" />
-                              {salesOrderFileName}
-                            </Badge>
-                          </div>
+                          <Badge className="bg-green-100 text-green-800">
+                            <FileText className="h-3 w-3 mr-1" />
+                            {salesOrderFileName}
+                          </Badge>
                         )}
-
                         <input
                           ref={salesOrderFileRef}
                           type="file"
@@ -1742,100 +1398,82 @@ export default function SalesOrderPage() {
                           onChange={(e) => handleFileInputChange(e, "sales_order")}
                           accept=".pdf,.doc,.docx,.xls,.xlsx"
                         />
-                        <p className="text-xs text-gray-500 text-center">
-                          Only 1 file allowed • Max 10MB • PDF, Word, Excel only
-                        </p>
                       </div>
                     </div>
                   </div>
 
-                  {/* Other Documents Upload */}
+                  {/* Other Docs */}
                   <div className="space-y-3">
-                    <Label className="font-semibold">Other Documents</Label>
+                    <Label className="font-semibold">Dokumen Lainnya</Label>
                     <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
                       <div className="flex flex-col items-center gap-3">
                         <Upload className="h-8 w-8 text-gray-400" />
                         <Button
                           variant="outline"
                           onClick={() => handleFileUpload("other")}
-                          className="cursor-pointer"
                         >
                           <Upload className="h-4 w-4 mr-2" />
-                          Upload Other Documents
+                          Upload File
                         </Button>
-
-                        {/* FILE INDICATOR */}
                         {otherFileNames.length > 0 && (
                           <div className="text-center space-y-1">
-                            {otherFileNames.map((fileName, index) => (
-                              <Badge
-                                key={index}
-                                variant="secondary"
-                                className="bg-blue-100 text-blue-800 mr-1 mb-1"
-                              >
-                                <FileText className="h-3 w-3 mr-1" />
+                            {otherFileNames.map((fileName, idx) => (
+                              <Badge key={idx} className="bg-blue-100 text-blue-800 mr-1">
                                 {fileName}
                               </Badge>
                             ))}
                           </div>
                         )}
-
                         <input
                           ref={otherFilesRef}
                           type="file"
                           className="hidden"
-                          onChange={(e) => handleFileInputChange(e, "other")}
-                          accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
                           multiple
+                          onChange={(e) => handleFileInputChange(e, "other")}
                         />
-                        <p className="text-xs text-gray-500 text-center">
-                          Multiple files allowed
-                        </p>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Notes Section */}
+                {/* Notes */}
                 <div className="space-y-2">
-                  <Label htmlFor="notes">Notes</Label>
+                  <Label>Catatan</Label>
                   <textarea
-                    id="notes"
                     value={newSO.notes || ""}
                     onChange={(e) =>
                       setNewSO((prev) => ({ ...prev, notes: e.target.value }))
                     }
-                    placeholder="Additional notes..."
+                    placeholder="Catatan tambahan..."
                     rows={3}
                     className="w-full border rounded-md px-3 py-2"
                   />
                 </div>
 
-                {/* Submit Button */}
-                <div className="w-full">
-                  <Button
-                    onClick={submitSO}
-                    size="lg"
-                    className="w-full"
-                    disabled={submitting}
-                  >
-                    {submitting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Creating Sales Order...
-                      </>
-                    ) : (
-                      "Create Sales Order"
-                    )}
-                  </Button>
-                </div>
+                {/* Submit */}
+                <Button
+                  onClick={submitSO}
+                  size="lg"
+                  className="w-full"
+                  disabled={submitting}
+                >
+                  {submitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Membuat Sales Order...
+                    </>
+                  ) : (
+                    "Buat Sales Order"
+                  )}
+                </Button>
               </div>
             </CardContent>
           )}
         </Card>
+      </div>
 
-        {/* Detail Modal - Tetap sama seperti sebelumnya */}
-        <Dialog open={showDetailModal} onOpenChange={setShowDetailModal}>
+      {/* DETAIL MODAL */}
+      <Dialog open={showDetailModal} onOpenChange={setShowDetailModal}>
           <CustomDialogContent className="w-[95vw] max-w-5xl max-h-[95vh] overflow-y-auto p-0">
             {/* Header - dengan Accounting Status */}
             <DialogHeader className="bg-white sticky top-0 z-50 border-b shadow-sm">
@@ -1861,15 +1499,15 @@ export default function SalesOrderPage() {
                         {selectedSO?.status}
                       </Badge>
                       
-                      {/* Accounting Status di Header */}
-                      {selectedSO?.accounting_status && (
-                        <Badge 
-                          variant="outline" 
-                          className="text-xs capitalize border-gray-300"
-                        >
-                          Accounting: {selectedSO.accounting_status}
-                        </Badge>
-                      )}
+                        {/* Accounting Status di Header
+                        {selectedSO?.accounting_status && (
+                          <Badge 
+                            variant="outline" 
+                            className="text-xs capitalize border-gray-300"
+                          >
+                            Accounting: {selectedSO.accounting_status}
+                          </Badge>
+                        )} */}
                       
                       <span className="text-xs text-gray-500">
                         Created: {selectedSO && new Date(selectedSO.created_at).toLocaleDateString("id-ID")}
@@ -1891,13 +1529,13 @@ export default function SalesOrderPage() {
             {selectedSO && (
               <div className="space-y-4 p-4 bg-gray-50/50">
                 {/* Customer & Address */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="gap-4">
                   
                   {/* Customer Info */}
                   <Card className="border shadow-sm">
                     <CardHeader className="pb-3">
                       <CardTitle className="flex items-center gap-2 text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                        <Building className="h-4 w-4" />
+                        <Building className="h12 w-4" />
                         Customer Information
                       </CardTitle>
                     </CardHeader>
@@ -1966,7 +1604,18 @@ export default function SalesOrderPage() {
                           </div>
                         )}
                       </div>
-
+                    {/* Customer Type & Tax */}
+                      <div className="grid grid-cols-2 gap-3">
+                        {selectedSO.customer_type && (
+                          <div>
+                            <Label className="text-xs text-gray-500 font-medium">Alamat Pengiriman</Label>
+                            <Badge className="bg-blue-100 text-blue-700 text-xs px-2 py-1 mt-1">
+                              {selectedSO.shipping_address}
+                            </Badge>
+                          </div>
+                        )}
+                        
+                      </div>
                       {/* Sales Rep */}
                       {selectedSO.sales_rep && (
                         <div className="pt-2 border-t">
@@ -1994,38 +1643,10 @@ export default function SalesOrderPage() {
                       )}
                     </CardContent>
                   </Card>
-
-                  {/* Address Info */}
-                  <Card className="border shadow-sm">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="flex items-center gap-2 text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                        <MapPin className="h-4 w-4" />
-                        Address Information
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3 text-sm">
-                      <div>
-                        <Label className="text-xs text-gray-500 font-medium">Billing Address</Label>
-                        <div className="mt-1 p-2 bg-gray-50 rounded-md border">
-                          <p className="text-sm whitespace-pre-wrap">
-                            {selectedSO.billing_address || "No billing address provided"}
-                          </p>
-                        </div>
-                      </div>
-                      <div>
-                        <Label className="text-xs text-gray-500 font-medium">Shipping Address</Label>
-                        <div className="mt-1 p-2 bg-gray-50 rounded-md border">
-                          <p className="text-sm whitespace-pre-wrap">
-                            {selectedSO.shipping_address || "No shipping address provided"}
-                          </p>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
                 </div>
 
                 {/* Items & Summary */}
-                <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+                <div className="space-y-4 ">
                   {/* Items Table */}
                   <div className="xl:col-span-3">
                     <Card className="border shadow-sm">
@@ -2040,7 +1661,6 @@ export default function SalesOrderPage() {
                             <TableHeader className="bg-gray-50">
                               <TableRow>
                                 <TableHead className="w-[40%] text-xs font-medium text-gray-500 py-3">Product</TableHead>
-                                <TableHead className="w-[20%] text-xs font-medium text-gray-500 py-3">SKU</TableHead>
                                 <TableHead className="w-[10%] text-xs font-medium text-gray-500 py-3">Qty</TableHead>
                                 <TableHead className="w-[15%] text-xs font-medium text-gray-500 py-3">Unit Price</TableHead>
                                 <TableHead className="w-[15%] text-xs font-medium text-gray-500 py-3 text-right">Subtotal</TableHead>
@@ -2051,11 +1671,6 @@ export default function SalesOrderPage() {
                                 <TableRow key={item.so_item_code} className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}>
                                   <TableCell className="py-3">
                                     <p className="text-sm font-medium text-gray-900">{item.product_name}</p>
-                                  </TableCell>
-                                  <TableCell className="py-3">
-                                    <Badge variant="outline" className="text-xs font-mono">
-                                      {item.product_code}
-                                    </Badge>
                                   </TableCell>
                                   <TableCell className="py-3">
                                     <span className="text-sm font-medium">{item.quantity}</span>
@@ -2171,54 +1786,6 @@ export default function SalesOrderPage() {
           </CustomDialogContent>
         </Dialog>
 
-        {/* Add Customer Modal */}
-        <Dialog
-          open={showAddCustomerModal}
-          onOpenChange={setShowAddCustomerModal}
-        >
-          <DialogContent className="backdrop-blur-md bg-white/90">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <User className="h-5 w-5" />
-                Tambah Customer Baru
-              </DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <p className="text-sm text-gray-600">
-                Fitur tambah customer baru akan segera tersedia. Untuk
-                sementara, silakan input manual di form.
-              </p>
-              <Button onClick={() => setShowAddCustomerModal(false)}>
-                Tutup
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        {/* Add Product Modal */}
-        <Dialog
-          open={showAddProductModal}
-          onOpenChange={setShowAddProductModal}
-        >
-          <DialogContent className="backdrop-blur-md bg-white/90">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Package className="h-5 w-5" />
-                Tambah Product Baru
-              </DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <p className="text-sm text-gray-600">
-                Fitur tambah product baru akan segera tersedia. Untuk sementara,
-                silakan input manual di form items.
-              </p>
-              <Button onClick={() => setShowAddProductModal(false)}>
-                Tutup
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      </div>
     </div>
   );
 }

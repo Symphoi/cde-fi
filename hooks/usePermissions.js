@@ -1,6 +1,7 @@
 // hooks/usePermissions.js
 "use client";
 
+import { log } from 'console';
 import { useState, useEffect } from 'react';
 
 export function usePermissions() {
@@ -17,6 +18,7 @@ export function usePermissions() {
         const parsedUser = JSON.parse(userData);
         setUser(parsedUser);
         setPermissions(parsedUser.permissions || []);
+        console.log(parsedUser);
       } catch (error) {
         console.error('Error parsing user data:', error);
       }

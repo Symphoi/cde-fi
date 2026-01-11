@@ -347,6 +347,64 @@ async function getLogoBase64(logoPath) {
   }
 }
 
+// Helper function untuk save PO document
+async function savePODocument(file, poCode, notes = '', userCode, type = 'sales_order') {
+  try {
+    const timestamp = Date.now();
+    const originalName = file.name || `po_document_${timestamp}.pdf`;
+    const fileExtension = originalName.split('.').pop() || 'pdf';
+    const filename = `po_document_${timestamp}_${Math.random().toString(36).substr(2, 9)}.${fileExtension}`;
+    
+    // Save file ke public/uploads/po_documents
+    const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'po_documents');
+    await mkdir(uploadDir, { recursive: true });
+    
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
+    const filePath = path.join(uploadDir, filename);
+    await writeFile(filePath, buffer);
+
+    // Insert ke database po_documents table
+    const documentCode = `PODOC-${timestamp}`;
+    await query(
+      `INSERT INTO po_documents 
+       (document_code, po_code, name, type, filename, notes, uploaded_by, uploaded_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        documentCode,
+        poCode,
+        originalName,
+        type,
+        filename,
+        notes,
+        userCode
+      ]
+    );
+
+    // Audit log
+    await createAuditLog(
+      userCode,
+      userCode, // assuming userCode is also the name
+      'upload',
+      'po_document',
+      documentCode,
+      `Uploaded PO document: ${originalName}`
+    );
+
+    return {
+      document_code: documentCode,
+      name: originalName,
+      filename: filename,
+      type: type,
+      notes: notes,
+      uploaded_at: new Date().toISOString()
+    };
+  } catch (error) {
+    console.error('Save PO document error:', error);
+    throw error;
+  }
+}
+
 // ================================
 // PDF GENERATOR FOR PO (SAME TEMPLATE AS DO)
 // ================================
@@ -404,7 +462,7 @@ async function generatePOPDF(exportData, user) {
       return colors[status] || colors['default'];
     };
 
-    // HTML Content (template sama dengan DO)
+    // HTML Content
     const htmlContent = `
       <!DOCTYPE html>
       <html>
@@ -458,8 +516,6 @@ async function generatePOPDF(exportData, user) {
           .document-info { 
             text-align: center; 
             margin: 10px 0; 
-          }
-          .document-code { 
             font-size: 18px; 
             font-weight: bold; 
             color: #3498db; 
@@ -576,8 +632,8 @@ async function generatePOPDF(exportData, user) {
         </div>
         
         <!-- TITLE -->
-        <div class="title">PURCHASE ORDER ${purchase_order.po_code}</div>
-        
+        <div class="title">PURCHASE ORDER</div>
+        <div class="document-info">${purchase_order.po_code}</div>
         
         <!-- PO INFORMATION -->
         <div class="section">
@@ -591,15 +647,13 @@ async function generatePOPDF(exportData, user) {
             <div>
               <div class="value"><span class="label">Tanggal PO:</span> ${formatDate(purchase_order.date)}</div>
               <div class="value"><span class="label">Project:</span> ${purchase_order.project_code || "-"}</div>
-
               <div class="value"><span class="label">Supplier:</span> ${purchase_order.supplier_name}</div>
-              </div>
             </div>
           </div>
           
           ${purchase_order.notes ? `
-              <div class="notes-box">
-                <span class="label">Catatan:</span> ${purchase_order.notes}
+            <div class="notes-box">
+              <span class="label">Catatan:</span> ${purchase_order.notes}
             </div>
           ` : ""}
         </div>
@@ -663,7 +717,6 @@ async function generatePOPDF(exportData, user) {
                     <td>${payment.payment_method || "-"}</td>
                     <td>${payment.reference_number || "-"}</td>
                     <td class="amount">Rp ${formatCurrency(payment.amount)}</td>
-                
                   </tr>
                 `).join('')}
               </tbody>
@@ -676,7 +729,6 @@ async function generatePOPDF(exportData, user) {
                   <tr class="total-row" style="background-color: #fff3cd;">
                     <td colspan="5" class="text-right"><strong>SISA HUTANG:</strong></td>
                     <td class="amount"><strong>Rp ${formatCurrency(remainingBalance)}</strong></td>
-                    <td></td>
                   </tr>
                 ` : ''}
               </tfoot>
@@ -1052,7 +1104,7 @@ export async function GET(request) {
   }
 }
 
-// CREATE purchase order
+// CREATE purchase order dengan dukungan dokumen
 export async function POST(request) {
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
@@ -1065,9 +1117,10 @@ export async function POST(request) {
     const contentType = request.headers.get('content-type') || '';
 
     let poData;
-    let files = [];
+    let attachmentFile = null;
+    let attachmentNotes = '';
 
-    // CHECK JIKA INI FORM DATA (WITH FILES)
+    // CHECK JIKA INI FORM DATA (WITH ATTACHMENT FILE)
     if (contentType.includes('multipart/form-data')) {
       const formData = await request.formData();
       
@@ -1079,14 +1132,20 @@ export async function POST(request) {
       
       poData = JSON.parse(dataField);
       
-      // Get all files
-      const fileFields = formData.getAll('files');
-      files = fileFields.filter(file => {
-        return file && typeof file === 'object' && 'size' in file && file.size > 0;
-      });
+      // Get attachment file
+      const attachmentField = formData.get('attachment');
+      if (attachmentField && typeof attachmentField === 'object' && 'size' in attachmentField && attachmentField.size > 0) {
+        attachmentFile = attachmentField;
+      }
+      
+      // Get attachment notes
+      const notesField = formData.get('attachment_notes');
+      if (notesField) {
+        attachmentNotes = notesField;
+      }
       
     } else {
-      // HANDLE JSON REQUEST BIASA
+      // HANDLE JSON REQUEST BIASA (tanpa file)
       poData = await request.json();
     }
 
@@ -1100,7 +1159,6 @@ export async function POST(request) {
       notes = null,
       items = [],
       priority = '-',
-
       customer_ref = null
     } = poData;
 
@@ -1185,37 +1243,20 @@ export async function POST(request) {
       );
     }
 
-    // HANDLE FILE UPLOADS JIKA ADA
-    if (files.length > 0) {
-      for (let file of files) {
-        const timestamp = Date.now();
-        const originalName = file.name || `po_file_${timestamp}.pdf`;
-        const fileExtension = originalName.split('.').pop() || 'pdf';
-        const filename = `po_file_${timestamp}_${Math.random().toString(36).substr(2, 9)}.${fileExtension}`;
-        
-        // Save file ke public/uploads/po
-        const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'po');
-        await mkdir(uploadDir, { recursive: true });
-        
-        const bytes = await file.arrayBuffer();
-        const buffer = Buffer.from(bytes);
-        const filePath = path.join(uploadDir, filename);
-        await writeFile(filePath, buffer);
-
-        // Insert ke database (temporary, belum ada payment code)
-        const attachmentCode = `POATT-${timestamp}`;
-        await query(
-          `INSERT INTO purchase_order_attachments 
-           (payment_doc_code, payment_code, name, type, filename) 
-           VALUES (?, ?, ?, ?, ?)`,
-          [
-            attachmentCode,
-            'TEMP', // akan diupdate ketika payment dibuat
-            originalName,
-            'proof',
-            filename
-          ]
+    // HANDLE ATTACHMENT FILE UPLOAD JIKA ADA
+    let uploadedDocument = null;
+    if (attachmentFile) {
+      try {
+        uploadedDocument = await savePODocument(
+          attachmentFile, 
+          poCode, 
+          attachmentNotes, 
+          decoded.user_code,
+          'sales_order' // atau 'other' tergantung dari frontend
         );
+      } catch (error) {
+        console.error('Error uploading PO document:', error);
+        // Jangan gagalkan pembuatan PO jika hanya attachment yang gagal
       }
     }
 
@@ -1226,15 +1267,16 @@ export async function POST(request) {
       'create',
       'purchase_order',
       poCode,
-      'Created new purchase order'
+      `Created new purchase order${uploadedDocument ? ' with attachment' : ''}`
     );
 
     return Response.json({
       success: true,
-      message: `Purchase order created successfully${files.length > 0 ? ' with ' + files.length + ' files' : ''}`,
+      message: `Purchase order created successfully${attachmentFile ? ' with attachment document' : ''}`,
       po_code: poCode,
-      files_uploaded: files.length,
-      so_updated: existingPOs[0].po_count === 1
+      attachment_uploaded: !!attachmentFile,
+      so_updated: existingPOs[0].po_count === 1,
+      document_info: uploadedDocument
     });
 
   } catch (error) {
@@ -1385,7 +1427,7 @@ export async function PUT(request) {
       supplier_name,
       so_code = null,
       so_reference = null,
-      company_bank_code // NEW: Bank company yang dipilih
+      company_bank_code // Bank company yang dipilih
     } = paymentData;
 
     // Validasi required fields

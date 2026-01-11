@@ -169,6 +169,17 @@ async function GET_DETAIL(soCode) {
     );
     so.items = items;
 
+
+// Get Projects
+    const project = await query(
+      `SELECT 
+        name
+       FROM projects 
+       WHERE project_code = ? AND is_deleted = 0`,
+      [so.project_code]
+    );
+    so.project_code = project[0].name;
+    // so.project_code = project.toString;
     // Get taxes
     const taxes = await query(
       `SELECT 
@@ -180,6 +191,7 @@ async function GET_DETAIL(soCode) {
        WHERE so_code = ? AND is_deleted = FALSE`,
       [decodedSoCode]
     );
+    // console.log(decodedSoCode);
     so.taxes = taxes;
 
     // Get attachments
