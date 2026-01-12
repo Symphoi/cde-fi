@@ -91,7 +91,7 @@ const usePermissions = () => {
   return { permissions, userData, loading, hasPermission, hasAnyPermission };
 };
 
-// ======================== NAV ITEMS DENGAN PERMISSIONS ========================
+// ======================== NAV ITEMS DENGAN PERMISSIONS BARU ========================
 const getNavItems = (hasAnyPermissionFn: (permissions: string[]) => boolean) => {
   console.log('[SIDEBAR] getNavItems called');
   
@@ -100,102 +100,103 @@ const getNavItems = (hasAnyPermissionFn: (permissions: string[]) => boolean) => 
       icon: <LayoutDashboard className="w-5 h-5" />,
       name: "Dashboard",
       path: "/dashboard",
+      requiredPermissions: ["DASHBOARD_VIEW"],
     },
     {
       icon: <DollarSign className="w-5 h-5" />,
       name: "Transactions",
-      requiredPermissions: ["TRANS_VIEW"],
+      requiredPermissions: ["TRANSACTIONS_VIEW"],
       subItems: [
         {
           name: "Create Sales Order",
           path: "/salesorder",
-          requiredPermissions: ["SO_CREATE"]
+          requiredPermissions: ["SALES_ORDER_CREATE"]
         },
         {
           name: "Create Purchase Order",
           path: "/purchaseorder",
-          requiredPermissions: ["PO_CREATE"]
+          requiredPermissions: ["PURCHASE_ORDER_CREATE"]
         },
         {
           name: "Approval Purchase Order",
           path: "/approval-transactions",
-          requiredPermissions: ["PO_APPROV"]
+          requiredPermissions: ["PURCHASE_ORDER_APPROVE"]
         },
         {
           name: "Deliver to Client",
           path: "/deliver-to-client",
-          requiredPermissions: ["DO_CREATE"]
+          requiredPermissions: ["DELIVERY_ORDER_CREATE"]
         },
         {
           name: "Invoice & Payment",
           path: "/invoice-payment",
-          requiredPermissions: ["INV_CREATE"]
+          requiredPermissions: ["INVOICE_CREATE"]
         },
       ],
     },
     {
       icon: <Wallet className="w-5 h-5" />,
       name: "Cash Advance",
-      requiredPermissions: ["CA_VIEW"],
+      requiredPermissions: ["CASH_ADVANCE_VIEW"],
       subItems: [
         { 
           name: "Create CA",
           path: "/ca-create", 
-          requiredPermissions: ["CA_CREATE"]
+          requiredPermissions: ["CASH_ADVANCE_CREATE"]
         },
         { 
           name: "Create Transactions CA", 
           path: "/ca-transactions", 
-          requiredPermissions: ["CA_CREATE"]
+          requiredPermissions: ["CASH_ADVANCE_TRANSACTION_CREATE"]
         },
         { 
           name: "Approval CA", 
           path: "/ca-approval", 
-          requiredPermissions: ["CA_APPROVE_SPV"]
+          requiredPermissions: ["CASH_ADVANCE_APPROVE"]
         },
         { 
           name: "Refund CA", 
           path: "/ca-refund", 
-          requiredPermissions: ["CA_UPDATE"]
+          requiredPermissions: ["CASH_ADVANCE_REFUND"]
         },
       ],
     },
     {
       icon: <ScrollText className="w-5 h-5" />,
       name: "Reimbursement",
-      requiredPermissions: ["REIM_VIEW"],
+      requiredPermissions: ["REIMBURSEMENT_VIEW"],
       subItems: [
         { 
           name: "Create Reimburse", 
           path: "/reimburse-create", 
-          requiredPermissions: ["REIM_CREATE"]
+          requiredPermissions: ["REIMBURSEMENT_CREATE"]
         },
         { 
           name: "Approval Reimburse", 
           path: "/reimburse-approval", 
-          requiredPermissions: ["REIM_APPROVE"]
+          requiredPermissions: ["REIMBURSEMENT_APPROVE"]
         },
       ],
     },
     {
       icon: <Banknote className="w-5 h-5" />,
       name: "Accounting",
-      requiredPermissions: ["REP_VIEW"],
+      requiredPermissions: ["ACCOUNTING_REPORT_VIEW"],
       subItems: [
         { 
           name: "Kas & Bank", 
           path: "/kas-bank", 
-          requiredPermissions: ["REP_VIEW"]
+          requiredPermissions: ["CASH_BANK_REPORT_VIEW"]
         },
         { 
           name: "Bank Rekonsile", 
           path: "/bank-rekonsile", 
-          requiredPermissions: ["REP_VIEW"]
+          requiredPermissions: ["BANK_RECONCILIATION_VIEW"]
         },
         { 
           name: "Manual Journal", 
           path: "/manual-journal", 
-          requiredPermissions: ["REP_VIEW"]
+          requiredPermissions: ["MANUAL_JOURNAL_VIEW"]
         },
       ],
     },
@@ -205,107 +206,107 @@ const getNavItems = (hasAnyPermissionFn: (permissions: string[]) => boolean) => 
     {
       icon: <Building className="w-5 h-5" />,
       name: "Company Setup",
-      requiredPermissions: ["USER_VIEW"],
+      requiredPermissions: ["COMPANY_SETUP_VIEW"],
       subItems: [
         { 
           name: "Companies", 
           path: "/companies", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["COMPANY_VIEW"]
         },
       ],
     },
     {
       icon: <UserRound className="w-5 h-5" />,
       name: "Customers Setup",
-      requiredPermissions: ["USER_VIEW"],
+      requiredPermissions: ["CUSTOMER_SETUP_VIEW"],
       subItems: [
         { 
           name: "Customers", 
           path: "/customers", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["CUSTOMER_VIEW"]
         },
       ],
     },
     {
       icon: <UserPlus className="w-5 h-5" />,
       name: "Suppliers Setup",
-      requiredPermissions: ["USER_VIEW"],
+      requiredPermissions: ["SUPPLIER_SETUP_VIEW"],
       subItems: [
         { 
           name: "Suppliers", 
           path: "/suppliers", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["SUPPLIER_VIEW"]
         },
       ],
     },
     {
       icon: <Package className="w-5 h-5" />,
       name: "Products",
-      requiredPermissions: ["USER_VIEW"],
+      requiredPermissions: ["PRODUCT_SETUP_VIEW"],
       subItems: [
         { 
           name: "Products", 
           path: "/products", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["PRODUCT_VIEW"]
         },
         { 
           name: "Product Categories", 
           path: "/product-categories", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["PRODUCT_CATEGORY_VIEW"]
         },
       ],
     },
     {
       icon: <CreditCard className="w-5 h-5" />,
       name: "Accounting Setup",
-      requiredPermissions: ["USER_VIEW"],
+      requiredPermissions: ["ACCOUNTING_SETUP_VIEW"],
       subItems: [
         { 
           name: "Bank Account", 
           path: "/bank-accounts", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["BANK_ACCOUNT_VIEW"]
         },
         { 
           name: "Taxes", 
           path: "/taxes", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["TAX_VIEW"]
         },
         { 
           name: "Account", 
           path: "/chart-of-account", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["CHART_OF_ACCOUNT_VIEW"]
         },
         { 
           name: "Account Mapping", 
           path: "/accounting-rules", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["ACCOUNT_MAPPING_VIEW"]
         },
       ],
     },
     {
       icon: <Shield className="w-5 h-5" />,
       name: "System Settings",
-      requiredPermissions: ["USER_VIEW"],
+      requiredPermissions: ["SYSTEM_SETTINGS_VIEW"],
       subItems: [
         { 
           name: "RBAC", 
           path: "/rbac", 
-          requiredPermissions: ["ROLE_VIEW"]
+          requiredPermissions: ["ROLE_MANAGEMENT_VIEW"]
         },
         { 
           name: "Projects", 
           path: "/projects", 
-          requiredPermissions: ["PROJ_VIEW"]
+          requiredPermissions: ["PROJECT_VIEW"]
         },
         { 
           name: "Reimbursement Categories", 
           path: "/reimbursement-categories", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["REIMBURSEMENT_CATEGORY_VIEW"]
         },
         { 
           name: "Settings Format", 
           path: "/numbering-sequences", 
-          requiredPermissions: ["USER_VIEW"]
+          requiredPermissions: ["NUMBERING_SEQUENCE_VIEW"]
         },
       ],
     },
