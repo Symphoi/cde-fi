@@ -18,12 +18,17 @@ export async function GET(request) {
     // ✅ HANDLE SINGLE CA DETAIL
     if (ca_code) {
       const sql = `
-        SELECT ca_code, employee_name, department, purpose, total_amount, 
-               used_amount, remaining_amount, status, request_date, project_code,
-               approved_by_spv, approved_by_finance, approved_date_spv, approved_date_finance,
-               created_by, created_at
-        FROM cash_advances 
-        WHERE ca_code = ? AND created_by = ? AND is_deleted = 0
+        SELECT ca.ca_code, ca.employee_name, ca.purpose, ca.total_amount, 
+               ca.used_amount, ca.remaining_amount, ca.status, ca.request_date, 
+               ca.project_code,
+               p.name as project_name,  -- ✅ AMBIL NAMA PROJECT
+               ca.approved_by_spv, ca.approved_by_finance, ca.approved_date_spv, ca.approved_date_finance,
+               ca.created_at,
+               u.name as created_by
+        FROM cash_advances ca
+        LEFT JOIN users u ON ca.created_by = u.user_code
+        LEFT JOIN projects p ON ca.project_code = p.project_code  -- ✅ JOIN DENGAN PROJECTS
+        WHERE ca.ca_code = ? AND ca.created_by = ? AND ca.is_deleted = 0
       `;
       
       const result = await query(sql, [ca_code, decoded.user_code]);
@@ -55,52 +60,44 @@ export async function GET(request) {
       const projects = await query(
         "SELECT project_code, name FROM projects WHERE is_deleted = 0 AND status = 'active' ORDER BY name"
       );
-      
-      const users = await query(
-        "SELECT user_code, name FROM users WHERE is_deleted = 0 AND status = 'active' ORDER BY name"
-      );
-      
-      const departments = await query(
-        "SELECT DISTINCT department FROM users WHERE is_deleted = 0 AND status = 'active' ORDER BY department"
-      );
 
       return Response.json({
         success: true,
         data: { 
-          projects: projects || [],
-          users: users || [],
-          departments: departments.map(d => d.department).filter(Boolean) || [] 
+          projects: projects || []
         }
       });
     }
 
-    // Handle get cash advances list
+    // Handle get cash advances list - ✅ TAMBAH PROJECT NAME
     let sql = `
-      SELECT ca_code, employee_name, department, purpose, total_amount, 
-             used_amount, remaining_amount, status, request_date, project_code,
-             approved_by_spv, approved_by_finance, approved_date_spv, approved_date_finance
-      FROM cash_advances 
-      WHERE created_by = ? AND is_deleted = 0
+      SELECT ca.ca_code, ca.employee_name, ca.purpose, ca.total_amount, 
+             ca.used_amount, ca.remaining_amount, ca.status, ca.request_date, 
+             ca.project_code,
+             p.name as project_name  -- ✅ AMBIL NAMA PROJECT
+      FROM cash_advances ca
+      LEFT JOIN projects p ON ca.project_code = p.project_code  -- ✅ JOIN DENGAN PROJECTS
+      WHERE ca.created_by = ? AND ca.is_deleted = 0
     `;
     const params = [decoded.user_code];
 
     // Filter status
     if (status !== 'all') {
-      sql += ' AND status = ?';
+      sql += ' AND ca.status = ?';
       params.push(status);
     }
 
     // Search
     if (search) {
-      sql += ' AND (ca_code LIKE ? OR purpose LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`);
+      sql += ' AND (ca.ca_code LIKE ? OR ca.purpose LIKE ? OR ca.employee_name LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
-    sql += ' ORDER BY created_at DESC';
+    sql += ' ORDER BY ca.created_at DESC';
 
     const cashAdvances = await query(sql, params);
 
-    // ✅ UPDATED STATS - TAMBAH COMPLETED & REJECTED
+    // ✅ UPDATED STATS
     const statsResult = await query(`
       SELECT 
         COUNT(*) as total,
@@ -130,8 +127,7 @@ export async function GET(request) {
         totalAmount: stats.total_amount || 0
       },
       currentUser: {
-        name: decoded.name,
-        department: decoded.department
+        name: decoded.name
       }
     });
 
@@ -150,28 +146,16 @@ export async function POST(request) {
     if (!decoded) return Response.json({ error: 'Invalid token' }, { status: 401 });
 
     const body = await request.json();
-    const { purpose, total_amount, request_date, project_code, user_code } = body;
+    const { purpose, total_amount, request_date, project_code, employee_name } = body;
 
-    // Validasi
-    if (!purpose || !total_amount || !request_date || !user_code) {
-      return Response.json({ error: 'Purpose, amount, request date, dan user harus diisi' }, { status: 400 });
+    // ✅ VALIDATION
+    if (!purpose || !total_amount || !request_date || !employee_name) {
+      return Response.json({ error: 'Purpose, amount, request date, dan nama karyawan harus diisi' }, { status: 400 });
     }
 
     if (total_amount <= 0) {
       return Response.json({ error: 'Amount harus lebih dari 0' }, { status: 400 });
     }
-
-    // Cek user yang dipilih ada atau tidak
-    const userResult = await query(
-      'SELECT name, department FROM users WHERE user_code = ? AND is_deleted = 0 AND status = "active"',
-      [user_code]
-    );
-
-    if (userResult.length === 0) {
-      return Response.json({ error: 'User tidak ditemukan atau tidak aktif' }, { status: 400 });
-    }
-
-    const selectedUser = userResult[0];
 
     // Generate CA Code
     const countResult = await query(
@@ -179,24 +163,23 @@ export async function POST(request) {
     );
     const ca_code = `CA-${new Date().getFullYear()}-${String(countResult[0].count + 1).padStart(4, '0')}`;
 
-    // Insert cash advance
+    // ✅ HAPUS DEPARTMENT DARI INSERT
     const sql = `
       INSERT INTO cash_advances 
-      (ca_code, employee_name, department, purpose, total_amount, remaining_amount, request_date, project_code, created_by, assigned_to)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (ca_code, employee_name, department, purpose, total_amount, remaining_amount, request_date, project_code, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     await query(sql, [
       ca_code,
-      selectedUser.name,
-      selectedUser.department,
+      employee_name.trim(),
+      '-', // ✅ Tambah department dari user yang login
       purpose,
       total_amount,
-      total_amount, // remaining_amount awal sama dengan total_amount
+      total_amount,
       request_date,
-      project_code,
-      decoded.user_code,
-      user_code
+      project_code || null,
+      decoded.user_code
     ]);
 
     return Response.json({ 
@@ -227,7 +210,6 @@ export async function PATCH(request) {
     }
 
     if (action === 'submit') {
-      // Update status dari draft ke submitted
       await query(
         'UPDATE cash_advances SET status = ? WHERE ca_code = ? AND created_by = ? AND status = ?',
         ['submitted', ca_code, decoded.user_code, 'draft']

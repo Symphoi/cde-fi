@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Search, Plus, FileText, Calendar, User, DollarSign, ChevronLeft, ChevronRight, Eye, Loader2, Save, X, CheckCircle, XCircle, Users } from 'lucide-react'
+import { Search, Plus, FileText, Calendar, User, DollarSign, ChevronLeft, ChevronRight, Eye, Loader2, Save, X, CheckCircle, XCircle } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -14,7 +14,6 @@ import { format } from "date-fns"
 interface CashAdvance {
   ca_code: string
   employee_name: string
-  department: string
   purpose: string
   total_amount: number | string
   used_amount: number | string
@@ -22,6 +21,7 @@ interface CashAdvance {
   status: string
   request_date: string
   project_code?: string
+  project_name?: string
 }
 
 interface Transaction {
@@ -36,7 +36,6 @@ interface Transaction {
 interface CashAdvanceDetail {
   ca_code: string
   employee_name: string
-  department: string
   purpose: string
   total_amount: number | string
   used_amount: number | string
@@ -44,6 +43,7 @@ interface CashAdvanceDetail {
   status: string
   request_date: string
   project_code?: string
+  project_name?: string
   created_by: string
   created_at: string
   approved_by_spv?: string
@@ -54,20 +54,15 @@ interface CashAdvanceDetail {
 }
 
 interface CashAdvanceForm {
+  employee_name: string
   purpose: string
   total_amount: number
-  request_date: Date | undefined
+  request_date: Date
   project_code?: string
-  user_code: string
 }
 
 interface Project {
   project_code: string
-  name: string
-}
-
-interface User {
-  user_code: string
   name: string
 }
 
@@ -112,8 +107,7 @@ export default function CashAdvancePage() {
   const [loading, setLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState<string | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
-  const [users, setUsers] = useState<User[]>([])
-  const [currentUser, setCurrentUser] = useState({ name: '', department: '' })
+  const [currentUser, setCurrentUser] = useState({ name: '' })
   const [stats, setStats] = useState({ 
     pending: 0, 
     approved: 0, 
@@ -125,11 +119,11 @@ export default function CashAdvancePage() {
   
   // Form state dengan Date object untuk shadcn Calendar
   const [form, setForm] = useState<CashAdvanceForm>({
+    employee_name: '',
     purpose: '',
     total_amount: 0,
     request_date: new Date(),
-    project_code: '',
-    user_code: ''
+    project_code: ''
   })
 
   const itemsPerPage = 8
@@ -150,7 +144,6 @@ export default function CashAdvancePage() {
       const result = await response.json()
       if (result.success) {
         setProjects(result.data.projects || [])
-        setUsers(result.data.users || [])
       }
     } catch (error) {
       console.error('Error fetching dropdown data:', error)
@@ -185,7 +178,7 @@ export default function CashAdvancePage() {
           totalAmount: parseFloat(statsData.totalAmount) || 0
         })
         
-        setCurrentUser(result.currentUser || { name: '', department: '' })
+        setCurrentUser(result.currentUser || { name: '' })
       } else {
         throw new Error(result.error || 'Failed to fetch data')
       }
@@ -227,8 +220,18 @@ export default function CashAdvancePage() {
   }
 
   const handleCreateCA = async () => {
-    if (!form.user_code) {
-      alert('Pilih karyawan terlebih dahulu');
+    if (!form.employee_name) {
+      alert('Nama karyawan harus diisi');
+      return;
+    }
+
+    if (!form.purpose) {
+      alert('Purpose harus diisi');
+      return;
+    }
+
+    if (!form.total_amount || form.total_amount <= 0) {
+      alert('Amount harus lebih dari 0');
       return;
     }
 
@@ -242,7 +245,7 @@ export default function CashAdvancePage() {
       const token = localStorage.getItem('token')
       const submitData = {
         ...form,
-        request_date: format(form.request_date, 'yyyy-MM-dd') // Format untuk backend
+        request_date: format(form.request_date, 'yyyy-MM-dd')
       }
 
       const response = await fetch('/api/ca-create', {
@@ -258,11 +261,11 @@ export default function CashAdvancePage() {
       if (result.success) {
         alert('Cash Advance berhasil dibuat')
         setForm({
+          employee_name: '',
           purpose: '',
           total_amount: 0,
           request_date: new Date(),
-          project_code: '',
-          user_code: ''
+          project_code: ''
         })
         setActiveTab('history')
         fetchMyCashAdvances()
@@ -303,7 +306,9 @@ export default function CashAdvancePage() {
 
   const filteredCA = cashAdvances.filter(ca =>
     ca.ca_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    ca.purpose.toLowerCase().includes(searchTerm.toLowerCase())
+    ca.purpose.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    ca.employee_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (ca.project_name && ca.project_name.toLowerCase().includes(searchTerm.toLowerCase()))
   )
 
   const indexOfLastItem = currentPage * itemsPerPage
@@ -383,25 +388,19 @@ export default function CashAdvancePage() {
               <CardTitle>Buat Cash Advance Baru</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Form Pilih User */}
+              {/* Form Input Nama Karyawan */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-lg border">
                 <div>
-                  <label className="text-sm font-medium mb-2 block">Pilih Karyawan *</label>
-                  <select
-                    value={form.user_code}
-                    onChange={(e) => setForm(prev => ({ ...prev, user_code: e.target.value }))}
-                    className="w-full border rounded-md px-3 py-2 text-sm"
-                  >
-                    <option value="">-- Pilih Karyawan --</option>
-                    {users.map(user => (
-                      <option key={user.user_code} value={user.user_code}>
-                        {user.name}
-                      </option>
-                    ))}
-                  </select>
-                  {form.user_code && (
+                  <label className="text-sm font-medium mb-2 block">Nama Karyawan *</label>
+                  <Input
+                    placeholder="Masukkan nama karyawan"
+                    value={form.employee_name}
+                    onChange={(e) => setForm(prev => ({ ...prev, employee_name: e.target.value }))}
+                    className="w-full"
+                  />
+                  {form.employee_name && (
                     <p className="text-sm text-green-600 mt-2">
-                      Dipilih: {users.find(u => u.user_code === form.user_code)?.name}
+                      Dipilih: {form.employee_name}
                     </p>
                   )}
                 </div>
@@ -414,7 +413,7 @@ export default function CashAdvancePage() {
                     placeholder="Tujuan penggunaan cash advance"
                     value={form.purpose}
                     onChange={(e) => setForm(prev => ({ ...prev, purpose: e.target.value }))}
-                    disabled={!form.user_code}
+                    disabled={!form.employee_name}
                   />
                 </div>
                 <div>
@@ -424,7 +423,7 @@ export default function CashAdvancePage() {
                     placeholder="0"
                     value={form.total_amount}
                     onChange={(e) => setForm(prev => ({ ...prev, total_amount: Number(e.target.value) }))}
-                    disabled={!form.user_code}
+                    disabled={!form.employee_name}
                   />
                 </div>
               </div>
@@ -437,7 +436,7 @@ export default function CashAdvancePage() {
                       <Button
                         variant="outline"
                         className="w-full justify-start text-left font-normal"
-                        disabled={!form.user_code}
+                        disabled={!form.employee_name}
                       >
                         <Calendar className="mr-2 h-4 w-4" />
                         {form.request_date ? format(form.request_date, "PPP") : "Pilih tanggal"}
@@ -447,7 +446,11 @@ export default function CashAdvancePage() {
                       <CalendarComponent
                         mode="single"
                         selected={form.request_date}
-                        onSelect={(date) => setForm(prev => ({ ...prev, request_date: date }))}
+                        onSelect={(date) => {
+                          if (date) {
+                            setForm(prev => ({ ...prev, request_date: date }))
+                          }
+                        }}
                         initialFocus
                       />
                     </PopoverContent>
@@ -459,7 +462,7 @@ export default function CashAdvancePage() {
                     value={form.project_code}
                     onChange={(e) => setForm(prev => ({ ...prev, project_code: e.target.value }))}
                     className="w-full border rounded-md px-3 py-2 text-sm"
-                    disabled={!form.user_code}
+                    disabled={!form.employee_name}
                   >
                     <option value="">Pilih Project</option>
                     {projects.map(project => (
@@ -474,7 +477,7 @@ export default function CashAdvancePage() {
               <div className="flex gap-2 pt-4">
                 <Button 
                   onClick={handleCreateCA}
-                  disabled={loading || !form.user_code || !form.purpose || !form.total_amount || !form.request_date}
+                  disabled={loading || !form.employee_name || !form.purpose || !form.total_amount || !form.request_date}
                   className="bg-blue-600 hover:bg-blue-700"
                 >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
@@ -482,13 +485,15 @@ export default function CashAdvancePage() {
                 </Button>
                 <Button 
                   variant="outline"
-                  onClick={() => setForm({
-                    purpose: '',
-                    total_amount: 0,
-                    request_date: new Date(),
-                    project_code: '',
-                    user_code: ''
-                  })}
+                  onClick={() => {
+                    setForm({
+                      employee_name: '',
+                      purpose: '',
+                      total_amount: 0,
+                      request_date: new Date(),
+                      project_code: ''
+                    })
+                  }}
                 >
                   <X className="h-4 w-4 mr-2" />
                   Reset
@@ -581,7 +586,7 @@ export default function CashAdvancePage() {
                     <div className="relative flex-1">
                       <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                       <Input
-                        placeholder="Cari CA number atau purpose..."
+                        placeholder="Cari CA number, purpose, nama karyawan, atau project..."
                         value={searchTerm}
                         onChange={(e) => {
                           setSearchTerm(e.target.value)
@@ -653,10 +658,10 @@ export default function CashAdvancePage() {
                             </TableCell>
                             <TableCell className="max-w-[300px]">
                               <div className="font-medium">{ca.purpose}</div>
-                              <div className="text-sm text-gray-500">{ca.department}</div>
-                              {ca.project_code && (
+                              <div className="text-sm text-gray-500">{ca.employee_name}</div>
+                              {ca.project_name && (
                                 <div className="text-xs text-blue-600 mt-1">
-                                  Project: {ca.project_code}
+                                  Project: {ca.project_name} {ca.project_code && `(${ca.project_code})`}
                                 </div>
                               )}
                             </TableCell>
@@ -739,21 +744,23 @@ export default function CashAdvancePage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-4">
                       <div>
-                        <label className="text-sm font-medium text-gray-500">Purpose</label>
-                        <p className="font-semibold mt-1">{selectedCA.purpose}</p>
+                        <label className="text-sm font-medium text-gray-500">Nama Karyawan</label>
+                        <p className="font-semibold mt-1">{selectedCA.employee_name}</p>
                       </div>
                       <div>
-                        <label className="text-sm font-medium text-gray-500">Department</label>
-                        <p className="font-semibold mt-1">{selectedCA.department}</p>
+                        <label className="text-sm font-medium text-gray-500">Purpose</label>
+                        <p className="font-semibold mt-1">{selectedCA.purpose}</p>
                       </div>
                       <div>
                         <label className="text-sm font-medium text-gray-500">Request Date</label>
                         <p className="font-semibold mt-1">{formatDateDisplay(selectedCA.request_date)}</p>
                       </div>
-                      {selectedCA.project_code && (
+                      {selectedCA.project_name && (
                         <div>
                           <label className="text-sm font-medium text-gray-500">Project</label>
-                          <p className="font-semibold mt-1">{selectedCA.project_code}</p>
+                          <p className="font-semibold mt-1">
+                            {selectedCA.project_name} {selectedCA.project_code && `(${selectedCA.project_code})`}
+                          </p>
                         </div>
                       )}
                     </div>
