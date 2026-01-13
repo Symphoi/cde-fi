@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,17 +42,19 @@ import {
   Percent,
   Package2,
   MapPin,
+  Info,
 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
-// Type definitions
+// ===============================
+// TYPE DEFINITIONS
+// ===============================
 interface Customer {
   customer_code: string;
   customer_name: string;
@@ -86,7 +88,6 @@ interface SalesOrder {
   project_code?: string;
   total_amount: number;
   tax_amount: number;
-  shipping_cost: number;
   status: string;
   notes?: string;
   ar_code?: string;
@@ -103,7 +104,7 @@ interface SalesOrderItem {
   product_name: string;
   product_code: string;
   quantity: number;
-  unit_price: number;
+  unit_price: number; // DPP (harga sebelum pajak)
   subtotal: number;
 }
 
@@ -133,7 +134,7 @@ interface TaxType {
   tax_code: string;
   name: string;
   description?: string;
-  tax_rate: number;
+  tax_rate: number | string;
   tax_type: string;
   is_active: boolean;
 }
@@ -162,15 +163,14 @@ interface CreateSalesOrderRequest {
   project_code?: string;
   total_amount: number;
   tax_amount: number;
-  shipping_cost: number;
   notes?: string;
   tax_configuration: "excluded" | "included";
   items: {
     product_name: string;
     product_code: string;
     quantity: number;
-    unit_price: number;
-    subtotal: number;
+    unit_price: number; // DPP
+    subtotal: number; // DPP x quantity
   }[];
   taxes: {
     tax_code: string;
@@ -180,8 +180,13 @@ interface CreateSalesOrderRequest {
   }[];
 }
 
-// Format Rupiah function
-const formatRupiah = (amount: number) => {
+// ===============================
+// HELPER FUNCTIONS
+// ===============================
+const formatRupiah = (amount: number | undefined | null): string => {
+  if (amount === undefined || amount === null || isNaN(amount)) {
+    return "Rp 0";
+  }
   return new Intl.NumberFormat("id-ID", {
     style: "currency",
     currency: "IDR",
@@ -190,6 +195,20 @@ const formatRupiah = (amount: number) => {
   }).format(amount);
 };
 
+const parseTaxRate = (rate: number | string): number => {
+  if (typeof rate === 'number') return rate;
+  if (typeof rate === 'string') {
+    const cleaned = rate.toString().replace(/[^\d.,]/g, '');
+    const normalized = cleaned.replace(',', '.');
+    const parsed = parseFloat(normalized);
+    return isNaN(parsed) ? 0 : parsed;
+  }
+  return 0;
+};
+
+// ===============================
+// MAIN COMPONENT
+// ===============================
 export default function SalesOrderPage() {
   // Refs
   const salesOrderFileRef = useRef<HTMLInputElement>(null);
@@ -207,11 +226,11 @@ export default function SalesOrderPage() {
 
   // State untuk filter
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [itemsPerPage] = useState(10);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
-  // State untuk form SO baru
+  // State untuk form
   const [newSO, setNewSO] = useState<CreateSalesOrderRequest>({
     customer_name: "",
     customer_phone: "",
@@ -227,7 +246,6 @@ export default function SalesOrderPage() {
     project_code: "",
     total_amount: 0,
     tax_amount: 0,
-    shipping_cost: 0,
     notes: "",
     tax_configuration: "included",
     items: [],
@@ -237,14 +255,14 @@ export default function SalesOrderPage() {
   // State untuk tax configuration
   const [taxConfig, setTaxConfig] = useState<"included" | "excluded">("included");
 
-  // State untuk items
+  // State untuk items - HARGA SELALU DPP
   const [itemForms, setItemForms] = useState([
     {
       id: "1",
       product_name: "",
       product_code: "",
       quantity: 1,
-      unit_price: 0,
+      unit_price: 0, // Harga DPP (sebelum pajak)
       subtotal: 0,
     },
   ]);
@@ -259,127 +277,134 @@ export default function SalesOrderPage() {
   // State untuk selected taxes
   const [selectedTaxIds, setSelectedTaxIds] = useState<number[]>([]);
 
-  // State untuk summary values
-  const [summary, setSummary] = useState({
-    subtotal: 0,
-    taxAmount: 0,
-    grandTotal: 0,
-    taxDetails: [] as { name: string; rate: number; amount: number }[],
-  });
-
-  // State untuk loading
-  const [loadingTaxTypes, setLoadingTaxTypes] = useState(false);
-  const [loadingCustomers, setLoadingCustomers] = useState(false);
-  const [loadingProducts, setLoadingProducts] = useState(false);
-  const [loadingUsers, setLoadingUsers] = useState(false);
-
   // State untuk file names
   const [salesOrderFileName, setSalesOrderFileName] = useState("");
   const [otherFileNames, setOtherFileNames] = useState<string[]>([]);
 
   // ===============================
-  // 🧮 FUNGSI PERHITUNGAN PAJAK
+  // CALCULATIONS - HARGA SELALU DPP
   // ===============================
-
-  // Fungsi untuk menghitung semua nilai
-  const calculateAllValues = () => {
-    // 1. Hitung subtotal dari items
-    const subtotal = itemForms.reduce((sum, form) => {
-      const formSubtotal = form.quantity * form.unit_price;
-      return sum + (isNaN(formSubtotal) ? 0 : formSubtotal);
+  
+  // Hitung DPP total (harga sebelum pajak)
+  const dppTotal = useMemo(() => {
+    return itemForms.reduce((sum, form) => {
+      const itemTotal = form.quantity * form.unit_price; // unit_price = DPP
+      return sum + (isNaN(itemTotal) ? 0 : itemTotal);
     }, 0);
+  }, [itemForms]);
 
-    // 2. Hitung detail pajak yang dipilih
-    const taxDetails = selectedTaxIds.map(taxId => {
-      const taxType = taxTypes.find(t => t.id === taxId);
-      if (taxType) {
-        const taxAmount = (taxType.tax_rate * subtotal) / 100;
+  // Get selected taxes dengan rate dan name
+  const selectedTaxes = useMemo(() => {
+    return selectedTaxIds
+      .map((id) => {
+        const taxType = taxTypes.find((t) => t.id === id);
+        if (!taxType) return null;
+        
+        const taxRate = parseTaxRate(taxType.tax_rate);
+        
         return {
-          name: taxType.name,
-          rate: taxType.tax_rate,
-          amount: taxAmount
+          id: taxType.id,
+          rate: taxRate,
+          name: taxType.name
         };
-      }
-      return { name: "", rate: 0, amount: 0 };
-    }).filter(tax => tax.name); // Hapus yang kosong
+      })
+      .filter(Boolean) as { id: number; rate: number; name: string }[];
+  }, [selectedTaxIds, taxTypes]);
 
-    // 3. Hitung total tax amount
-    const taxAmount = taxDetails.reduce((sum, tax) => sum + tax.amount, 0);
+  // Hitung total tax rate
+  const totalTaxRate = useMemo(() => {
+    return selectedTaxes.reduce((sum, tax) => sum + tax.rate, 0);
+  }, [selectedTaxes]);
 
-    // 4. Hitung grand total
-    const grandTotal = taxConfig === 'excluded' 
-      ? subtotal + taxAmount 
-      : subtotal; // Tax sudah termasuk
+  // Validasi tax rate tidak lebih dari 100%
+  const isTaxRateValid = useMemo(() => {
+    return totalTaxRate <= 100;
+  }, [totalTaxRate]);
 
-    return { subtotal, taxAmount, grandTotal, taxDetails };
-  };
-
-  // Fungsi untuk update semua perhitungan
-  const updateAllCalculations = () => {
-    const calculations = calculateAllValues();
-    
-    // Update summary state
-    setSummary(calculations);
-
-    // Update subtotal untuk item forms
-    const updatedItemForms = itemForms.map(form => ({
-      ...form,
-      subtotal: form.quantity * form.unit_price
-    }));
-    
-    if (JSON.stringify(updatedItemForms) !== JSON.stringify(itemForms)) {
-      setItemForms(updatedItemForms);
+  // Hitung semua tax details - BERDASARKAN DPP
+  const taxCalculation = useMemo(() => {
+    if (!isTaxRateValid || selectedTaxes.length === 0) {
+      return {
+        taxAmount: 0,
+        grandTotal: dppTotal,
+        taxDetails: [],
+      };
     }
 
-    // Update newSO dengan hasil kalkulasi
-    const updatedTaxes = selectedTaxIds.map(taxId => {
-      const taxType = taxTypes.find(t => t.id === taxId);
-      const taxAmount = taxType ? (taxType.tax_rate * calculations.subtotal) / 100 : 0;
-      return {
-        tax_code: taxType?.tax_code || "",
-        tax_name: taxType?.name || "",
-        tax_rate: taxType?.tax_rate || 0,
-        tax_amount: taxAmount
-      };
+    // Selalu hitung pajak dari DPP
+    let taxAmount = 0;
+    const taxDetails: { name: string; rate: number; amount: number }[] = [];
+
+    selectedTaxes.forEach((tax) => {
+      const amount = (dppTotal * tax.rate) / 100;
+      taxDetails.push({
+        name: tax.name,
+        rate: tax.rate,
+        amount: amount,
+      });
+      taxAmount += amount;
     });
 
-    setNewSO(prev => ({
-      ...prev,
-      total_amount: calculations.grandTotal,
-      tax_amount: calculations.taxAmount,
-      tax_configuration: taxConfig,
-      items: updatedItemForms.map(form => ({
-        product_name: form.product_name,
-        product_code: form.product_code,
-        quantity: form.quantity,
-        unit_price: form.unit_price,
-        subtotal: form.subtotal
-      })),
-      taxes: updatedTaxes
-    }));
-  };
-
-  // Effect untuk auto-update semua perhitungan
-  useEffect(() => {
-    updateAllCalculations();
-  }, [itemForms, selectedTaxIds, taxConfig, taxTypes]);
-
-  // ===============================
-  // 📞 API CALLS
-  // ===============================
-
-
-  const downloadAttachment = async (attachment: Attachment) => {
-    try {
-      window.open(`/api/attachments/${attachment.id}`, "_blank");
-    } catch (error) {
-      toast.error("Failed to download file");
+    // TAX INCLUDED vs EXCLUDED
+    if (taxConfig === "excluded") {
+      // Pajak ditambahkan ke DPP
+      return {
+        taxAmount,
+        grandTotal: dppTotal + taxAmount, // DPP + Pajak
+        taxDetails,
+      };
+    } else {
+      // Pajak sudah termasuk, tapi kita tetap hitung dari DPP
+      // Untuk tax included, DPP + Pajak = Total yang ditampilkan
+      return {
+        taxAmount,
+        grandTotal: dppTotal + taxAmount, // DPP + Pajak
+        taxDetails,
+      };
     }
-  };
-  // Fetch tax types
+  }, [dppTotal, taxConfig, selectedTaxes, isTaxRateValid]);
+
+  // Update item forms dengan subtotal
+  const itemFormsWithSubtotal = useMemo(() => {
+    return itemForms.map((form) => ({
+      ...form,
+      subtotal: form.quantity * form.unit_price,
+    }));
+  }, [itemForms]);
+
+  // Update newSO saat ada perubahan
+  useEffect(() => {
+    const updatedItems = itemFormsWithSubtotal.map((form) => ({
+      product_name: form.product_name,
+      product_code: form.product_code,
+      quantity: form.quantity,
+      unit_price: form.unit_price, // DPP
+      subtotal: form.subtotal, // DPP x quantity
+    }));
+
+    const updatedTaxes = taxCalculation.taxDetails.map((tax) => ({
+      tax_code:
+        taxTypes.find((t) => t.name === tax.name)?.tax_code || "",
+      tax_name: tax.name,
+      tax_rate: tax.rate,
+      tax_amount: tax.amount,
+    }));
+
+    setNewSO((prev) => ({
+      ...prev,
+      total_amount: taxCalculation.grandTotal,
+      tax_amount: taxCalculation.taxAmount,
+      tax_configuration: taxConfig,
+      items: updatedItems,
+      taxes: updatedTaxes,
+    }));
+  }, [itemFormsWithSubtotal, taxCalculation, taxConfig, taxTypes]);
+
+  // ===============================
+  // API CALLS
+  // ===============================
   const fetchTaxTypes = async () => {
     try {
-      setLoadingTaxTypes(true);
       const token = localStorage.getItem("token");
       const response = await fetch("/api/sales-orders?action=get-tax-types", {
         headers: {
@@ -392,7 +417,6 @@ export default function SalesOrderPage() {
         const data = await response.json();
         if (data.success) {
           setTaxTypes(data.data);
-          // Auto-select aktif taxes
           const activeTaxIds = data.data
             .filter((tax: TaxType) => tax.is_active)
             .map((tax: TaxType) => tax.id);
@@ -402,12 +426,9 @@ export default function SalesOrderPage() {
     } catch (error) {
       console.error("Error fetching tax types:", error);
       toast.error("❌ Gagal memuat jenis pajak");
-    } finally {
-      setLoadingTaxTypes(false);
     }
   };
 
-  // Fetch sales orders
   const fetchSalesOrders = async () => {
     try {
       setLoading(true);
@@ -453,10 +474,8 @@ export default function SalesOrderPage() {
     }
   };
 
-  // Fetch customers
   const fetchCustomers = async () => {
     try {
-      setLoadingCustomers(true);
       const token = localStorage.getItem("token");
       const response = await fetch("/api/customers", {
         headers: {
@@ -471,15 +490,11 @@ export default function SalesOrderPage() {
       }
     } catch (error) {
       console.error("Error fetching customers:", error);
-    } finally {
-      setLoadingCustomers(false);
     }
   };
 
-  // Fetch products
   const fetchProducts = async () => {
     try {
-      setLoadingProducts(true);
       const token = localStorage.getItem("token");
       const response = await fetch("/api/products", {
         headers: {
@@ -494,12 +509,9 @@ export default function SalesOrderPage() {
       }
     } catch (error) {
       console.error("Error fetching products:", error);
-    } finally {
-      setLoadingProducts(false);
     }
   };
 
-  // Fetch projects
   const fetchProjects = async () => {
     try {
       const token = localStorage.getItem("token");
@@ -519,10 +531,8 @@ export default function SalesOrderPage() {
     }
   };
 
-  // Fetch users
   const fetchUsers = async () => {
     try {
-      setLoadingUsers(true);
       const token = localStorage.getItem("token");
       const response = await fetch("/api/sales-orders?action=get-users", {
         headers: {
@@ -538,8 +548,14 @@ export default function SalesOrderPage() {
     } catch (error) {
       console.error("Error fetching users:", error);
       toast.error("❌ Gagal memuat pengguna");
-    } finally {
-      setLoadingUsers(false);
+    }
+  };
+
+  const downloadAttachment = async (attachment: Attachment) => {
+    try {
+      window.open(`/api/attachments/${attachment.id}`, "_blank");
+    } catch (error) {
+      toast.error("Failed to download file");
     }
   };
 
@@ -551,13 +567,16 @@ export default function SalesOrderPage() {
     fetchProjects();
     fetchTaxTypes();
     fetchUsers();
-  }, [currentPage, itemsPerPage, statusFilter, searchTerm]);
+  }, []);
+
+  // Effect untuk filter dan pagination
+  useEffect(() => {
+    fetchSalesOrders();
+  }, [currentPage, statusFilter, searchTerm]);
 
   // ===============================
-  // 🎛️ HANDLERS
+  // HANDLERS
   // ===============================
-
-  // Update item form dengan auto-update
   const updateItemForm = (
     id: string,
     field: keyof (typeof itemForms)[0],
@@ -567,9 +586,13 @@ export default function SalesOrderPage() {
       prev.map((form) => {
         if (form.id === id) {
           const updatedForm = { ...form, [field]: value };
-          if (field === "quantity" || field === "unit_price") {
-            updatedForm.subtotal = Number(updatedForm.quantity) * Number(updatedForm.unit_price);
+          
+          if (field === 'quantity' || field === 'unit_price') {
+            const quantity = field === 'quantity' ? Number(value) : updatedForm.quantity;
+            const unitPrice = field === 'unit_price' ? Number(value) : updatedForm.unit_price;
+            updatedForm.subtotal = quantity * unitPrice;
           }
+          
           return updatedForm;
         }
         return form;
@@ -577,7 +600,6 @@ export default function SalesOrderPage() {
     );
   };
 
-  // Add/remove item form dengan auto-update
   const addItemForm = () => {
     const newId = (itemForms.length + 1).toString();
     setItemForms((prev) => [
@@ -599,23 +621,20 @@ export default function SalesOrderPage() {
     }
   };
 
-  // Tax selection handler dengan auto-update
   const toggleTaxSelection = (taxId: number) => {
-    setSelectedTaxIds(prev => {
+    setSelectedTaxIds((prev) => {
       if (prev.includes(taxId)) {
-        return prev.filter(id => id !== taxId);
+        return prev.filter((id) => id !== taxId);
       } else {
         return [...prev, taxId];
       }
     });
   };
 
-  // Handle tax configuration change
   const handleTaxConfigChange = (value: boolean) => {
     setTaxConfig(value ? "excluded" : "included");
   };
 
-  // Handle customer selection
   const handleCustomerSelect = (customerCode: string) => {
     const customer = customers.find((c) => c.customer_code === customerCode);
     if (customer) {
@@ -632,19 +651,17 @@ export default function SalesOrderPage() {
     }
   };
 
-  // Handle product selection
   const handleProductSelect = (itemId: string, productCode: string) => {
     const product = products.find((p) => p.product_code === productCode);
     if (product) {
       updateItemForm(itemId, "product_name", product.product_name);
       updateItemForm(itemId, "product_code", product.product_code);
       if (product.unit_price && product.unit_price > 0) {
-        updateItemForm(itemId, "unit_price", product.unit_price);
+        updateItemForm(itemId, "unit_price", product.unit_price); // Ini DPP
       }
     }
   };
 
-  // Handle sales rep selection
   const handleSalesRepSelect = (userCode: string) => {
     const selectedUser = users.find((user) => user.user_code === userCode);
     if (selectedUser) {
@@ -657,15 +674,13 @@ export default function SalesOrderPage() {
     }
   };
 
-  // Handle shipping address change
   const handleShippingAddressChange = (value: string) => {
-    setNewSO(prev => ({
+    setNewSO((prev) => ({
       ...prev,
-      shipping_address: value
+      shipping_address: value,
     }));
   };
 
-  // File handlers
   const handleFileUpload = (type: "sales_order" | "other") => {
     if (type === "sales_order") {
       salesOrderFileRef.current?.click();
@@ -689,19 +704,26 @@ export default function SalesOrderPage() {
     }
   };
 
-  // Form validation
   const validateForm = () => {
     const errors: string[] = [];
 
     if (!newSO.customer_name.trim()) errors.push("Nama customer wajib diisi");
     if (!newSO.customer_phone.trim()) errors.push("Nomor telepon customer wajib diisi");
-    
+
     const validItems = itemForms.filter(
-      (form) => form.product_name && form.product_code && form.quantity > 0 && form.unit_price > 0
+      (form) =>
+        form.product_name &&
+        form.product_code &&
+        form.quantity > 0 &&
+        form.unit_price > 0
     );
 
     if (validItems.length === 0) {
       errors.push("Minimal satu item produk wajib diisi");
+    }
+
+    if (!isTaxRateValid) {
+      errors.push("Total tax rate tidak boleh lebih dari 100%");
     }
 
     if (!salesOrderFileName) {
@@ -711,7 +733,6 @@ export default function SalesOrderPage() {
     return errors;
   };
 
-  // Submit SO
   const submitSO = async () => {
     const errors = validateForm();
     if (errors.length > 0) {
@@ -719,17 +740,20 @@ export default function SalesOrderPage() {
       return;
     }
 
-    // Prepare items data
     const itemsData = itemForms
       .filter(
-        (form) => form.product_name && form.product_code && form.quantity > 0 && form.unit_price > 0
+        (form) =>
+          form.product_name &&
+          form.product_code &&
+          form.quantity > 0 &&
+          form.unit_price > 0
       )
       .map((form) => ({
         product_name: form.product_name,
         product_code: form.product_code,
         quantity: form.quantity,
-        unit_price: form.unit_price,
-        subtotal: form.subtotal,
+        unit_price: form.unit_price, // DPP
+        subtotal: form.quantity * form.unit_price, // DPP x quantity
       }));
 
     try {
@@ -742,15 +766,22 @@ export default function SalesOrderPage() {
         return;
       }
 
-      // Prepare form data
       const formData = new FormData();
       const requestData: CreateSalesOrderRequest = {
         ...newSO,
         project_code: newSO.project_code || undefined,
         items: itemsData,
-        tax_amount: summary.taxAmount,
-        shipping_cost: 0,
-        total_amount: summary.grandTotal,
+        taxes: taxCalculation.taxDetails.map((tax) => {
+          const taxType = taxTypes.find((t) => t.name === tax.name);
+          return {
+            tax_code: taxType?.tax_code || "",
+            tax_name: tax.name,
+            tax_rate: tax.rate,
+            tax_amount: tax.amount,
+          };
+        }),
+        tax_amount: taxCalculation.taxAmount,
+        total_amount: taxCalculation.grandTotal,
         tax_configuration: taxConfig,
       };
 
@@ -766,7 +797,6 @@ export default function SalesOrderPage() {
         }
       }
 
-      // Submit
       const response = await fetch("/api/sales-orders", {
         method: "POST",
         headers: {
@@ -787,6 +817,7 @@ export default function SalesOrderPage() {
           customer_email: "",
           customer_code: "",
           customer_type: "company",
+          sales_rep_code: "",
           billing_address: "",
           shipping_address: "",
           sales_rep: "",
@@ -795,33 +826,27 @@ export default function SalesOrderPage() {
           project_code: "",
           total_amount: 0,
           tax_amount: 0,
-          shipping_cost: 0,
           notes: "",
           tax_configuration: "included",
           items: [],
           taxes: [],
         });
-        setItemForms([{
-          id: "1",
-          product_name: "",
-          product_code: "",
-          quantity: 1,
-          unit_price: 0,
-          subtotal: 0,
-        }]);
+        setItemForms([
+          {
+            id: "1",
+            product_name: "",
+            product_code: "",
+            quantity: 1,
+            unit_price: 0,
+            subtotal: 0,
+          },
+        ]);
         setTaxConfig("included");
         setSelectedTaxIds([]);
-        setSummary({
-          subtotal: 0,
-          taxAmount: 0,
-          grandTotal: 0,
-          taxDetails: [],
-        });
         setShowCreateForm(false);
         setSalesOrderFileName("");
         setOtherFileNames([]);
 
-        // Refresh list
         fetchSalesOrders();
       } else {
         throw new Error(result.error || "Gagal membuat sales order");
@@ -834,7 +859,6 @@ export default function SalesOrderPage() {
     }
   };
 
-  // View detail
   const viewDetail = async (soCode: string) => {
     try {
       const token = localStorage.getItem("token");
@@ -862,13 +886,11 @@ export default function SalesOrderPage() {
   };
 
   // ===============================
-  // 🎨 RENDER
+  // RENDER
   // ===============================
-
   return (
     <div className="min-h-screen bg-gray-50/30">
       <div className="max-w-[99vw] mx-auto p-4 space-y-6">
-        
         {/* Header */}
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900">Sales Order</h1>
@@ -885,7 +907,6 @@ export default function SalesOrderPage() {
               </CardTitle>
 
               <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto">
-                {/* Search */}
                 <div className="relative flex-1 sm:flex-none">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                   <Input
@@ -899,7 +920,6 @@ export default function SalesOrderPage() {
                   />
                 </div>
 
-                {/* Status Filter */}
                 <select
                   value={statusFilter}
                   onChange={(e) => {
@@ -915,7 +935,6 @@ export default function SalesOrderPage() {
                   <option value="cancelled">Cancelled</option>
                 </select>
 
-                {/* Create Button */}
                 <Button
                   onClick={() => setShowCreateForm(true)}
                   className="whitespace-nowrap"
@@ -952,17 +971,25 @@ export default function SalesOrderPage() {
                         <TableCell className="font-medium">
                           {(currentPage - 1) * itemsPerPage + index + 1}
                         </TableCell>
-                        <TableCell className="font-medium">{so.so_code}</TableCell>
+                        <TableCell className="font-medium">
+                          {so.so_code}
+                        </TableCell>
                         <TableCell>
-                          {new Date(so.created_at).toLocaleDateString('id-ID')}
+                          {new Date(so.created_at).toLocaleDateString("id-ID")}
                         </TableCell>
                         <TableCell>{so.customer_name}</TableCell>
                         <TableCell>
-                          <Badge variant={
-                            so.status === 'completed' ? 'default' :
-                            so.status === 'processing' ? 'secondary' :
-                            so.status === 'cancelled' ? 'destructive' : 'outline'
-                          }>
+                          <Badge
+                            variant={
+                              so.status === "completed"
+                                ? "default"
+                                : so.status === "processing"
+                                ? "secondary"
+                                : so.status === "cancelled"
+                                ? "destructive"
+                                : "outline"
+                            }
+                          >
                             {so.status}
                           </Badge>
                         </TableCell>
@@ -984,29 +1011,39 @@ export default function SalesOrderPage() {
                   </TableBody>
                 </Table>
 
-                {/* Pagination */}
                 <div className="flex items-center justify-between mt-4">
                   <div className="text-sm text-gray-600">
-                    Menampilkan {(currentPage - 1) * itemsPerPage + 1} sampai {Math.min(currentPage * itemsPerPage, salesOrders.length)} dari {salesOrders.length} data
+                    Menampilkan {(currentPage - 1) * itemsPerPage + 1} sampai{" "}
+                    {Math.min(
+                      currentPage * itemsPerPage,
+                      salesOrders.length
+                    )}{" "}
+                    dari {salesOrders.length} data
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                      onClick={() =>
+                        setCurrentPage((prev) => Math.max(prev - 1, 1))
+                      }
                       disabled={currentPage === 1}
                     >
                       <ChevronLeft className="h-4 w-4" />
                       Sebelumnya
                     </Button>
                     <span className="text-sm">
-                      Halaman {currentPage} dari {Math.ceil(salesOrders.length / itemsPerPage)}
+                      Halaman {currentPage} dari{" "}
+                      {Math.ceil(salesOrders.length / itemsPerPage)}
                     </span>
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setCurrentPage(prev => prev + 1)}
-                      disabled={currentPage >= Math.ceil(salesOrders.length / itemsPerPage)}
+                      onClick={() => setCurrentPage((prev) => prev + 1)}
+                      disabled={
+                        currentPage >=
+                        Math.ceil(salesOrders.length / itemsPerPage)
+                      }
                     >
                       Berikutnya
                       <ChevronRight className="h-4 w-4" />
@@ -1042,7 +1079,6 @@ export default function SalesOrderPage() {
               <div className="space-y-6">
                 {/* Basic Info */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Customer */}
                   <div className="space-y-2 md:col-span-2">
                     <Label>Pilih Customer *</Label>
                     <select
@@ -1062,11 +1098,13 @@ export default function SalesOrderPage() {
                     </select>
                   </div>
 
-                  {/* Sales Rep */}
                   <div className="space-y-2">
                     <Label>Sales Representative</Label>
                     <select
-                      value={users.find((user) => user.name === newSO.sales_rep)?.user_code || ""}
+                      value={
+                        users.find((user) => user.name === newSO.sales_rep)
+                          ?.user_code || ""
+                      }
                       onChange={(e) => handleSalesRepSelect(e.target.value)}
                       className="w-full border rounded-md px-3 py-2"
                     >
@@ -1079,7 +1117,6 @@ export default function SalesOrderPage() {
                     </select>
                   </div>
 
-                  {/* Project */}
                   <div className="space-y-2">
                     <Label>Proyek</Label>
                     <select
@@ -1094,14 +1131,16 @@ export default function SalesOrderPage() {
                     >
                       <option value="">Pilih Proyek</option>
                       {projects.map((project) => (
-                        <option key={project.project_code} value={project.project_code}>
+                        <option
+                          key={project.project_code}
+                          value={project.project_code}
+                        >
                           {project.name}
                         </option>
                       ))}
                     </select>
                   </div>
 
-                  {/* SO Document */}
                   <div className="space-y-2">
                     <Label>No SO (Dari Klien)</Label>
                     <Input
@@ -1116,7 +1155,6 @@ export default function SalesOrderPage() {
                     />
                   </div>
 
-                  {/* Shipping Address */}
                   <div className="space-y-2 md:col-span-2">
                     <Label className="flex items-center gap-2">
                       <MapPin className="h-4 w-4" />
@@ -1124,7 +1162,9 @@ export default function SalesOrderPage() {
                     </Label>
                     <textarea
                       value={newSO.shipping_address || ""}
-                      onChange={(e) => handleShippingAddressChange(e.target.value)}
+                      onChange={(e) =>
+                        handleShippingAddressChange(e.target.value)
+                      }
                       placeholder="Masukkan alamat pengiriman..."
                       rows={3}
                       className="w-full border rounded-md px-3 py-2"
@@ -1132,11 +1172,11 @@ export default function SalesOrderPage() {
                   </div>
                 </div>
 
-                {/* Product Items */}
+                {/* Product Items - HARGA DPP */}
                 <Card>
                   <CardHeader>
                     <div className="flex items-center justify-between">
-                      <CardTitle>Produk Items</CardTitle>
+                      <CardTitle>Produk Items (Harga DPP)</CardTitle>
                       <Button onClick={addItemForm} variant="outline" size="sm">
                         <Plus className="h-4 w-4 mr-2" />
                         Tambah Item
@@ -1145,7 +1185,7 @@ export default function SalesOrderPage() {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
-                      {itemForms.map((form, index) => (
+                      {itemFormsWithSubtotal.map((form, index) => (
                         <div
                           key={form.id}
                           className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 p-4 border rounded-lg relative"
@@ -1189,27 +1229,35 @@ export default function SalesOrderPage() {
                               min="1"
                               value={form.quantity || ""}
                               onChange={(e) =>
-                                updateItemForm(form.id, "quantity", parseInt(e.target.value) || 0)
+                                updateItemForm(
+                                  form.id,
+                                  "quantity",
+                                  parseInt(e.target.value) || 0
+                                )
                               }
                               placeholder="Qty"
                             />
                           </div>
 
                           <div className="space-y-1">
-                            <Label>Harga Satuan *</Label>
+                            <Label>Harga DPP *</Label>
                             <Input
                               type="number"
                               min="0"
                               value={form.unit_price || ""}
                               onChange={(e) =>
-                                updateItemForm(form.id, "unit_price", parseInt(e.target.value) || 0)
+                                updateItemForm(
+                                  form.id,
+                                  "unit_price",
+                                  parseInt(e.target.value) || 0
+                                )
                               }
-                              placeholder="Harga"
+                              placeholder="Harga DPP"
                             />
                           </div>
 
                           <div className="md:col-span-2 space-y-1">
-                            <Label>Subtotal</Label>
+                            <Label>Subtotal DPP</Label>
                             <Input
                               type="text"
                               value={formatRupiah(form.subtotal)}
@@ -1223,144 +1271,320 @@ export default function SalesOrderPage() {
                   </CardContent>
                 </Card>
 
-                {/* SIMPLE TAX CONFIGURATION */}
+                {/* Tax Configuration */}
                 <div className="space-y-4">
                   <div className="border-b pb-2">
                     <h3 className="text-lg font-semibold flex items-center gap-2">
+                      <Percent className="h-5 w-5" />
                       Konfigurasi Pajak
                     </h3>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Pilih metode perhitungan pajak sesuai dengan dokumen customer
+                    </p>
                   </div>
 
-                  {/* Tax Toggle - Simple */}
-                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <Switch
-                        checked={taxConfig === 'excluded'}
-                        onCheckedChange={handleTaxConfigChange}
-                        className="data-[state=checked]:bg-green-600"
-                      />
-                      <div>
-                        <Label className="font-medium">Metode Perhitungan Pajak</Label>
-                        <p className="text-sm text-gray-600">
-                          {taxConfig === 'included' 
-                            ? 'Pajak sudah termasuk dalam harga' 
-                            : 'Pajak ditambahkan ke total'}
-                        </p>
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-start gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <Switch
+                            checked={taxConfig === "excluded"}
+                            onCheckedChange={handleTaxConfigChange}
+                            className="data-[state=checked]:bg-green-600"
+                          />
+                          <Label className="text-base font-semibold">
+                            {taxConfig === "included"
+                              ? "Pajak Sudah Termasuk"
+                              : "Pajak Ditambahkan"}
+                          </Label>
+                        </div>
+
+                        <div className="space-y-2 ml-10">
+                          {taxConfig === "included" ? (
+                            <div className="text-sm bg-green-50 p-3 rounded border border-green-100">
+                              <div className="flex items-start gap-2">
+                                <Info className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                                <div>
+                                  <p className="font-medium text-green-800">
+                                    Pajak Sudah Termasuk dalam Harga
+                                  </p>
+                                  <p className="text-gray-700 mt-1">
+                                    Total yang ditampilkan sudah termasuk pajak.
+                                    Pajak dihitung dari DPP.
+                                  </p>
+                                  <p className="text-sm text-gray-600 mt-2">
+                                    💡 Cocok untuk: Quotation yang sudah menyertakan
+                                    PPN dalam harga
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-sm bg-blue-50 p-3 rounded border border-blue-100">
+                              <div className="flex items-start gap-2">
+                                <Info className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                                <div>
+                                  <p className="font-medium text-blue-800">
+                                    Pajak Ditambahkan ke Total
+                                  </p>
+                                  <p className="text-gray-700 mt-1">
+                                    Pajak ditambahkan ke DPP. DPP dan pajak akan
+                                    ditampilkan terpisah.
+                                  </p>
+                                  <p className="text-sm text-gray-600 mt-2">
+                                    💡 Cocok untuk: Invoice yang memisahkan harga
+                                    barang dan PPN
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                    <Badge variant={taxConfig === 'included' ? 'default' : 'secondary'}>
-                      {taxConfig === 'included' ? 'Tax Included' : 'Tax Excluded'}
-                    </Badge>
-                  </div>
 
-                  {/* SIMPLIFIED TAX SELECTION */}
-                  <div className="p-3 border rounded-lg">
-                    <div className="flex items-center justify-between mb-3">
-                      <Label className="font-medium">Pilih Pajak</Label>
-                      <Badge variant="outline" className="text-xs">
-                        {selectedTaxIds.length} dipilih
+                      <Badge
+                        className={`text-sm px-3 py-1 ${
+                          taxConfig === "included"
+                            ? "bg-green-100 text-green-800 hover:bg-green-100"
+                            : "bg-blue-100 text-blue-800 hover:bg-blue-100"
+                        }`}
+                      >
+                        {taxConfig === "included" ? "Tax Included" : "Tax Excluded"}
                       </Badge>
                     </div>
-                    
-                    {loadingTaxTypes ? (
-                      <div className="flex justify-center py-2">
-                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                        <span>Memuat pajak...</span>
+                  </div>
+
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm font-medium">
+                        Pilih Jenis Pajak
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {taxTypes.length === 0 ? (
+                        <div className="flex justify-center py-4">
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                          <span>Memuat data pajak...</span>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                          {taxTypes.map((tax) => {
+                            const taxRate = parseTaxRate(tax.tax_rate);
+                            return (
+                              <div
+                                key={tax.id}
+                                className={`flex items-center p-3 border rounded-lg cursor-pointer transition-all ${
+                                  selectedTaxIds.includes(tax.id)
+                                    ? "bg-blue-50 border-blue-300 shadow-sm"
+                                    : "bg-white hover:bg-gray-50 border-gray-200"
+                                }`}
+                                onClick={() => toggleTaxSelection(tax.id)}
+                              >
+                                <Checkbox
+                                  checked={selectedTaxIds.includes(tax.id)}
+                                  onCheckedChange={() => toggleTaxSelection(tax.id)}
+                                  className="h-4 w-4 mr-3"
+                                />
+                                <div className="flex-1">
+                                  <div className="font-medium">{tax.name}</div>
+                                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                                    <Percent className="h-3 w-3" />
+                                    <span>{taxRate}%</span>
+                                    <span className="text-xs px-2 py-0.5 bg-gray-100 rounded">
+                                      {tax.tax_type}
+                                    </span>
+                                  </div>
+                                  {tax.description && (
+                                    <p className="text-xs text-gray-500 mt-1">
+                                      {tax.description}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {selectedTaxIds.length > 0 && (
+                        <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="font-medium">Total Tax Rate:</span>
+                            <Badge variant="outline">{totalTaxRate.toFixed(2)}%</Badge>
+                            <span className="text-gray-600 ml-2">
+                              ({selectedTaxIds.length} pajak dipilih)
+                            </span>
+                          </div>
+                          {!isTaxRateValid && (
+                            <div className="mt-2 text-sm text-red-600">
+                              ⚠️ Total tax rate tidak boleh lebih dari 100%
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Summary Card */}
+                <Card className="border-2 border-blue-100 bg-white shadow-lg">
+                  <CardContent className="p-6">
+                    <div className="space-y-6">
+                      <div className="flex items-center justify-between border-b pb-4">
+                        <div>
+                          <h3 className="font-bold text-xl flex items-center gap-3 text-gray-900">
+                            <Calculator className="h-6 w-6 text-blue-600" />
+                            Ringkasan Order
+                          </h3>
+                          <div className="flex items-center gap-2 mt-2">
+                            <Badge
+                              variant={
+                                taxConfig === "included" ? "default" : "secondary"
+                              }
+                              className="text-sm"
+                            >
+                              {taxConfig === "included"
+                                ? "Pajak Sudah Termasuk"
+                                : "Pajak Ditambahkan"}
+                            </Badge>
+                            {selectedTaxIds.length > 0 && (
+                              <span className="text-sm text-gray-600">
+                                ({selectedTaxIds.length} jenis pajak)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs text-gray-500">
+                            Total yang akan dibayar:
+                          </div>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                        {taxTypes.map((tax) => (
-                          <div
-                            key={tax.id}
-                            className={`flex items-center p-2 border rounded cursor-pointer transition-colors ${
-                              selectedTaxIds.includes(tax.id)
-                                ? 'bg-blue-50 border-blue-200'
-                                : 'bg-white hover:bg-gray-50'
-                            }`}
-                            onClick={() => toggleTaxSelection(tax.id)}
-                          >
-                            <Checkbox
-                              checked={selectedTaxIds.includes(tax.id)}
-                              onCheckedChange={() => toggleTaxSelection(tax.id)}
-                              className="h-4 w-4 mr-2"
-                            />
-                            <div className="flex-1">
-                              <div className="text-sm font-medium">{tax.name}</div>
-                              <div className="text-xs text-gray-500 flex items-center gap-1">
-                                <Percent className="h-3 w-3" />
-                                {tax.tax_rate}%
+
+                      <div className="space-y-4">
+                        {/* DPP Total */}
+                        <div className="flex justify-between items-center py-3 border-b">
+                          <div>
+                            <div className="font-medium text-gray-900">DPP Total</div>
+                            <div className="text-sm text-gray-600 mt-1">
+                              Harga sebelum pajak
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-xl font-semibold text-gray-900">
+                              {formatRupiah(dppTotal)}
+                            </div>
+                            <div className="text-sm text-gray-600 mt-1">
+                              {itemForms.length} item
+                              {itemForms.length > 1 ? "s" : ""}
+                            </div>
+                          </div>
+                        </div>
+
+                        {selectedTaxIds.length > 0 &&
+                          taxCalculation.taxAmount > 0 && (
+                            <div className="py-3">
+                              <div className="flex justify-between items-center mb-2">
+                                <div>
+                                  <div className="font-medium text-gray-900">
+                                    Pajak
+                                  </div>
+                                  <div className="text-sm text-gray-600 mt-1">
+                                    {taxConfig === "included"
+                                      ? "Pajak yang sudah termasuk"
+                                      : "Pajak yang ditambahkan"}
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div
+                                    className={`text-lg font-semibold ${
+                                      taxConfig === "excluded"
+                                        ? "text-red-600"
+                                        : "text-gray-700"
+                                    }`}
+                                  >
+                                    {formatRupiah(taxCalculation.taxAmount)}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {taxCalculation.taxDetails.length > 0 && (
+                                <div className="mt-3 bg-gray-50 rounded-lg p-3">
+                                  <div className="text-sm font-medium text-gray-700 mb-2">
+                                    Detail Pajak:
+                                  </div>
+                                  <div className="space-y-2">
+                                    {taxCalculation.taxDetails.map((tax, index) => (
+                                      <div
+                                        key={index}
+                                        className="flex justify-between items-center text-sm"
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-gray-600">
+                                            {tax.name}
+                                          </span>
+                                          <Badge variant="outline" className="text-xs">
+                                            {tax.rate}%
+                                          </Badge>
+                                        </div>
+                                        <span className="text-gray-700">
+                                          {formatRupiah(tax.amount)}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                        <div className="pt-4">
+                          <div className="flex justify-between items-center bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-xl">
+                            <div>
+                              <div className="font-bold text-lg text-gray-900">
+                                Grand Total
+                              </div>
+                              <div className="text-sm text-gray-700 mt-1">
+                                {taxConfig === "included"
+                                  ? "DPP + Pajak (sudah termasuk)"
+                                  : "DPP + Pajak"}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-3xl font-bold text-blue-700">
+                                {formatRupiah(taxCalculation.grandTotal)}
+                              </div>
+                              <div className="text-sm text-blue-600 mt-1">
+                                {taxConfig === "included"
+                                  ? "✓ Pajak sudah termasuk"
+                                  : "✓ Pajak sudah ditambahkan"}
                               </div>
                             </div>
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
 
-                {/* SIMPLE SUMMARY CARD WITH TAX DETAILS */}
-                <Card className="border shadow-sm">
-                  <CardContent className="p-4">
-                    <div className="space-y-4">
-                      {/* Header */}
-                      <div className="flex items-center justify-between border-b pb-2">
-                        <h3 className="font-bold text-lg flex items-center gap-2">
-                          <Calculator className="h-5 w-5" />
-                          Ringkasan Order
-                        </h3>
-                        <Badge variant="outline" className="text-xs">
-                          Pajak: {taxConfig === 'included' ? 'Termasuk' : 'Ditambahkan'}
-                        </Badge>
-                      </div>
-
-                      {/* Summary Items */}
-                      <div className="space-y-3">
-                        <div className="flex justify-between items-center">
-                          <div className="flex items-center gap-2 text-gray-600">
-                            <Package2 className="h-4 w-4" />
-                            <span>Subtotal Items</span>
-                          </div>
-                          <span className="font-semibold">{formatRupiah(summary.subtotal)}</span>
-                        </div>
-
-
-                        {/* Tax Details */}
-                        {summary.taxDetails.length > 0 && (
-                          <div className="space-y-2">
-                            
-                            {/* Total Tax */}
-                        <div className="flex justify-between items-center">
-                          <div className="flex items-center gap-2 text-gray-600">
-                            <Percent className="h-4 w-4" />
-                            <span>Total Pajak</span>
-                          </div>
-                          <span className="font-semibold">{formatRupiah(summary.taxAmount)}</span>
-                        </div>
-                            <div className="pl-6 space-y-1">
-                              {summary.taxDetails.map((tax, index) => (
-                                <div key={index} className="flex justify-between items-center text-sm">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-gray-600">{tax.name}</span>
-                                    <Badge variant="outline" className="text-xs">
-                                      {tax.rate}%
-                                    </Badge>
-                                  </div>
-                                  <span className="text-red-600 font-medium">
-                                    {formatRupiah(tax.amount)}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Grand Total */}
-                        <div className="border-t pt-3">
-                          <div className="flex justify-between items-center">
-                            <div className="font-bold text-lg">Grand Total</div>
-                            <div className="text-2xl font-bold text-blue-700">
-                              {formatRupiah(summary.grandTotal)}
-                            </div>
+                          <div className="mt-3 text-sm text-gray-600">
+                            {taxConfig === "included" ? (
+                              <div className="flex items-start gap-2 bg-green-50 p-2 rounded">
+                                <Info className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                                <span>
+                                  Customer akan melihat total:{" "}
+                                  <strong>
+                                    {formatRupiah(taxCalculation.grandTotal)}
+                                  </strong>{" "}
+                                  (sudah termasuk pajak)
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex items-start gap-2 bg-blue-50 p-2 rounded">
+                                <Info className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                                <span>
+                                  Customer akan melihat: DPP{" "}
+                                  {formatRupiah(dppTotal)} + Pajak{" "}
+                                  {formatRupiah(taxCalculation.taxAmount)} = Total{" "}
+                                  {formatRupiah(taxCalculation.grandTotal)}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1370,7 +1594,6 @@ export default function SalesOrderPage() {
 
                 {/* Document Upload */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Sales Order Doc */}
                   <div className="space-y-3">
                     <Label className="font-semibold">
                       Dokumen Sales Order (Dari Klien) *
@@ -1402,7 +1625,6 @@ export default function SalesOrderPage() {
                     </div>
                   </div>
 
-                  {/* Other Docs */}
                   <div className="space-y-3">
                     <Label className="font-semibold">Dokumen Lainnya</Label>
                     <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
@@ -1418,7 +1640,10 @@ export default function SalesOrderPage() {
                         {otherFileNames.length > 0 && (
                           <div className="text-center space-y-1">
                             {otherFileNames.map((fileName, idx) => (
-                              <Badge key={idx} className="bg-blue-100 text-blue-800 mr-1">
+                              <Badge
+                                key={idx}
+                                className="bg-blue-100 text-blue-800 mr-1"
+                              >
                                 {fileName}
                               </Badge>
                             ))}
@@ -1454,8 +1679,8 @@ export default function SalesOrderPage() {
                 <Button
                   onClick={submitSO}
                   size="lg"
-                  className="w-full"
-                  disabled={submitting}
+                  className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800"
+                  disabled={submitting || !isTaxRateValid}
                 >
                   {submitting ? (
                     <>
@@ -1463,7 +1688,10 @@ export default function SalesOrderPage() {
                       Membuat Sales Order...
                     </>
                   ) : (
-                    "Buat Sales Order"
+                    <>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Buat Sales Order
+                    </>
                   )}
                 </Button>
               </div>
@@ -1472,274 +1700,326 @@ export default function SalesOrderPage() {
         </Card>
       </div>
 
-      {/* DETAIL MODAL */}
+      {/* Detail Modal */}
       <Dialog open={showDetailModal} onOpenChange={setShowDetailModal}>
-          <CustomDialogContent className="w-[95vw] max-w-5xl max-h-[95vh] overflow-y-auto p-0">
-            {/* Header - dengan Accounting Status */}
-            <DialogHeader className="bg-white sticky top-0 z-50 border-b shadow-sm">
-              <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <DialogTitle className="flex items-center gap-2 text-xl font-semibold text-gray-900">
-                      <FileText className="h-6 w-6 text-blue-600" />
-                      Sales Order - {selectedSO?.so_code}
-                    </DialogTitle>
-                    <div className="flex items-center gap-3 mt-2">
-                      <Badge
-                        className={`text-xs px-2 py-1 rounded-md ${
-                          selectedSO?.status === "completed"
-                            ? "bg-green-100 text-green-700 border-green-200"
-                            : selectedSO?.status === "processing"
-                            ? "bg-yellow-100 text-yellow-700 border-yellow-200"
-                            : selectedSO?.status === "cancelled"
-                            ? "bg-red-100 text-red-700 border-red-200"
-                            : "bg-blue-100 text-blue-700 border-blue-200"
-                        }`}
-                      >
-                        {selectedSO?.status}
-                      </Badge>
-                      
-                        {/* Accounting Status di Header
-                        {selectedSO?.accounting_status && (
-                          <Badge 
-                            variant="outline" 
-                            className="text-xs capitalize border-gray-300"
-                          >
-                            Accounting: {selectedSO.accounting_status}
-                          </Badge>
-                        )} */}
-                      
-                      <span className="text-xs text-gray-500">
-                        Created: {selectedSO && new Date(selectedSO.created_at).toLocaleDateString("id-ID")}
-                      </span>
+        <CustomDialogContent className="w-[95vw] max-w-5xl max-h-[95vh] overflow-y-auto p-0">
+          <DialogHeader className="bg-white sticky top-0 z-50 border-b shadow-sm">
+            <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50">
+              <div className="flex justify-between items-start">
+                <div>
+                  <DialogTitle className="flex items-center gap-2 text-xl font-semibold text-gray-900">
+                    <FileText className="h-6 w-6 text-blue-600" />
+                    Sales Order - {selectedSO?.so_code}
+                  </DialogTitle>
+                  <div className="flex items-center gap-3 mt-2">
+                    <Badge
+                      className={`text-xs px-2 py-1 rounded-md ${
+                        selectedSO?.status === "completed"
+                          ? "bg-green-100 text-green-700 border-green-200"
+                          : selectedSO?.status === "processing"
+                          ? "bg-yellow-100 text-yellow-700 border-yellow-200"
+                          : selectedSO?.status === "cancelled"
+                          ? "bg-red-100 text-red-700 border-red-200"
+                          : "bg-blue-100 text-blue-700 border-blue-200"
+                      }`}
+                    >
+                      {selectedSO?.status}
+                    </Badge>
+
+                    <span className="text-xs text-gray-500">
+                      Created:{" "}
+                      {selectedSO &&
+                        new Date(selectedSO.created_at).toLocaleDateString("id-ID")}
+                    </span>
+                  </div>
+                </div>
+
+                {selectedSO?.ar_code && (
+                  <div className="text-right">
+                    <Label className="text-xs text-gray-500 font-medium">
+                      AR Code
+                    </Label>
+                    <p className="text-sm font-semibold text-gray-900">
+                      {selectedSO.ar_code}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </DialogHeader>
+
+          {selectedSO && (
+            <div className="space-y-4 p-4 bg-gray-50/50">
+              {/* Customer & Address */}
+              <Card className="border shadow-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                    <Building className="h-4 w-4" />
+                    Customer Information
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-gray-500 font-medium">
+                        Customer Name
+                      </Label>
+                      <p className="text-sm font-semibold mt-1">
+                        {selectedSO.customer_name}
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-gray-500 font-medium">
+                        Phone
+                      </Label>
+                      <p className="text-sm mt-1">{selectedSO.customer_phone}</p>
                     </div>
                   </div>
-                  
-                  {/* AR Code di sebelah kanan */}
-                  {selectedSO?.ar_code && (
-                    <div className="text-right">
-                      <Label className="text-xs text-gray-500 font-medium">AR Code</Label>
-                      <p className="text-sm font-semibold text-gray-900">{selectedSO.ar_code}</p>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-gray-500 font-medium">
+                        Sales Order Doc
+                      </Label>
+                      <p className="text-sm mt-1">
+                        {selectedSO.sales_order_doc || "-"}
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-gray-500 font-medium">
+                        Project Code
+                      </Label>
+                      <p className="text-sm mt-1">
+                        {selectedSO.project_code || "-"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs text-gray-500 font-medium flex items-center gap-2">
+                        <Mail className="h-3 w-3 text-blue-500" />
+                        Email
+                      </Label>
+                      <p className="text-sm mt-1">{selectedSO.customer_email}</p>
+                    </div>
+                    <div>
+                      <Label className="text-xs text-gray-500 font-medium flex items-center gap-2">
+                        <Phone className="h-3 w-3 text-blue-500" />
+                        Phone
+                      </Label>
+                      <p className="text-sm mt-1">{selectedSO.customer_phone}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {selectedSO.customer_type && (
+                      <div>
+                        <Label className="text-xs text-gray-500 font-medium">
+                          Customer Type
+                        </Label>
+                        <Badge className="bg-blue-100 text-blue-700 text-xs px-2 py-1 mt-1">
+                          {selectedSO.customer_type}
+                        </Badge>
+                      </div>
+                    )}
+                    {selectedSO.tax_configuration && (
+                      <div>
+                        <Label className="text-xs text-gray-500 font-medium">
+                          Tax Configuration
+                        </Label>
+                        <Badge
+                          className={
+                            selectedSO.tax_configuration === "included"
+                              ? "bg-green-100 text-green-700 text-xs px-2 py-1 mt-1"
+                              : "bg-orange-100 text-orange-700 text-xs px-2 py-1 mt-1"
+                          }
+                        >
+                          {selectedSO.tax_configuration === "included"
+                            ? "Tax Included"
+                            : "Tax Excluded"}
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedSO.shipping_address && (
+                    <div>
+                      <Label className="text-xs text-gray-500 font-medium">
+                        Alamat Pengiriman
+                      </Label>
+                      <p className="text-sm mt-1 bg-blue-50 p-2 rounded-md">
+                        {selectedSO.shipping_address}
+                      </p>
                     </div>
                   )}
-                </div>
-              </div>
-            </DialogHeader>
 
-            {selectedSO && (
-              <div className="space-y-4 p-4 bg-gray-50/50">
-                {/* Customer & Address */}
-                <div className="gap-4">
-                  
-                  {/* Customer Info */}
-                  <Card className="border shadow-sm">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="flex items-center gap-2 text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                        <Building className="h12 w-4" />
-                        Customer Information
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3 text-sm">
-                      <div className="grid grid-cols-2 gap-3">
+                  {selectedSO.sales_rep && (
+                    <div className="pt-2 border-t">
+                      <Label className="text-xs text-gray-500 font-medium">
+                        Sales Representative
+                      </Label>
+                      <div className="flex items-center gap-2 mt-1 p-2 bg-blue-50 rounded-md">
+                        <User className="h-4 w-4 text-blue-600" />
                         <div>
-                          <Label className="text-xs text-gray-500 font-medium">Customer Name</Label>
-                          <p className="text-sm font-semibold mt-1">{selectedSO.customer_name}</p>
-                        </div>
-                        <div>
-                          <Label className="text-xs text-gray-500 font-medium">Phone</Label>
-                          <p className="text-sm mt-1">{selectedSO.customer_phone}</p>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <Label className="text-xs text-gray-500 font-medium">Sales Order Doc</Label>
-                          <p className="text-sm mt-1">{selectedSO.sales_order_doc || "-"}</p>
-                        </div>
-                        <div>
-                          <Label className="text-xs text-gray-500 font-medium">Project Code</Label>
-                          <p className="text-sm mt-1">{selectedSO.project_code || "-"}</p>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <Label className="text-xs text-gray-500 font-medium flex items-center gap-2">
-                            <Mail className="h-3 w-3 text-blue-500" />
-                            Email
-                          </Label>
-                          <p className="text-sm mt-1">{selectedSO.customer_email}</p>
-                        </div>
-                        <div>
-                          <Label className="text-xs text-gray-500 font-medium flex items-center gap-2">
-                            <Phone className="h-3 w-3 text-blue-500" />
-                            Phone
-                          </Label>
-                          <p className="text-sm mt-1">{selectedSO.customer_phone}</p>
-                        </div>
-                      </div>
-
-                      {/* Customer Type & Tax */}
-                      <div className="grid grid-cols-2 gap-3">
-                        {selectedSO.customer_type && (
-                          <div>
-                            <Label className="text-xs text-gray-500 font-medium">Customer Type</Label>
-                            <Badge className="bg-blue-100 text-blue-700 text-xs px-2 py-1 mt-1">
-                              {selectedSO.customer_type}
-                            </Badge>
-                          </div>
-                        )}
-                        {selectedSO.tax_configuration && (
-                          <div>
-                            <Label className="text-xs text-gray-500 font-medium">Tax Configuration</Label>
-                            <Badge
-                              className={
-                                selectedSO.tax_configuration === "included"
-                                  ? "bg-green-100 text-green-700 text-xs px-2 py-1 mt-1"
-                                  : "bg-orange-100 text-orange-700 text-xs px-2 py-1 mt-1"
-                              }
-                            >
-                              {selectedSO.tax_configuration === "included" ? "Tax Included" : "Tax Excluded"}
-                            </Badge>
-                          </div>
-                        )}
-                      </div>
-                    {/* Customer Type & Tax */}
-                      <div className="grid grid-cols-2 gap-3">
-                        {selectedSO.customer_type && (
-                          <div>
-                            <Label className="text-xs text-gray-500 font-medium">Alamat Pengiriman</Label>
-                            <Badge className="bg-blue-100 text-blue-700 text-xs px-2 py-1 mt-1">
-                              {selectedSO.shipping_address}
-                            </Badge>
-                          </div>
-                        )}
-                        
-                      </div>
-                      {/* Sales Rep */}
-                      {selectedSO.sales_rep && (
-                        <div className="pt-2 border-t">
-                          <Label className="text-xs text-gray-500 font-medium">Sales Representative</Label>
-                          <div className="flex items-center gap-2 mt-1 p-2 bg-blue-50 rounded-md">
-                            <User className="h-4 w-4 text-blue-600" />
-                            <div>
-                              <span className="text-sm font-medium">{selectedSO.sales_rep}</span>
-                              {selectedSO.sales_rep_email && (
-                                <p className="text-xs text-gray-600">{selectedSO.sales_rep_email}</p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Notes */}
-                      {selectedSO.notes && (
-                        <div className="pt-2 border-t">
-                          <Label className="text-xs text-gray-500 font-medium">Notes</Label>
-                          <div className="mt-1 p-2 bg-amber-50 border border-amber-100 rounded-md">
-                            <p className="text-sm text-gray-700">{selectedSO.notes}</p>
-                          </div>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                </div>
-
-                {/* Items & Summary */}
-                <div className="space-y-4 ">
-                  {/* Items Table */}
-                  <div className="xl:col-span-3">
-                    <Card className="border shadow-sm">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                          Order Items ({selectedSO.items.length})
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent className="p-0">
-                        <div className="overflow-x-auto">
-                          <Table>
-                            <TableHeader className="bg-gray-50">
-                              <TableRow>
-                                <TableHead className="w-[40%] text-xs font-medium text-gray-500 py-3">Product</TableHead>
-                                <TableHead className="w-[10%] text-xs font-medium text-gray-500 py-3">Qty</TableHead>
-                                <TableHead className="w-[15%] text-xs font-medium text-gray-500 py-3">Unit Price</TableHead>
-                                <TableHead className="w-[15%] text-xs font-medium text-gray-500 py-3 text-right">Subtotal</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {selectedSO.items.map((item, index) => (
-                                <TableRow key={item.so_item_code} className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}>
-                                  <TableCell className="py-3">
-                                    <p className="text-sm font-medium text-gray-900">{item.product_name}</p>
-                                  </TableCell>
-                                  <TableCell className="py-3">
-                                    <span className="text-sm font-medium">{item.quantity}</span>
-                                  </TableCell>
-                                  <TableCell className="py-3">
-                                    <span className="text-sm">{formatRupiah(item.unit_price)}</span>
-                                  </TableCell>
-                                  <TableCell className="py-3 text-right">
-                                    <span className="text-sm font-semibold text-blue-600">
-                                      {formatRupiah(item.subtotal)}
-                                    </span>
-                                  </TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  {/* Summary */}
-                  <div className="space-y-4">
-                    <Card className="border shadow-sm">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
-                          Order Summary
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent className="space-y-3 text-sm">
-                        <div className="flex justify-between items-center py-1">
-                          <span className="text-gray-600">Subtotal</span>
-                          <span className="font-medium">
-                            {formatRupiah(selectedSO.items.reduce((sum, item) => sum + item.subtotal, 0))}
+                          <span className="text-sm font-medium">
+                            {selectedSO.sales_rep}
                           </span>
+                          {selectedSO.sales_rep_email && (
+                            <p className="text-xs text-gray-600">
+                              {selectedSO.sales_rep_email}
+                            </p>
+                          )}
                         </div>
+                      </div>
+                    </div>
+                  )}
 
-                        {selectedSO.taxes.map((tax) => (
-                          <div key={tax.so_tax_code} className="flex justify-between items-center py-1">
-                            <div>
-                              <span className="text-gray-600">{tax.tax_name}</span>
-                              <span className="text-xs text-gray-400 ml-1">({tax.tax_rate}%)</span>
-                            </div>
-                            <span className="font-medium text-red-600">{formatRupiah(tax.tax_amount)}</span>
-                          </div>
+                  {selectedSO.notes && (
+                    <div className="pt-2 border-t">
+                      <Label className="text-xs text-gray-500 font-medium">
+                        Notes
+                      </Label>
+                      <div className="mt-1 p-2 bg-amber-50 border border-amber-100 rounded-md">
+                        <p className="text-sm text-gray-700">{selectedSO.notes}</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Items Table */}
+              <Card className="border shadow-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                    Order Items ({selectedSO.items.length})
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader className="bg-gray-50">
+                        <TableRow>
+                          <TableHead className="w-[40%] text-xs font-medium text-gray-500 py-3">
+                            Product
+                          </TableHead>
+                          <TableHead className="w-[10%] text-xs font-medium text-gray-500 py-3">
+                            Qty
+                          </TableHead>
+                          <TableHead className="w-[15%] text-xs font-medium text-gray-500 py-3">
+                            Unit Price (DPP)
+                          </TableHead>
+                          <TableHead className="w-[15%] text-xs font-medium text-gray-500 py-3 text-right">
+                            Subtotal (DPP)
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {selectedSO.items.map((item, index) => (
+                          <TableRow
+                            key={item.so_item_code}
+                            className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                          >
+                            <TableCell className="py-3">
+                              <p className="text-sm font-medium text-gray-900">
+                                {item.product_name}
+                              </p>
+                            </TableCell>
+                            <TableCell className="py-3">
+                              <span className="text-sm font-medium">
+                                {item.quantity}
+                              </span>
+                            </TableCell>
+                            <TableCell className="py-3">
+                              <span className="text-sm">
+                                {formatRupiah(item.unit_price)}
+                              </span>
+                            </TableCell>
+                            <TableCell className="py-3 text-right">
+                              <span className="text-sm font-semibold text-blue-600">
+                                {formatRupiah(item.subtotal)}
+                              </span>
+                            </TableCell>
+                          </TableRow>
                         ))}
-
-                        {selectedSO.shipping_cost > 0 && (
-                          <div className="flex justify-between items-center py-1">
-                            <span className="text-gray-600">Shipping</span>
-                            <span className="font-medium">{formatRupiah(selectedSO.shipping_cost)}</span>
-                          </div>
-                        )}
-
-                        <div className="border-t pt-2 mt-2">
-                          <div className="flex justify-between items-center">
-                            <span className="font-semibold text-gray-900">Grand Total</span>
-                            <span className="font-bold text-lg text-blue-600">
-                              {formatRupiah(selectedSO.total_amount)}
-                            </span>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
+                      </TableBody>
+                    </Table>
                   </div>
-                </div>
+                </CardContent>
+              </Card>
 
-                {/* Attachments */}
-                {selectedSO.attachments && selectedSO.attachments.length > 0 && (
+              {/* Order Summary */}
+              <Card className="border shadow-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                    Order Summary
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-gray-600">DPP Total</span>
+                    <span className="font-medium">
+                      {formatRupiah(
+                        selectedSO.items.reduce((sum, item) => {
+                          return sum + item.subtotal;
+                        }, 0)
+                      )}
+                    </span>
+                  </div>
+
+                  {selectedSO.taxes.map((tax) => (
+                    <div
+                      key={tax.so_tax_code}
+                      className="flex justify-between items-center py-2"
+                    >
+                      <div>
+                        <span className="text-gray-600">{tax.tax_name}</span>
+                        <span className="text-xs text-gray-400 ml-1">
+                          ({tax.tax_rate}%)
+                        </span>
+                      </div>
+                      <span className="font-medium text-red-600">
+                        {formatRupiah(tax.tax_amount)}
+                      </span>
+                    </div>
+                  ))}
+
+                  {selectedSO.taxes.length > 0 && (
+                    <div className="flex justify-between items-center py-2 border-t">
+                      <span className="font-medium text-gray-700">
+                        Total Pajak
+                      </span>
+                      <span className="font-medium text-red-600">
+                        {formatRupiah(selectedSO.tax_amount)}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="border-t pt-3 mt-2">
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold text-lg text-gray-900">
+                        Grand Total
+                      </span>
+                      <span className="font-bold text-xl text-blue-600">
+                        {formatRupiah(selectedSO.total_amount)}
+                      </span>
+                    </div>
+                    {selectedSO.tax_configuration === "excluded" &&
+                      selectedSO.taxes.length > 0 && (
+                        <div className="mt-1 text-xs text-gray-500">
+                          *DPP belum termasuk pajak{" "}
+                          {selectedSO.taxes
+                            .map((t) => `${t.tax_name} ${t.tax_rate}%`)
+                            .join(", ")}
+                        </div>
+                      )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Attachments */}
+              {selectedSO.attachments &&
+                selectedSO.attachments.length > 0 && (
                   <Card className="border shadow-sm">
                     <CardHeader className="pb-3">
                       <CardTitle className="flex items-center gap-2 text-sm font-semibold text-gray-700 uppercase tracking-wide">
@@ -1763,7 +2043,10 @@ export default function SalesOrderPage() {
                                 <div className="flex items-center gap-1 text-xs text-gray-500">
                                   <span>{attachment.type}</span>
                                   <span>•</span>
-                                  <span>{(attachment.size / 1024 / 1024).toFixed(1)}MB</span>
+                                  <span>
+                                    {(attachment.size / 1024 / 1024).toFixed(1)}
+                                    MB
+                                  </span>
                                 </div>
                               </div>
                             </div>
@@ -1781,11 +2064,10 @@ export default function SalesOrderPage() {
                     </CardContent>
                   </Card>
                 )}
-              </div>
-            )}
-          </CustomDialogContent>
-        </Dialog>
-
+            </div>
+          )}
+        </CustomDialogContent>
+      </Dialog>
     </div>
   );
 }

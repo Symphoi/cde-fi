@@ -55,14 +55,12 @@ export async function GET(request) {
        ORDER BY t.id DESC` 
     );
 
-      // Transform data dari database ke format dropdown
       const dropdownCategories = categories_query.map(category => ({
         value: category.category_code,
         label: category.name 
       }));
       
 
-      // Jika ada hasil dari database, gunakan
       if (dropdownCategories.length > 0) {
         return Response.json({
           success: true,
@@ -96,6 +94,7 @@ export async function GET(request) {
       });
     }
 
+    // Tampilkan CA yang bisa ditransaksi (approved/active/partially_used)
     const cashAdvances = await query(
       `SELECT 
         ca_code,
@@ -106,9 +105,8 @@ export async function GET(request) {
         remaining_amount,
         status
        FROM cash_advances 
-       WHERE status IN ('active', 'approved')
+       WHERE status IN ('approved', 'active', 'partially_used')
        AND is_deleted = 0
-       AND remaining_amount > 0
        ORDER BY created_at DESC`
     );
 
@@ -146,25 +144,31 @@ export async function POST(request) {
       return Response.json({ error: 'Semua field harus diisi' }, { status: 400 });
     }
 
-    // Validasi amount
     if (amount <= 0) {
       return Response.json({ error: 'Amount harus lebih dari 0' }, { status: 400 });
     }
 
-    // Validasi tanggal
     const today = new Date().toISOString().split('T')[0]
     if (transaction_date > today) {
       return Response.json({ error: 'Tanggal tidak boleh lebih dari hari ini' }, { status: 400 })
     }
 
-    // Check CA
+    // Check CA dengan validasi status
     const caCheck = await query(
-      `SELECT remaining_amount FROM cash_advances WHERE ca_code = ? AND is_deleted = 0`,
+      `SELECT remaining_amount, status, total_amount, used_amount FROM cash_advances WHERE ca_code = ? AND is_deleted = 0`,
       [ca_code]
     );
 
     if (caCheck.length === 0) {
       return Response.json({ error: 'Cash Advance tidak ditemukan' }, { status: 404 });
+    }
+
+    // Validasi status CA bisa transaksi
+    const allowedStatuses = ['approved', 'active', 'partially_used'];
+    if (!allowedStatuses.includes(caCheck[0].status)) {
+      return Response.json({ 
+        error: `Cash Advance tidak bisa ditransaksi. Status saat ini: ${caCheck[0].status}` 
+      }, { status: 400 });
     }
 
     const remainingAmount = parseFloat(caCheck[0].remaining_amount);
@@ -174,13 +178,12 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    // Handle file upload dengan validasi size
+    // Handle file upload
     const receiptFile = formData.get('receipt');
     let receipt_filename = null;
     let receipt_path = null;
 
     if (receiptFile && receiptFile.size > 0) {
-      // Max 5MB
       if (receiptFile.size > 5 * 1024 * 1024) {
         return Response.json({ error: 'File terlalu besar. Maksimal 5MB' }, { status: 400 })
       }
@@ -190,6 +193,23 @@ export async function POST(request) {
 
     const transaction_code = await generateTransactionCode();
 
+    // Logic update status berdasarkan penggunaan dana
+    const newRemaining = remainingAmount - amount;
+    let newStatus = caCheck[0].status;
+    
+    if (newRemaining === 0) {
+      newStatus = 'fully_used';
+    } else if (caCheck[0].status === 'approved' && amount > 0) {
+      // Jika sebelumnya approved, ubah ke partially_used setelah transaksi pertama
+      newStatus = 'partially_used';
+    } else if (caCheck[0].status === 'active' && amount > 0) {
+      // Jika sebelumnya active, ubah ke partially_used setelah transaksi pertama
+      newStatus = 'partially_used';
+    } else if (caCheck[0].status === 'partially_used' && newRemaining > 0) {
+      // Tetap partially_used jika masih ada sisa
+      newStatus = 'partially_used';
+    }
+
     await query(
       `INSERT INTO ca_transactions 
        (transaction_code, ca_code, transaction_date, description, category, amount, receipt_filename, receipt_path, created_by)
@@ -197,20 +217,27 @@ export async function POST(request) {
       [transaction_code, ca_code, transaction_date, description, category, amount, receipt_filename, receipt_path, decoded.user_code]
     );
 
+    // Update CA dengan status baru
     await query(
       `UPDATE cash_advances 
        SET used_amount = used_amount + ?,
            remaining_amount = remaining_amount - ?,
+           status = ?,
            updated_at = NOW(),
            updated_by = ?
        WHERE ca_code = ?`,
-      [amount, amount, decoded.user_code, ca_code]
+      [amount, amount, newStatus, decoded.user_code, ca_code]
     );
 
     return Response.json({
       success: true,
       message: 'Transaksi berhasil ditambahkan',
-      transaction_code: transaction_code
+      transaction_code: transaction_code,
+      data: {
+        new_status: newStatus,
+        remaining_amount: newRemaining,
+        used_amount: parseFloat(caCheck[0].used_amount) + amount
+      }
     });
 
   } catch (error) {

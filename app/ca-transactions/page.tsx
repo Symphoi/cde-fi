@@ -527,7 +527,6 @@ export default function CATransactionsPage() {
                           setDate(selectedDate)
                           setIsCalendarOpen(false)
                         }}
-                        disabled={(date) => date > new Date()}
                         initialFocus
                       />
                     </PopoverContent>

@@ -17,15 +17,15 @@ interface CashAdvance {
   total_amount: number
   used_amount: number
   remaining_amount: number
+  status: 'submitted' | 'active' | 'partially_used' | 'fully_used' | 'in_settlement' | 'completed' | 'rejected'
   request_date: string
   project_code?: string
   created_at: string
   submitted_date: string
   submitted_time: string
   days_waiting: number
-  status: 'submitted' | 'approved' | 'active' | 'rejected' | 'in_settlement' | 'completed'
-  approved_by_spv?: string
-  approved_date_spv?: string
+  approved_by?: string
+  approved_date?: string
   rejection_reason?: string
 }
 
@@ -48,12 +48,18 @@ interface CADetails extends CashAdvance {
 
 interface Stats {
   totalCA: number
-  approvedCA: number
-  pendingCA: number
+  submittedCA: number
+  activeCA: number
+  partiallyUsedCA: number
+  fullyUsedCA: number
+  inSettlementCA: number
+  completedCA: number
   rejectedCA: number
   totalAmountAll: number
-  totalAmountPending: number
-  totalAmountApproved: number
+  totalAmountSubmitted: number
+  totalAmountActive: number
+  totalAmountPartiallyUsed: number
+  totalAmountFullyUsed: number
 }
 
 // Format Rupiah function
@@ -87,19 +93,47 @@ const formatTime = (timeString: string) => {
   })
 }
 
+// Get status badge
+const getStatusBadge = (status: string) => {
+  switch (status) {
+    case 'submitted':
+      return <Badge className="bg-blue-100 text-blue-800 border-blue-200">Pending Approval</Badge>
+    case 'active':
+      return <Badge className="bg-green-100 text-green-800 border-green-200">Active</Badge>
+    case 'partially_used':
+      return <Badge className="bg-purple-100 text-purple-800 border-purple-200">Partially Used</Badge>
+    case 'fully_used':
+      return <Badge className="bg-indigo-100 text-indigo-800 border-indigo-200">Fully Used</Badge>
+    case 'in_settlement':
+      return <Badge className="bg-orange-100 text-orange-800 border-orange-200">In Settlement</Badge>
+    case 'completed':
+      return <Badge className="bg-gray-100 text-gray-800 border-gray-200">Completed</Badge>
+    case 'rejected':
+      return <Badge className="bg-red-100 text-red-800 border-red-200">Rejected</Badge>
+    default:
+      return <Badge variant="outline">{status}</Badge>
+  }
+}
+
 export default function CAApprovalPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [currentPage, setCurrentPage] = useState(1)
   const [cashAdvances, setCashAdvances] = useState<CashAdvance[]>([])
   const [stats, setStats] = useState<Stats>({ 
-    totalCA: 0, 
-    approvedCA: 0, 
-    pendingCA: 0, 
+    totalCA: 0,
+    submittedCA: 0,
+    activeCA: 0,
+    partiallyUsedCA: 0,
+    fullyUsedCA: 0,
+    inSettlementCA: 0,
+    completedCA: 0,
     rejectedCA: 0,
     totalAmountAll: 0,
-    totalAmountPending: 0,
-    totalAmountApproved: 0
+    totalAmountSubmitted: 0,
+    totalAmountActive: 0,
+    totalAmountPartiallyUsed: 0,
+    totalAmountFullyUsed: 0
   })
   const [loading, setLoading] = useState(false)
   const [processing, setProcessing] = useState<string | null>(null)
@@ -134,13 +168,19 @@ export default function CAApprovalPage() {
       if (result.success) {
         setCashAdvances(result.data || [])
         setStats(result.stats || {
-          totalCA: 0, 
-          approvedCA: 0, 
-          pendingCA: 0, 
+          totalCA: 0,
+          submittedCA: 0,
+          activeCA: 0,
+          partiallyUsedCA: 0,
+          fullyUsedCA: 0,
+          inSettlementCA: 0,
+          completedCA: 0,
           rejectedCA: 0,
           totalAmountAll: 0,
-          totalAmountPending: 0,
-          totalAmountApproved: 0
+          totalAmountSubmitted: 0,
+          totalAmountActive: 0,
+          totalAmountPartiallyUsed: 0,
+          totalAmountFullyUsed: 0
         })
         setSelectedCA(null)
       } else {
@@ -264,22 +304,9 @@ export default function CAApprovalPage() {
     }
   }
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'submitted':
-        return <Badge className="bg-amber-100 text-amber-800 border-amber-200 px-2 py-1 text-xs">Menunggu Approval</Badge>
-      case 'approved':
-      case 'active':
-        return <Badge className="bg-green-100 text-green-800 border-green-200 px-2 py-1 text-xs">Disetujui</Badge>
-      case 'rejected':
-        return <Badge className="bg-red-100 text-red-800 border-red-200 px-2 py-1 text-xs">Ditolak</Badge>
-      case 'in_settlement':
-        return <Badge className="bg-blue-100 text-blue-800 border-blue-200 px-2 py-1 text-xs">Dalam Settlement</Badge>
-      case 'completed':
-        return <Badge className="bg-gray-100 text-gray-800 border-gray-200 px-2 py-1 text-xs">Selesai</Badge>
-      default:
-        return <Badge variant="outline" className="px-2 py-1 text-xs">{status}</Badge>
-    }
+  const canTakeAction = (ca: CashAdvance) => {
+    // ✅ SEMUA USER BISA APPROVE/REJECT jika status submitted
+    return ca.status === 'submitted'
   }
 
   const getCategoryLabel = (category: string) => {
@@ -398,6 +425,10 @@ export default function CAApprovalPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-4">
                       <div>
+                        <label className="text-sm font-medium text-gray-500">CA Number</label>
+                        <p className="text-gray-900 font-medium mt-1">{selectedCA.ca_code}</p>
+                      </div>
+                      <div>
                         <label className="text-sm font-medium text-gray-500">Karyawan</label>
                         <p className="text-gray-900 font-medium mt-1">{selectedCA.employee_name}</p>
                       </div>
@@ -414,6 +445,10 @@ export default function CAApprovalPage() {
                       <div>
                         <label className="text-sm font-medium text-gray-500">Project</label>
                         <p className="text-gray-900 font-medium mt-1">{selectedCA.project_code || '-'}</p>
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium text-gray-500">Status</label>
+                        <div className="mt-1">{getStatusBadge(selectedCA.status)}</div>
                       </div>
                     </div>
                   </div>
@@ -450,6 +485,40 @@ export default function CAApprovalPage() {
                 </CardContent>
               </Card>
 
+              {/* Transactions */}
+              {selectedCA.transactions && selectedCA.transactions.length > 0 && (
+                <Card className="bg-white border">
+                  <CardHeader className="bg-gray-50 border-b">
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <FileText className="h-5 w-5 text-purple-600" />
+                      Transactions
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-6">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead>Category</TableHead>
+                          <TableHead className="text-right">Amount</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {selectedCA.transactions.map((tx) => (
+                          <TableRow key={tx.transaction_code}>
+                            <TableCell>{formatDate(tx.transaction_date)}</TableCell>
+                            <TableCell>{tx.description}</TableCell>
+                            <TableCell>{getCategoryLabel(tx.category)}</TableCell>
+                            <TableCell className="text-right">{formatRupiah(tx.amount)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Status Information */}
               <Card className="bg-white border">
                 <CardHeader className="bg-gray-50 border-b">
@@ -460,24 +529,19 @@ export default function CAApprovalPage() {
                 </CardHeader>
                 <CardContent className="p-6 space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="font-medium text-gray-700">Status:</span>
+                    <span className="font-medium text-gray-700">Current Status:</span>
                     {getStatusBadge(selectedCA.status)}
                   </div>
                   
-                  {selectedCA.status === 'approved' && selectedCA.approved_by_spv && (
+                  {/* Approval History */}
+                  {selectedCA.approved_by && selectedCA.status !== 'rejected' && (
                     <div className="space-y-3 p-4 bg-green-50 rounded-lg border border-green-200">
                       <div className="flex items-center gap-3">
                         <CheckCircle className="h-5 w-5 text-green-500" />
                         <div>
-                          <p className="font-medium text-green-800">Disetujui oleh</p>
-                          <p className="text-green-700">{selectedCA.approved_by_spv}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <Calendar className="h-5 w-5 text-green-600" />
-                        <div>
-                          <p className="font-medium text-green-800">Tanggal Approval</p>
-                          <p className="text-green-700">{formatDate(selectedCA.approved_date_spv || '')}</p>
+                          <p className="font-medium text-green-800">Approved by</p>
+                          <p className="text-green-700">{selectedCA.approved_by}</p>
+                          <p className="text-sm text-green-600">{formatDate(selectedCA.approved_date || '')}</p>
                         </div>
                       </div>
                     </div>
@@ -488,26 +552,21 @@ export default function CAApprovalPage() {
                       <div className="flex items-center gap-3">
                         <XCircle className="h-5 w-5 text-red-500" />
                         <div>
-                          <p className="font-medium text-red-800">Ditolak oleh</p>
-                          <p className="text-red-700">{selectedCA.approved_by_spv}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <Calendar className="h-5 w-5 text-red-600" />
-                        <div>
-                          <p className="font-medium text-red-800">Tanggal Penolakan</p>
-                          <p className="text-red-700">{formatDate(selectedCA.approved_date_spv || '')}</p>
+                          <p className="font-medium text-red-800">Rejected by</p>
+                          <p className="text-red-700">{selectedCA.approved_by}</p>
+                          <p className="text-sm text-red-600">{formatDate(selectedCA.approved_date || '')}</p>
                         </div>
                       </div>
                       {selectedCA.rejection_reason && (
                         <div>
-                          <p className="font-medium text-red-800 mb-2">Alasan Penolakan:</p>
+                          <p className="font-medium text-red-800 mb-2">Reason:</p>
                           <p className="text-red-700 bg-white p-3 rounded border">{selectedCA.rejection_reason}</p>
                         </div>
                       )}
                     </div>
                   )}
 
+                  {/* Action Buttons */}
                   {selectedCA.status === 'submitted' && (
                     <div className="flex gap-2 justify-end pt-4 border-t">
                       <Button 
@@ -559,7 +618,7 @@ export default function CAApprovalPage() {
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <span>Total: {stats.totalCA} CA</span>
               <span>•</span>
-              <span>Pending: {stats.pendingCA}</span>
+              <span>Pending: {stats.submittedCA}</span>
             </div>
           </div>
         </div>
@@ -588,12 +647,12 @@ export default function CAApprovalPage() {
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-gray-600">Approved CA</p>
-                  <p className="text-2xl font-bold text-gray-900">{stats.approvedCA}</p>
-                  <p className="text-xs text-gray-500 mt-1">Total: {formatRupiah(stats.totalAmountApproved)}</p>
+                  <p className="text-sm font-medium text-gray-600">Pending Approval</p>
+                  <p className="text-2xl font-bold text-gray-900">{stats.submittedCA}</p>
+                  <p className="text-xs text-gray-500 mt-1">Total: {formatRupiah(stats.totalAmountSubmitted)}</p>
                 </div>
-                <div className="p-3 bg-green-100 rounded-full">
-                  <CheckSquare className="h-6 w-6 text-green-600" />
+                <div className="p-3 bg-orange-100 rounded-full">
+                  <Clock className="h-6 w-6 text-orange-600" />
                 </div>
               </div>
             </CardContent>
@@ -603,12 +662,12 @@ export default function CAApprovalPage() {
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-gray-600">Pending Approval</p>
-                  <p className="text-2xl font-bold text-gray-900">{stats.pendingCA}</p>
-                  <p className="text-xs text-gray-500 mt-1">Total: {formatRupiah(stats.totalAmountPending)}</p>
+                  <p className="text-sm font-medium text-gray-600">Active CA</p>
+                  <p className="text-2xl font-bold text-gray-900">{stats.activeCA}</p>
+                  <p className="text-xs text-gray-500 mt-1">Total: {formatRupiah(stats.totalAmountActive)}</p>
                 </div>
-                <div className="p-3 bg-orange-100 rounded-full">
-                  <Clock className="h-6 w-6 text-orange-600" />
+                <div className="p-3 bg-green-100 rounded-full">
+                  <CheckSquare className="h-6 w-6 text-green-600" />
                 </div>
               </div>
             </CardContent>
@@ -653,9 +712,13 @@ export default function CAApprovalPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Semua Status</SelectItem>
-                    <SelectItem value="submitted">Menunggu Approval</SelectItem>
-                    <SelectItem value="active">Disetujui</SelectItem>
-                    <SelectItem value="rejected">Ditolak</SelectItem>
+                    <SelectItem value="submitted">Pending Approval</SelectItem>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="partially_used">Partially Used</SelectItem>
+                    <SelectItem value="fully_used">Fully Used</SelectItem>
+                    <SelectItem value="in_settlement">In Settlement</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="rejected">Rejected</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -740,7 +803,7 @@ export default function CAApprovalPage() {
                               <Eye className="h-4 w-4 mr-1" />
                               Details
                             </Button>
-                            {ca.status === 'submitted' && (
+                            {canTakeAction(ca) && (
                               <>
                                 <Button 
                                   onClick={(e) => {

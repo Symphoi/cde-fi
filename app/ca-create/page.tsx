@@ -108,13 +108,17 @@ export default function CashAdvancePage() {
   const [detailLoading, setDetailLoading] = useState<string | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [currentUser, setCurrentUser] = useState({ name: '' })
-  const [stats, setStats] = useState({ 
-    pending: 0, 
-    approved: 0, 
+   const [stats, setStats] = useState({ 
+    draft: 0,
+    submitted: 0, 
     active: 0,
+    partiallyUsed: 0,
+    fullyUsed: 0,
+    inSettlement: 0,
     completed: 0,
     rejected: 0,
-    totalAmount: 0 
+    totalAmount: 0,
+    totalAmountActive: 0
   })
   
   // Form state dengan Date object untuk shadcn Calendar
@@ -170,12 +174,16 @@ export default function CashAdvancePage() {
         // Convert string stats to numbers
         const statsData = result.stats || {}
         setStats({
-          pending: parseInt(statsData.pending) || 0,
-          approved: parseInt(statsData.approved) || 0,
+          draft: parseInt(statsData.draft) || 0,
+          submitted: parseInt(statsData.submitted) || 0,
           active: parseInt(statsData.active) || 0,
+          partiallyUsed: parseInt(statsData.partiallyUsed) || 0,
+          fullyUsed: parseInt(statsData.fullyUsed) || 0,
+          inSettlement: parseInt(statsData.inSettlement) || 0,
           completed: parseInt(statsData.completed) || 0,
           rejected: parseInt(statsData.rejected) || 0,
-          totalAmount: parseFloat(statsData.totalAmount) || 0
+          totalAmount: parseFloat(statsData.totalAmount) || 0,
+          totalAmountActive: parseFloat(statsData.totalAmountActive) || 0
         })
         
         setCurrentUser(result.currentUser || { name: '' })
@@ -506,13 +514,14 @@ export default function CashAdvancePage() {
         {activeTab === 'history' && (
           <>
             {/* Statistics Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <Card className="bg-white border-blue-200">
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-gray-600">Pending Approval</p>
-                      <p className="text-2xl font-bold text-gray-900">{stats.pending}</p>
+                      <p className="text-2xl font-bold text-gray-900">{stats.submitted}</p>
+                      <p className="text-xs text-gray-500 mt-1">Menunggu approval</p>
                     </div>
                     <div className="p-3 bg-blue-100 rounded-full">
                       <FileText className="h-6 w-6 text-blue-600" />
@@ -526,7 +535,10 @@ export default function CashAdvancePage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-gray-600">Active CA</p>
-                      <p className="text-2xl font-bold text-gray-900">{stats.active}</p>
+                      <p className="text-2xl font-bold text-gray-900">{stats.active + stats.partiallyUsed + stats.fullyUsed}</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Active: {stats.active}, Used: {stats.partiallyUsed + stats.fullyUsed}
+                      </p>
                     </div>
                     <div className="p-3 bg-green-100 rounded-full">
                       <User className="h-6 w-6 text-green-600" />
@@ -541,23 +553,10 @@ export default function CashAdvancePage() {
                     <div>
                       <p className="text-sm font-medium text-gray-600">Completed</p>
                       <p className="text-2xl font-bold text-gray-900">{stats.completed}</p>
+                      <p className="text-xs text-gray-500 mt-1">Settlement selesai</p>
                     </div>
                     <div className="p-3 bg-purple-100 rounded-full">
                       <CheckCircle className="h-6 w-6 text-purple-600" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-white border-red-200">
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-600">Rejected</p>
-                      <p className="text-2xl font-bold text-gray-900">{stats.rejected}</p>
-                    </div>
-                    <div className="p-3 bg-red-100 rounded-full">
-                      <XCircle className="h-6 w-6 text-red-600" />
                     </div>
                   </div>
                 </CardContent>
@@ -568,7 +567,8 @@ export default function CashAdvancePage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-gray-600">Total Amount</p>
-                      <p className="text-2xl font-bold text-gray-900">{formatRupiah(stats.totalAmount)}</p>
+                      <p className="text-2xl font-bold text-gray-900">{formatRupiah(stats.totalAmountActive)}</p>
+                      <p className="text-xs text-gray-500 mt-1">Total active CA</p>
                     </div>
                     <div className="p-3 bg-yellow-100 rounded-full">
                       <DollarSign className="h-6 w-6 text-yellow-600" />
@@ -577,7 +577,6 @@ export default function CashAdvancePage() {
                 </CardContent>
               </Card>
             </div>
-
             {/* CA Table */}
             <Card>
               <CardHeader>
