@@ -66,11 +66,8 @@ interface Document {
   name: string
   type: string
   filename: string
-  file_path: string  
   upload_date: string
   source: 'PO' | 'SO'
-  is_main?: boolean 
-  notes?: string    
 }
 
 export default function ApprovalPage() {
@@ -289,26 +286,15 @@ export default function ApprovalPage() {
     }
   }
 
-const downloadDocument = async (doc: Document) => {
-  try {
-    if (!doc.file_path) {
-      alert(`Document ${doc.name} tidak memiliki file path`)
-      return
+  const downloadDocument = async (doc: Document) => {
+    try {
+      // Simulate download - in real app, this would fetch the file
+      console.log('Downloading:', doc.name)
+      alert(`Downloading ${doc.name}`)
+    } catch (error) {
+      console.error('Error downloading document:', error)
     }
-
-    // Jika file_path adalah URL lengkap
-    if (doc.file_path.startsWith('http')) {
-      window.open(doc.file_path, '_blank')
-    } else {
-      // Jika file_path adalah relative path, buat URL lengkap
-      const fullUrl = `/api/download?path=${encodeURIComponent(doc.file_path)}&filename=${doc.filename}`
-      window.open(fullUrl, '_blank')
-    }
-  } catch (error) {
-    console.error('Error downloading document:', error)
-    alert('Error downloading document')
   }
-}
 
   // Status color untuk 2 level approval
   const getStatusColor = (status: string) => {
@@ -694,83 +680,44 @@ const canApprove = (po: PurchaseOrder) => {
               )}
 
               {/* Documents */}
-             {/* Documents */}
-{selectedPO.documents && selectedPO.documents.length > 0 && (
-  <Card>
-    <CardHeader>
-      <CardTitle className="flex items-center gap-2">
-        <FileText className="h-5 w-5" />
-        Documents ({selectedPO.documents.length})
-      </CardTitle>
-    </CardHeader>
-    <CardContent>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {selectedPO.documents.map((doc) => (
-          <div key={doc.id} className="flex flex-col p-4 border rounded-lg hover:shadow-md transition-shadow">
-            <div className="flex items-start justify-between mb-2">
-              <div className="flex items-center gap-3">
-                <FileText className={`h-8 w-8 ${
-                  doc.type === 'pdf' ? 'text-red-500' : 
-                  doc.type === 'doc' || doc.type === 'docx' ? 'text-blue-500' :
-                  doc.type === 'xls' || doc.type === 'xlsx' ? 'text-green-500' :
-                  'text-gray-500'
-                } flex-shrink-0`} />
-                <div>
-                  {doc.is_main && (
-                    <Badge variant="default" className="mb-1 text-xs bg-blue-100 text-blue-800">
-                      Main
-                    </Badge>
-                  )}
-                </div>
-              </div>
-              <div className="flex gap-1">
-                <Badge variant="secondary" className="text-xs">
-                  {doc.source}
-                </Badge>
-                <Button 
-                  variant="ghost" 
-                  size="sm"
-                  onClick={() => downloadDocument(doc)}
-                  className="h-8 w-8 p-0"
-                  title="Download"
-                >
-                  <Download className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm mb-1 truncate" title={doc.name}>
-                {doc.name}
-              </div>
-              <div className="text-xs text-gray-500 mb-1">
-                {new Date(doc.upload_date).toLocaleDateString('id-ID', {
-                  day: '2-digit',
-                  month: 'short',
-                  year: 'numeric'
-                })}
-              </div>
-              <div className="flex justify-between items-center">
-                <div className="text-xs text-gray-400 capitalize">
-                  {doc.type} • {doc.source}
-                </div>
-                {doc.notes && (
-                  <div className="text-xs text-gray-500" title={doc.notes}>
-                    📝
-                  </div>
-                )}
-              </div>
-              {doc.file_path && (
-                <div className="text-xs text-gray-500 truncate mt-1" title={doc.file_path}>
-                  📁 {doc.file_path.split('/').pop()}
-                </div>
+              {selectedPO.documents && selectedPO.documents.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Documents</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {selectedPO.documents.map((doc) => (
+                        <div key={doc.id} className="flex flex-col p-4 border rounded-lg hover:shadow-md transition-shadow">
+                          <div className="flex items-start justify-between mb-2">
+                            <FileText className="h-8 w-8 text-blue-500 flex-shrink-0 mt-1" />
+                            <div className="flex gap-1">
+                              <Badge variant="secondary" className="text-xs">
+                                {doc.source}
+                              </Badge>
+                              <Button 
+                                variant="ghost" 
+                                size="sm"
+                                onClick={() => downloadDocument(doc)}
+                                className="h-8 w-8 p-0"
+                              >
+                                <Download className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="flex-1">
+                            <div className="font-medium text-sm mb-1 truncate">{doc.name}</div>
+                            <div className="text-xs text-gray-500 mb-1">
+                              {doc.upload_date}
+                            </div>
+                            <div className="text-xs text-gray-400 capitalize">{doc.type}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
               )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </CardContent>
-  </Card>
-)}
 
               {/* Approval Section */}
               <div className="space-y-6">
