@@ -342,8 +342,8 @@ async function getLogoBase64(logoPath) {
   }
 }
 
-// Helper function untuk save PO document ke purchase_order_attachments
-async function savePODocument(file, poCode, notes = '', userCode, type = 'invoice') {
+// Helper function untuk save PO document ke purchase_orders table
+async function savePODocument(file, poCode, notes = '', userCode) {
   try {
     const timestamp = Date.now();
     const originalName = file.name || `po_document_${timestamp}.pdf`;
@@ -359,25 +359,7 @@ async function savePODocument(file, poCode, notes = '', userCode, type = 'invoic
     const filePath = path.join(uploadDir, filename);
     await writeFile(filePath, buffer);
 
-    // Generate document code
-    const documentCode = `POATT-${timestamp}-${Math.random().toString(36).substr(2, 6)}`;
-
-    // Insert ke table purchase_order_attachments
-    await query(
-      `INSERT INTO purchase_order_attachments 
-       (payment_doc_code, payment_code, name, type, filename, file_path) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        documentCode,
-        'TEMP', // Temporary code sampai payment dibuat
-        originalName,
-        type, // 'invoice' atau 'proof'
-        filename,
-        `/uploads/po_documents/${filename}`
-      ]
-    );
-
-    // Simpan juga di purchase_orders untuk backward compatibility
+    // Update purchase_orders dengan attachment info
     await query(
       `UPDATE purchase_orders 
        SET attachment_url = ?, attachment_filename = ?, attachment_notes = ?
@@ -395,16 +377,14 @@ async function savePODocument(file, poCode, notes = '', userCode, type = 'invoic
       userCode,
       userCode,
       'upload',
-      'purchase_order_attachment',
-      documentCode,
-      `Uploaded PO document: ${originalName}`
+      'purchase_order_submission',
+      poCode,
+      `Uploaded PO submission document: ${originalName}`
     );
 
     return {
-      document_code: documentCode,
       name: originalName,
       filename: filename,
-      type: type,
       notes: notes,
       file_path: `/uploads/po_documents/${filename}`,
       uploaded_at: new Date().toISOString()
@@ -877,7 +857,10 @@ export async function GET(request) {
             po.date,
             po.priority,
             so.customer_name,
-            so.project_code
+            so.project_code,
+            po.attachment_url,
+            po.attachment_filename,
+            po.attachment_notes
           FROM purchase_orders po
           LEFT JOIN sales_orders so ON po.so_code = so.so_code
           WHERE po.po_code = ? AND po.is_deleted = 0`,
@@ -917,30 +900,41 @@ export async function GET(request) {
         // Get company info
         const companyInfo = await getCompanyInfoFromProject(poDetails[0].project_code);
 
-        // Get attachments dari purchase_order_attachments
-        const attachments = await query(
+        // Get attachments dari purchase_orders table
+        const attachments = [];
+        if (poDetails[0].attachment_url && poDetails[0].attachment_filename) {
+          attachments.push({
+            id: `PO-ATT-${poCode}`,
+            name: poDetails[0].attachment_filename,
+            type: 'submission',
+            filename: poDetails[0].attachment_filename,
+            file_path: poDetails[0].attachment_url,
+            notes: poDetails[0].attachment_notes,
+            source: 'purchase_order'
+          });
+        }
+
+        // Get attachments dari purchase_order_attachments untuk pembayaran
+        const paymentAttachments = await query(
           `SELECT 
             payment_doc_code as id,
             name,
             type,
             filename,
             file_path,
-            uploaded_at
+            uploaded_at as upload_date,
+            notes
           FROM purchase_order_attachments 
-          WHERE payment_code IN (
-            SELECT payment_code FROM purchase_order_payments WHERE po_code = ?
-          ) OR (payment_code = 'TEMP' AND EXISTS (
-            SELECT 1 FROM purchase_orders WHERE po_code = ?
-          ))
+          WHERE payment_code IN (SELECT payment_code FROM purchase_order_payments WHERE po_code = ?)
           AND is_deleted = 0`,
-          [poCode, poCode]
+          [poCode]
         );
 
         const exportData = {
           purchase_order: poDetails[0],
           items: items,
           payments: payments,
-          attachments: attachments,
+          attachments: [...attachments, ...paymentAttachments],
           company_info: companyInfo
         };
 
@@ -1070,38 +1064,38 @@ export async function GET(request) {
       );
       po.payments = payments;
 
-      // Get attachments dari purchase_order_attachments
-      const attachments = await query(
+      // Get attachments dari purchase_orders table
+      const attachments = [];
+      if (po.attachment_url && po.attachment_filename) {
+        attachments.push({
+          id: `PO-ATT-${po.po_code}`,
+          name: po.attachment_filename,
+          type: 'submission',
+          filename: po.attachment_filename,
+          file_path: po.attachment_url,
+          upload_date: po.created_at,
+          notes: po.attachment_notes,
+          source: 'purchase_order'
+        });
+      }
+
+      // Get attachments dari purchase_order_attachments untuk pembayaran
+      const paymentAttachments = await query(
         `SELECT 
           payment_doc_code as id,
           name,
           type,
           filename,
           file_path,
-          uploaded_at as upload_date
+          uploaded_at as upload_date,
+          notes
          FROM purchase_order_attachments 
-         WHERE payment_code IN (
-           SELECT payment_code FROM purchase_order_payments WHERE po_code = ?
-         ) OR (payment_code = 'TEMP' AND EXISTS (
-           SELECT 1 FROM purchase_orders WHERE po_code = ?
-         ))
+         WHERE payment_code IN (SELECT payment_code FROM purchase_order_payments WHERE po_code = ?)
          AND is_deleted = FALSE`,
-        [po.po_code, po.po_code]
+        [po.po_code]
       );
-      po.attachments = attachments;
       
-      // Tambahkan attachment dari purchase_orders jika ada
-      if (po.attachment_url && po.attachment_filename) {
-        po.attachments.push({
-          id: `DIR-${Date.now()}`,
-          name: po.attachment_filename,
-          type: po.attachment_filename.split('.').pop(),
-          filename: po.attachment_filename,
-          file_path: po.attachment_url,
-          upload_date: po.created_at,
-          source: 'direct'
-        });
-      }
+      po.attachments = [...attachments, ...paymentAttachments];
     }
 
     return Response.json({
@@ -1205,15 +1199,26 @@ export async function POST(request) {
     // Calculate total amount
     const totalAmount = items.reduce((sum, item) => sum + (item.purchase_price * item.quantity), 0);
 
-    // Insert purchase order
+    // Insert purchase order - INCLUDE ATTACHMENT FIELDS
     await query(
       `INSERT INTO purchase_orders 
        (po_code, so_code, so_reference, supplier_name, supplier_contact, supplier_bank, 
-        total_amount, notes, priority, customer_ref, status, submitted_by, submitted_date, submitted_time) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?, CURDATE(), CURTIME())`,
+        total_amount, notes, priority, customer_ref, status, submitted_by, submitted_date, submitted_time,
+        created_by) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', ?, CURDATE(), CURTIME(), ?)`,
       [
-        poCode, so_code, so_reference || so_code, supplier_name, supplier_contact, supplier_bank,
-        totalAmount, notes, priority, customer_ref, decoded.name
+        poCode, 
+        so_code, 
+        so_reference || so_code, 
+        supplier_name, 
+        supplier_contact, 
+        supplier_bank,
+        totalAmount, 
+        notes, 
+        priority, 
+        customer_ref, 
+        decoded.name,
+        decoded.name // created_by
       ]
     );
 
@@ -1253,30 +1258,17 @@ export async function POST(request) {
       );
     }
 
-    // HANDLE ATTACHMENT FILE UPLOAD
+    // HANDLE ATTACHMENT FILE UPLOAD - SIMPAN LANGSUNG KE TABLE PURCHASE_ORDERS
     let uploadedDocument = null;
     if (attachmentFile) {
       try {
+        // SIMPAN SEBAGAI DOKUMEN PENGAJUAN DI TABLE PURCHASE_ORDERS
         uploadedDocument = await savePODocument(
           attachmentFile, 
           poCode, 
           attachmentNotes, 
-          decoded.user_code,
-          'invoice'
+          decoded.user_code
         );
-        
-        // Update payment_code di purchase_order_attachments jika sudah ada payment
-        const payments = await query(
-          'SELECT payment_code FROM purchase_order_payments WHERE po_code = ? LIMIT 1',
-          [poCode]
-        );
-        
-        if (payments.length > 0) {
-          await query(
-            'UPDATE purchase_order_attachments SET payment_code = ? WHERE payment_doc_code = ?',
-            [payments[0].payment_code, uploadedDocument.document_code]
-          );
-        }
       } catch (error) {
         console.error('Error uploading PO document:', error);
       }
@@ -1289,7 +1281,7 @@ export async function POST(request) {
       'create',
       'purchase_order',
       poCode,
-      `Created new purchase order${uploadedDocument ? ' with attachment' : ''}`
+      `Created new purchase order${attachmentFile ? ' with attachment' : ''}`
     );
 
     return Response.json({
@@ -1520,7 +1512,7 @@ export async function PUT(request) {
       await createJournalEntryForPayment(paymentCode, po_code, amount, company_bank_code, decoded);
     }
 
-    // Handle file uploads untuk payment documents
+    // Handle file uploads untuk payment documents (bukti bayar/invoice)
     const fileFields = formData.getAll('files');
     
     const files = fileFields.filter(file => {
@@ -1567,32 +1559,6 @@ export async function PUT(request) {
           ]
         );
       }
-    }
-
-    // UPDATE TEMPORARY ATTACHMENTS DARI PO (yang payment_code = 'TEMP')
-    await query(
-      `UPDATE purchase_order_attachments 
-       SET payment_code = ? 
-       WHERE (payment_code = 'TEMP' OR payment_code IS NULL)
-       AND uploaded_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
-       ORDER BY uploaded_at DESC 
-       LIMIT ?`,
-      [paymentCode, files.length]
-    );
-
-    // UPDATE DOKUMEN YANG SUDAH ADA DI purchase_orders
-    if (files.length > 0) {
-      await query(
-        `UPDATE purchase_orders 
-         SET attachment_url = IFNULL(?, attachment_url),
-             attachment_filename = IFNULL(?, attachment_filename)
-         WHERE po_code = ?`,
-        [
-          `/uploads/payments/${files[0].name}`,
-          files[0].name,
-          po_code
-        ]
-      );
     }
 
     // Audit log
