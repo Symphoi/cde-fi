@@ -350,19 +350,6 @@ async function getPODetail(po_code) {
       [po_code]
     );
 
-    // Get SO attachments dengan file_path
-    const soAttachments = await query(
-      `SELECT 
-        attachment_code as id,
-        original_filename as name,
-        file_type as type,
-        filename,
-        file_path,
-        uploaded_at as upload_date
-       FROM sales_order_attachments 
-       WHERE so_code = ? AND is_deleted = FALSE`,
-      [po.so_code]
-    );
 
     // Combine all documents - pastikan file_path ada
     po.documents = [
@@ -371,11 +358,7 @@ async function getPODetail(po_code) {
         source: 'PO',
         file_path: doc.file_path || `/uploads/po/${doc.filename}` // Fallback jika file_path null
       })),
-      ...soAttachments.map(doc => ({ 
-        ...doc, 
-        source: 'SO',
-        file_path: doc.file_path // SO udah pasti ada file_path
-      }))
+      
     ];
 
     // Get split PO information jika ada
