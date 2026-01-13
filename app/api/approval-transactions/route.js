@@ -259,6 +259,7 @@ async function getAllApprovalPOs() {
 }
 
 // Get single PO detail dengan semua data lengkap
+// Get single PO detail dengan semua data lengkap
 async function getPODetail(po_code) {
   try {
     // Get purchase order data
@@ -285,6 +286,9 @@ async function getPODetail(po_code) {
         po.approval_notes,
         po.rejection_reason,
         po.created_at,
+        po.attachment_url,
+        po.attachment_filename,
+        po.attachment_notes,
         so.customer_name,
         so.customer_phone,
         so.customer_email,
@@ -335,31 +339,54 @@ async function getPODetail(po_code) {
       };
     });
 
-    // Get PO attachments dengan file_path
+    // Perbaikan query attachments - ambil dari purchase_order_attachments
     const poAttachments = await query(
       `SELECT 
-        payment_doc_code as id,
+        id,
+        payment_doc_code,
         name,
         type,
         filename,
         file_path,
         uploaded_at as upload_date
        FROM purchase_order_attachments 
-       WHERE payment_code IN (SELECT payment_code FROM purchase_order_payments WHERE po_code = ?) 
+       WHERE po_code = ? 
        AND is_deleted = FALSE`,
       [po_code]
     );
 
+    // Get attachments dari kolom attachment di purchase_orders
+    let documents = [];
 
-    // Combine all documents - pastikan file_path ada
-    po.documents = [
-      ...poAttachments.map(doc => ({ 
-        ...doc, 
+    // 1. Tambahkan attachment dari kolom purchase_orders (jika ada)
+    if (po.attachment_url) {
+      documents.push({
+        id: 'po-main-attachment',
+        name: po.attachment_filename || 'PO Main Document',
+        type: po.attachment_filename?.split('.').pop()?.toLowerCase() || 'pdf',
+        filename: po.attachment_filename,
+        file_path: po.attachment_url,
+        upload_date: po.created_at,
         source: 'PO',
-        file_path: doc.file_path || `/uploads/po/${doc.filename}` // Fallback jika file_path null
-      })),
-      
-    ];
+        is_main: true,
+        notes: po.attachment_notes
+      });
+    }
+
+    // 2. Tambahkan attachments dari table purchase_order_attachments
+    documents = documents.concat(
+      poAttachments.map(doc => ({
+        id: doc.id || doc.payment_doc_code,
+        name: doc.name || 'Attachment',
+        type: doc.type || 'pdf',
+        filename: doc.filename,
+        file_path: doc.file_path || doc.filename, // fallback
+        upload_date: doc.upload_date,
+        source: 'PO'
+      }))
+    );
+
+    po.documents = documents;
 
     // Get split PO information jika ada
     const splitInfo = await query(
@@ -387,6 +414,11 @@ async function getPODetail(po_code) {
       );
       po.split_sequence = sequenceResult[0]?.sequence || 1;
     }
+
+    // Hapus kolom attachment individual dari response jika mau lebih clean
+    delete po.attachment_url;
+    delete po.attachment_filename;
+    delete po.attachment_notes;
 
     return Response.json({
       success: true,
