@@ -371,11 +371,6 @@ async function getPODetail(po_code) {
         source: 'PO',
         file_path: doc.file_path || `/uploads/po/${doc.filename}` // Fallback jika file_path null
       })),
-      ...soAttachments.map(doc => ({ 
-        ...doc, 
-        source: 'SO',
-        file_path: doc.file_path // SO udah pasti ada file_path
-      }))
     ];
 
     // Get split PO information jika ada
