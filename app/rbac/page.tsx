@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,9 +10,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Search, Plus, Edit, Trash2, Save, X, History, Filter, Users, Shield, Key, Clock, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, Save, X, History, Filter, Users, Shield, Key, Clock, Loader2, AlertCircle, RefreshCw, Eye, EyeOff } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useDebounce } from '@/hooks/useDebounce';
+import { validateEmail, validatePassword } from '@/app/lib/validations';
 
 // ==================== TYPES ====================
 type PermissionCategory = 'transactions' | 'cash_advance' | 'reimburse' | 'projects' | 'settings' | 'reports' | 'delivery';
@@ -79,14 +81,13 @@ const getAuthToken = (): string | null => {
   return null;
 };
 
-// FIXED GENERIC FUNCTION
+// API Fetch dengan error handling yang lebih baik
 const apiFetch = async <T,>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<{ success: boolean; data?: T; error?: string; message?: string }> => {
   const token = getAuthToken();
   
-  // Fix headers type
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {})
@@ -107,8 +108,10 @@ const apiFetch = async <T,>(
         if (typeof window !== 'undefined') {
           window.location.href = '/login';
         }
+        throw new Error('Unauthorized');
       }
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
     }
 
     const data = await response.json();
@@ -122,9 +125,8 @@ const apiFetch = async <T,>(
   }
 };
 
-// API functions - FIXED
+// API functions
 const rbacApi = {
-  // Get semua data sekaligus
   getAllRBACData: async () => {
     return apiFetch<{
       users: User[];
@@ -134,7 +136,6 @@ const rbacApi = {
     }>('/rbac?action=all');
   },
 
-  // Users
   getUsers: async (search?: string) => {
     const url = search ? `/rbac?type=users&search=${encodeURIComponent(search)}` : '/rbac?type=users';
     return apiFetch<{ data: User[] }>(url);
@@ -171,7 +172,6 @@ const rbacApi = {
     });
   },
 
-  // Roles
   getRoles: async (search?: string) => {
     const url = search ? `/rbac?type=roles&search=${encodeURIComponent(search)}` : '/rbac?type=roles';
     return apiFetch<{ data: Role[] }>(url);
@@ -208,13 +208,11 @@ const rbacApi = {
     });
   },
 
-  // Permissions
   getPermissions: async (search?: string) => {
     const url = search ? `/rbac?type=permissions&search=${encodeURIComponent(search)}` : '/rbac?type=permissions';
     return apiFetch<{ data: Record<string, Permission[]>; allPermissions: Permission[] }>(url);
   },
 
-  // Audit logs
   getAuditLogs: async (filters?: any) => {
     const params = new URLSearchParams();
     params.append('type', 'audit');
@@ -229,7 +227,12 @@ const rbacApi = {
   },
 };
 
-// Helper function untuk group by
+// Helper function untuk remove duplicates
+const getUniqueArray = <T,>(array: T[]): T[] => {
+  return [...new Set(array)];
+};
+
+// Helper untuk group by
 const groupBy = <T, K extends keyof any>(array: T[], getKey: (item: T) => K): Record<K, T[]> => {
   return array.reduce((acc, item) => {
     const key = getKey(item);
@@ -239,11 +242,6 @@ const groupBy = <T, K extends keyof any>(array: T[], getKey: (item: T) => K): Re
     acc[key].push(item);
     return acc;
   }, {} as Record<K, T[]>);
-};
-
-// Helper untuk remove duplicates
-const getUniqueArray = <T,>(array: T[]): T[] => {
-  return [...new Set(array)];
 };
 
 // ==================== MAIN COMPONENT ====================
@@ -290,6 +288,12 @@ export default function RBACPage() {
     dateTo: ''
   });
 
+  // Password visibility
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Debounced search
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
+
   // ==================== LOAD DATA ====================
   const loadData = useCallback(async () => {
     try {
@@ -304,7 +308,6 @@ export default function RBACPage() {
         setRoles(response.data.roles || []);
         setPermissions(response.data.permissions || []);
         setAuditLogs(response.data.auditLogs || []);
-        setSuccess('Data loaded successfully');
       } else {
         setError(response.error || 'Failed to load data');
       }
@@ -321,15 +324,40 @@ export default function RBACPage() {
   }, [loadData]);
 
   // ==================== USER FUNCTIONS ====================
-  const addUser = async () => {
-    // ✅ VALIDASI PASSWORD
-    if (!newUser.name || !newUser.email || !newUser.password) {
-      setError('Name, email, and password are required');
-      return;
+  const validateUserForm = (isEdit: boolean) => {
+    if (!newUser.name.trim()) {
+      return 'Name is required';
     }
+    
+    if (!validateEmail(newUser.email)) {
+      return 'Invalid email format';
+    }
+    
+    // Validasi nama tidak mengandung format email
+    if (newUser.name.includes('@') && newUser.name.includes('.')) {
+      return 'Name should not contain email format';
+    }
+    
+    // Validasi email tidak mengandung karakter password hash
+    if (newUser.email.includes('$2a$') || newUser.email.includes('$2b$')) {
+      return 'Invalid email format';
+    }
+    
+    if (!isEdit && (!newUser.password || newUser.password.length < 6)) {
+      return 'Password must be at least 6 characters';
+    }
+    
+    if (isEdit && newUser.password && newUser.password.length < 6) {
+      return 'Password must be at least 6 characters if provided';
+    }
+    
+    return null;
+  };
 
-    if (newUser.password.length < 6) {
-      setError('Password must be at least 6 characters');
+  const addUser = async () => {
+    const validationError = validateUserForm(false);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -352,22 +380,16 @@ export default function RBACPage() {
   };
 
   const updateUser = async () => {
-    // ✅ VALIDASI (password optional saat edit)
-    if (!editingUser || !newUser.name || !newUser.email) {
-      setError('Name and email are required');
-      return;
-    }
-
-    // Password minimal 6 karakter jika diisi
-    if (newUser.password && newUser.password.length > 0 && newUser.password.length < 6) {
-      setError('Password must be at least 6 characters');
+    const validationError = validateUserForm(true);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
     try {
       setError(null);
       setSuccess(null);
-      const response = await rbacApi.updateUser(editingUser, newUser);
+      const response = await rbacApi.updateUser(editingUser!, newUser);
       
       if (response.success) {
         setSuccess(response.message || 'User updated successfully');
@@ -413,6 +435,7 @@ export default function RBACPage() {
       position: user.position || '',
       status: user.status || 'active'
     });
+    setShowPassword(false);
   };
 
   const toggleUserRole = (roleId: string) => {
@@ -425,9 +448,17 @@ export default function RBACPage() {
   };
 
   // ==================== ROLE FUNCTIONS ====================
+  const validateRoleForm = () => {
+    if (!newRole.name.trim()) {
+      return 'Role name is required';
+    }
+    return null;
+  };
+
   const addRole = async () => {
-    if (!newRole.name) {
-      setError('Role name is required');
+    const validationError = validateRoleForm();
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -450,15 +481,16 @@ export default function RBACPage() {
   };
 
   const updateRole = async () => {
-    if (!editingRole || !newRole.name) {
-      setError('Role name is required');
+    const validationError = validateRoleForm();
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
     try {
       setError(null);
       setSuccess(null);
-      const response = await rbacApi.updateRole(editingRole, newRole);
+      const response = await rbacApi.updateRole(editingRole!, newRole);
       
       if (response.success) {
         setSuccess(response.message || 'Role updated successfully');
@@ -535,7 +567,9 @@ export default function RBACPage() {
       description: '',
       permissions: []
     });
+    setShowPassword(false);
     setError(null);
+    setSuccess(null);
   };
 
   const getRoleName = (roleCode: string) => {
@@ -559,36 +593,46 @@ export default function RBACPage() {
     return colors[category] || 'bg-gray-100 text-gray-800';
   };
 
-  // ==================== FILTERED DATA ====================
-  const filteredUsers = users.filter(user =>
-    user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.department?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.position?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // ==================== FILTERED DATA (MEMOIZED) ====================
+  const filteredUsers = useMemo(() => {
+    return users.filter(user =>
+      user.name.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      user.email.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      user.department?.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      user.position?.toLowerCase().includes(debouncedSearchTerm.toLowerCase())
+    );
+  }, [users, debouncedSearchTerm]);
 
-  const filteredRoles = roles.filter(role =>
-    role.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    role.description.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredRoles = useMemo(() => {
+    return roles.filter(role =>
+      role.name.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      role.description.toLowerCase().includes(debouncedSearchTerm.toLowerCase())
+    );
+  }, [roles, debouncedSearchTerm]);
 
-  const filteredPermissions = permissions.filter(permission =>
-    permission.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    permission.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    permission.category.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredPermissions = useMemo(() => {
+    return permissions.filter(permission =>
+      permission.name.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      permission.description.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+      permission.category.toLowerCase().includes(debouncedSearchTerm.toLowerCase())
+    );
+  }, [permissions, debouncedSearchTerm]);
 
-  const filteredAuditLogs = auditLogs.filter(log =>
-    (log.userName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-     log.resourceName.toLowerCase().includes(searchTerm.toLowerCase())) &&
-    (auditFilter.action === '' || log.action === auditFilter.action) &&
-    (auditFilter.resourceType === '' || log.resourceType === auditFilter.resourceType) &&
-    (auditFilter.dateFrom === '' || log.timestamp >= auditFilter.dateFrom) &&
-    (auditFilter.dateTo === '' || log.timestamp <= auditFilter.dateTo)
-  );
+  const filteredAuditLogs = useMemo(() => {
+    return auditLogs.filter(log =>
+      (log.userName.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+       log.resourceName.toLowerCase().includes(debouncedSearchTerm.toLowerCase())) &&
+      (auditFilter.action === '' || log.action === auditFilter.action) &&
+      (auditFilter.resourceType === '' || log.resourceType === auditFilter.resourceType) &&
+      (auditFilter.dateFrom === '' || new Date(log.timestamp) >= new Date(auditFilter.dateFrom)) &&
+      (auditFilter.dateTo === '' || new Date(log.timestamp) <= new Date(auditFilter.dateTo))
+    );
+  }, [auditLogs, debouncedSearchTerm, auditFilter]);
 
   // Group permissions by category
-  const permissionsByCategory = groupBy(permissions, p => p.category);
+  const permissionsByCategory = useMemo(() => {
+    return groupBy(permissions, p => p.category);
+  }, [permissions]);
 
   // ==================== RENDER LOADING ====================
   if (loading) {
@@ -694,8 +738,18 @@ export default function RBACPage() {
                     id="name"
                     placeholder="Enter user full name"
                     value={newUser.name}
-                    onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      // Prevent entering email format in name
+                      if (!(value.includes('@') && value.includes('.'))) {
+                        setNewUser({ ...newUser, name: value });
+                      }
+                    }}
+                    className={newUser.name.includes('@') && newUser.name.includes('.') ? 'border-red-500' : ''}
                   />
+                  {newUser.name.includes('@') && newUser.name.includes('.') && (
+                    <p className="text-xs text-red-500">Name should not contain email format</p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="email">Email *</Label>
@@ -704,23 +758,55 @@ export default function RBACPage() {
                     type="email"
                     placeholder="Enter user email"
                     value={newUser.email}
-                    onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      // Prevent entering password hash in email
+                      if (!value.includes('$2a$') && !value.includes('$2b$')) {
+                        setNewUser({ ...newUser, email: value });
+                      }
+                    }}
+                    className={
+                      (newUser.email.includes('$2a$') || newUser.email.includes('$2b$')) 
+                        ? 'border-red-500' 
+                        : ''
+                    }
                   />
+                  {(newUser.email.includes('$2a$') || newUser.email.includes('$2b$')) && (
+                    <p className="text-xs text-red-500">Invalid email format</p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="password">
                     {editingUser ? 'New Password (optional)' : 'Password *'}
                   </Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder={editingUser ? "Leave empty to keep current password" : "Enter password (min 6 characters)"}
-                    value={newUser.password}
-                    onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-                  />
-                  {!editingUser && (
-                    <p className="text-xs text-gray-500 mt-1">Password must be at least 6 characters</p>
-                  )}
+                  <div className="relative">
+                    <Input
+                      id="password"
+                      type={showPassword ? "text" : "password"}
+                      placeholder={editingUser ? "Leave empty to keep current password" : "Enter password (min 6 characters)"}
+                      value={newUser.password}
+                      onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                      className="pr-10"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3"
+                      onClick={() => setShowPassword(!showPassword)}
+                    >
+                      {showPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {editingUser 
+                      ? "Leave empty to keep current password" 
+                      : "Password must be at least 6 characters"}
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="department">Department</Label>
@@ -837,73 +923,94 @@ export default function RBACPage() {
                   {filteredUsers.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-8 text-gray-500">
-                        No users found
+                        <Users className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+                        <p>No users found</p>
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredUsers.map(user => (
-                      <TableRow key={user.user_code}>
-                        <TableCell>
-                          <div>
-                            <div className="font-medium">{user.name}</div>
-                            <div className="text-sm text-gray-500">{user.email}</div>
-                            {user.position && (
-                              <div className="text-xs text-gray-400">{user.position}</div>
-                            )}
-                            <div className="text-xs text-gray-500">
-                              ID: {user.user_code}
+                    filteredUsers.map(user => {
+                      const uniqueRoles = getUniqueArray(user.roles || []);
+                      return (
+                        <TableRow key={user.user_code}>
+                          <TableCell>
+                            <div>
+                              <div className="font-medium">{user.name}</div>
+                              <div className="text-sm text-gray-500">{user.email}</div>
+                              {user.position && (
+                                <div className="text-xs text-gray-400">{user.position}</div>
+                              )}
+                              <div className="text-xs text-gray-500">
+                                ID: {user.user_code}
+                              </div>
                             </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>{user.department || '-'}</TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1">
-                            {getUniqueArray(user.roles || []).map(roleId => {
-                              const role = roles.find(r => r.role_code === roleId);
-                              return role ? (
-                                <Badge 
-                                  key={`${user.user_code}-${roleId}`} 
-                                  variant="secondary" 
-                                  className="text-xs"
-                                >
-                                  {role.name}
-                                </Badge>
-                              ) : null;
-                            })}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={user.status === 'active' ? 'default' : 'secondary'}>
-                            {user.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-sm text-gray-500">
-                          {user.lastLogin ? new Date(user.lastLogin).toLocaleDateString() : 'Never'}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex space-x-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => startEditUser(user)}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => deleteUser(user.user_code)}
-                              disabled={user.roles.some(roleId => {
+                          </TableCell>
+                          <TableCell>{user.department || '-'}</TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-1">
+                              {uniqueRoles.map(roleId => {
                                 const role = roles.find(r => r.role_code === roleId);
-                                return role?.isSystemRole && role.name.toLowerCase().includes('admin');
+                                return role ? (
+                                  <Badge 
+                                    key={`${user.user_code}-${roleId}`} 
+                                    variant="secondary" 
+                                    className="text-xs"
+                                  >
+                                    {role.name}
+                                  </Badge>
+                                ) : null;
                               })}
+                              {uniqueRoles.length === 0 && (
+                                <span className="text-gray-400 text-sm">No roles</span>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge 
+                              variant={user.status === 'active' ? 'default' : 'secondary'}
+                              className={user.status === 'active' ? 'bg-green-100 text-green-800 hover:bg-green-100' : ''}
                             >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
+                              {user.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-sm text-gray-500">
+                            {user.lastLogin 
+                              ? new Date(user.lastLogin).toLocaleDateString('id-ID', {
+                                  day: '2-digit',
+                                  month: 'short',
+                                  year: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })
+                              : 'Never'}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex space-x-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => startEditUser(user)}
+                                title="Edit user"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => deleteUser(user.user_code)}
+                                disabled={user.roles.some(roleId => {
+                                  const role = roles.find(r => r.role_code === roleId);
+                                  return role?.isSystemRole && role.name.toLowerCase().includes('admin');
+                                })}
+                                title="Delete user"
+                                className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -947,29 +1054,40 @@ export default function RBACPage() {
               
               <div className="space-y-4">
                 <Label>Permissions</Label>
-                <div className="border rounded-lg">
+                <div className="border rounded-lg max-h-[400px] overflow-y-auto">
                   {Object.entries(permissionsByCategory).map(([category, categoryPermissions]) => (
                     <div key={category} className="border-b last:border-b-0">
-                      <div className="p-3 bg-gray-50">
-                        <Label className="text-sm font-medium capitalize">{category} Permissions</Label>
+                      <div className="p-3 bg-gray-50 sticky top-0 z-10">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-sm font-medium capitalize">
+                            {category.replace('_', ' ')} Permissions
+                          </Label>
+                          <Badge variant="outline" className={getCategoryColor(category)}>
+                            {categoryPermissions.length}
+                          </Badge>
+                        </div>
                       </div>
                       <div className="p-3 grid grid-cols-1 md:grid-cols-2 gap-2">
                         {categoryPermissions.map(permission => (
-                          <div key={permission.code} className="flex items-center space-x-2">
+                          <div key={permission.code} className="flex items-center space-x-2 p-2 hover:bg-gray-50 rounded">
                             <Checkbox
                               id={`perm-${permission.code}`}
                               checked={newRole.permissions.includes(permission.code)}
                               onCheckedChange={() => toggleRolePermission(permission.code)}
                             />
-                            <Label htmlFor={`perm-${permission.code}`} className="text-sm flex-1">
+                            <Label htmlFor={`perm-${permission.code}`} className="text-sm flex-1 cursor-pointer">
                               <div className="font-medium">{permission.name}</div>
                               <div className="text-xs text-gray-500">{permission.description}</div>
+                              <div className="text-xs text-gray-400">Code: {permission.code}</div>
                             </Label>
                           </div>
                         ))}
                       </div>
                     </div>
                   ))}
+                </div>
+                <div className="text-sm text-gray-500">
+                  Selected: {newRole.permissions.length} permissions
                 </div>
               </div>
 
@@ -995,7 +1113,7 @@ export default function RBACPage() {
             </CardContent>
           </Card>
 
-          {/* Roles Table - FIXED: Remove duplicate permissions */}
+          {/* Roles Table */}
           <Card>
             <CardHeader>
               <CardTitle>Roles</CardTitle>
@@ -1016,14 +1134,13 @@ export default function RBACPage() {
                   {filteredRoles.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center py-8 text-gray-500">
-                        No roles found
+                        <Shield className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+                        <p>No roles found</p>
                       </TableCell>
                     </TableRow>
                   ) : (
                     filteredRoles.map(role => {
-                      // Remove duplicate permissions sebelum render
                       const uniquePermissions = getUniqueArray(role.permissions || []);
-                      
                       return (
                         <TableRow key={role.role_code}>
                           <TableCell className="font-medium">
@@ -1037,29 +1154,47 @@ export default function RBACPage() {
                               </div>
                             </div>
                           </TableCell>
-                          <TableCell>{role.description || '-'}</TableCell>
+                          <TableCell>
+                            <div className="max-w-[200px] truncate" title={role.description}>
+                              {role.description || '-'}
+                            </div>
+                          </TableCell>
                           <TableCell>
                             <div className="flex flex-wrap gap-1 max-w-[300px]">
-                              {uniquePermissions.slice(0, 3).map(permissionCode => (
-                                <Badge 
-                                  key={`${role.role_code}-${permissionCode}`} 
-                                  variant="outline" 
-                                  className="text-xs"
-                                >
-                                  {getPermissionName(permissionCode)}
-                                </Badge>
-                              ))}
+                              {uniquePermissions.slice(0, 3).map(permissionCode => {
+                                const permission = permissions.find(p => p.code === permissionCode);
+                                return (
+                                  <Badge 
+                                    key={`${role.role_code}-${permissionCode}`} 
+                                    variant="outline" 
+                                    className="text-xs"
+                                    title={permission?.description}
+                                  >
+                                    {permission?.name || permissionCode}
+                                  </Badge>
+                                );
+                              })}
                               {uniquePermissions.length > 3 && (
                                 <Badge variant="secondary" className="text-xs">
                                   +{uniquePermissions.length - 3} more
                                 </Badge>
                               )}
+                              {uniquePermissions.length === 0 && (
+                                <span className="text-gray-400 text-sm">No permissions</span>
+                              )}
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline">
-                              {role.userCount || 0} users
-                            </Badge>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline">
+                                {role.userCount || 0} users
+                              </Badge>
+                              {role.userCount > 0 && (
+                                <span className="text-xs text-gray-500">
+                                  in system
+                                </span>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell>
                             <div className="flex space-x-2">
@@ -1067,6 +1202,8 @@ export default function RBACPage() {
                                 variant="outline"
                                 size="sm"
                                 onClick={() => startEditRole(role)}
+                                disabled={role.isSystemRole}
+                                title={role.isSystemRole ? "System role cannot be edited" : "Edit role"}
                               >
                                 <Edit className="h-4 w-4" />
                               </Button>
@@ -1074,7 +1211,15 @@ export default function RBACPage() {
                                 variant="outline"
                                 size="sm"
                                 onClick={() => deleteRole(role.role_code)}
-                                disabled={role.isSystemRole}
+                                disabled={role.isSystemRole || role.userCount > 0}
+                                title={
+                                  role.isSystemRole 
+                                    ? "System role cannot be deleted" 
+                                    : role.userCount > 0 
+                                      ? "Role has assigned users" 
+                                      : "Delete role"
+                                }
+                                className="text-red-600 hover:text-red-700 hover:bg-red-50"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
@@ -1103,7 +1248,7 @@ export default function RBACPage() {
                   <div key={category} className="border rounded-lg">
                     <div className="p-4 bg-gray-50 border-b">
                       <div className="flex items-center justify-between">
-                        <h3 className="text-lg font-semibold capitalize">{category}</h3>
+                        <h3 className="text-lg font-semibold capitalize">{category.replace('_', ' ')}</h3>
                         <Badge variant="secondary" className={getCategoryColor(category)}>
                           {categoryPermissions.length} permissions
                         </Badge>
@@ -1121,50 +1266,60 @@ export default function RBACPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {categoryPermissions.map(permission => (
-                            <TableRow key={permission.code}>
-                              <TableCell className="font-medium">
-                                <div>
-                                  {permission.name}
-                                  <div className="text-xs text-gray-500">
-                                    {permission.code}
+                          {categoryPermissions.map(permission => {
+                            const assignedRoles = roles.filter(role => 
+                              role.permissions.includes(permission.code)
+                            );
+                            return (
+                              <TableRow key={permission.code}>
+                                <TableCell className="font-medium">
+                                  <div>
+                                    {permission.name}
+                                    <div className="text-xs text-gray-500">
+                                      {permission.code}
+                                    </div>
                                   </div>
-                                </div>
-                              </TableCell>
-                              <TableCell>{permission.description}</TableCell>
-                              <TableCell>
-                                <Badge variant="outline" className="capitalize">
-                                  {permission.module}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>
-                                <Badge variant="secondary" className="capitalize">
-                                  {permission.action.replace('_', ' ')}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex flex-wrap gap-1">
-                                  {roles
-                                    .filter(role => role.permissions.includes(permission.code))
-                                    .slice(0, 2)
-                                    .map(role => (
+                                </TableCell>
+                                <TableCell className="max-w-xs">
+                                  <div className="truncate" title={permission.description}>
+                                    {permission.description}
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="outline" className="capitalize">
+                                    {permission.module}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="secondary" className="capitalize">
+                                    {permission.action.replace('_', ' ')}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex flex-wrap gap-1">
+                                    {assignedRoles.slice(0, 2).map(role => (
                                       <Badge 
                                         key={`${permission.code}-${role.role_code}`} 
                                         variant="outline" 
                                         className="text-xs"
+                                        title={role.description}
                                       >
                                         {role.name}
                                       </Badge>
                                     ))}
-                                  {roles.filter(role => role.permissions.includes(permission.code)).length > 2 && (
-                                    <Badge variant="secondary" className="text-xs">
-                                      +{roles.filter(role => role.permissions.includes(permission.code)).length - 2} more
-                                    </Badge>
-                                  )}
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          ))}
+                                    {assignedRoles.length > 2 && (
+                                      <Badge variant="secondary" className="text-xs">
+                                        +{assignedRoles.length - 2} more
+                                      </Badge>
+                                    )}
+                                    {assignedRoles.length === 0 && (
+                                      <span className="text-gray-400 text-sm">Not assigned</span>
+                                    )}
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     </div>
@@ -1241,7 +1396,7 @@ export default function RBACPage() {
                     className="w-[180px]"
                   />
                 </div>
-                <div className="flex items-end">
+                <div className="flex items-end gap-2">
                   <Button variant="outline" onClick={() => setAuditFilter({action: '', resourceType: '', dateFrom: '', dateTo: ''})}>
                     <Filter className="h-4 w-4 mr-2" />
                     Reset Filters
@@ -1250,82 +1405,92 @@ export default function RBACPage() {
               </div>
 
               {/* Audit Logs Table */}
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Timestamp</TableHead>
-                    <TableHead>User</TableHead>
-                    <TableHead>Action</TableHead>
-                    <TableHead>Resource</TableHead>
-                    <TableHead>Changes</TableHead>
-                    <TableHead>Notes</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredAuditLogs.length === 0 ? (
+              <div className="border rounded-lg overflow-hidden">
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-gray-500">
-                        <History className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-                        <p>No audit logs found matching your criteria</p>
-                      </TableCell>
+                      <TableHead>Timestamp</TableHead>
+                      <TableHead>User</TableHead>
+                      <TableHead>Action</TableHead>
+                      <TableHead>Resource</TableHead>
+                      <TableHead>Changes</TableHead>
+                      <TableHead>Notes</TableHead>
                     </TableRow>
-                  ) : (
-                    filteredAuditLogs.map(log => (
-                      <TableRow key={log.id}>
-                        <TableCell className="whitespace-nowrap">
-                          <div className="flex items-center gap-2">
-                            <Clock className="h-4 w-4 text-gray-400" />
-                            {new Date(log.timestamp).toLocaleString()}
-                          </div>
-                        </TableCell>
-                        <TableCell className="font-medium">{log.userName}</TableCell>
-                        <TableCell>
-                          <Badge variant={
-                            log.action === 'create' ? 'default' :
-                            log.action === 'update' ? 'secondary' :
-                            log.action === 'delete' ? 'destructive' :
-                            log.action === 'assign' ? 'default' : 'secondary'
-                          }>
-                            {log.action.toUpperCase()}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div>
-                            <div className="font-medium capitalize">{log.resourceType}</div>
-                            <div className="text-sm text-gray-500">{log.resourceName}</div>
-                            <div className="text-xs text-gray-400">ID: {log.resourceId}</div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {log.oldValues && log.newValues ? (
-                            <div className="text-xs space-y-1">
-                              <div className="text-red-600 line-through">
-                                {JSON.stringify(log.oldValues)}
-                              </div>
-                              <div className="text-green-600">
-                                {JSON.stringify(log.newValues)}
-                              </div>
-                            </div>
-                          ) : log.oldValues ? (
-                            <div className="text-red-600 line-through text-xs">
-                              Deleted: {JSON.stringify(log.oldValues)}
-                            </div>
-                          ) : log.newValues ? (
-                            <div className="text-green-600 text-xs">
-                              Created: {JSON.stringify(log.newValues)}
-                            </div>
-                          ) : (
-                            <span className="text-gray-400 text-sm">No changes recorded</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-sm text-gray-600 max-w-[200px] truncate">
-                          {log.notes}
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAuditLogs.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                          <History className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+                          <p>No audit logs found matching your criteria</p>
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+                    ) : (
+                      filteredAuditLogs.map(log => (
+                        <TableRow key={log.id} className="hover:bg-gray-50">
+                          <TableCell className="whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <Clock className="h-4 w-4 text-gray-400" />
+                              {new Date(log.timestamp).toLocaleDateString('id-ID', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </div>
+                          </TableCell>
+                          <TableCell className="font-medium">{log.userName}</TableCell>
+                          <TableCell>
+                            <Badge variant={
+                              log.action === 'create' ? 'default' :
+                              log.action === 'update' ? 'secondary' :
+                              log.action === 'delete' ? 'destructive' :
+                              log.action === 'assign' ? 'default' : 'secondary'
+                            }>
+                              {log.action.toUpperCase()}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <div>
+                              <div className="font-medium capitalize">{log.resourceType.replace('_', ' ')}</div>
+                              <div className="text-sm text-gray-500">{log.resourceName}</div>
+                              <div className="text-xs text-gray-400">ID: {log.resourceId}</div>
+                            </div>
+                          </TableCell>
+                          <TableCell className="max-w-xs">
+                            {log.oldValues && log.newValues ? (
+                              <div className="text-xs space-y-1">
+                                <div className="text-red-600 line-through truncate" title={JSON.stringify(log.oldValues)}>
+                                  {JSON.stringify(log.oldValues)}
+                                </div>
+                                <div className="text-green-600 truncate" title={JSON.stringify(log.newValues)}>
+                                  {JSON.stringify(log.newValues)}
+                                </div>
+                              </div>
+                            ) : log.oldValues ? (
+                              <div className="text-red-600 line-through text-xs truncate" title={JSON.stringify(log.oldValues)}>
+                                Deleted: {JSON.stringify(log.oldValues)}
+                              </div>
+                            ) : log.newValues ? (
+                              <div className="text-green-600 text-xs truncate" title={JSON.stringify(log.newValues)}>
+                                Created: {JSON.stringify(log.newValues)}
+                              </div>
+                            ) : (
+                              <span className="text-gray-400 text-sm">No changes recorded</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-sm text-gray-600 max-w-[200px]">
+                            <div className="truncate" title={log.notes}>
+                              {log.notes}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

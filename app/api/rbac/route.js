@@ -1,5 +1,227 @@
+'use server';
+
 import { query } from '@/app/lib/db';
 import { verifyToken } from '@/app/lib/auth';
+import { pool } from '@/app/lib/db';
+
+// ==================== HELPER FUNCTIONS ====================
+const safeJsonParse = (value) => {
+  if (!value) return null;
+  
+  // Jika sudah object, langsung return
+  if (typeof value === 'object') {
+    return value;
+  }
+  
+  // Jika string, coba parse
+  if (typeof value === 'string') {
+    try {
+      // Cek jika string kosong atau 'null'
+      if (value.trim() === '' || value.toLowerCase() === 'null') {
+        return null;
+      }
+      return JSON.parse(value);
+    } catch (error) {
+      console.warn('JSON parse error:', error.message, 'Value:', value.substring(0, 100));
+      // Jika tidak bisa di-parse, return sebagai string
+      return value;
+    }
+  }
+  
+  return value;
+};
+
+const validateUserData = (userData, isCreate = false) => {
+  const { name, email, password, roles = [] } = userData;
+  
+  // Validasi nama
+  if (!name || name.trim() === '') {
+    return 'Nama harus diisi';
+  }
+  
+  // Cegah nama mengandung format email
+  if (name.includes('@') && name.includes('.')) {
+    return 'Nama tidak boleh mengandung format email';
+  }
+  
+  // Validasi email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!email || !emailRegex.test(email)) {
+    return 'Format email tidak valid';
+  }
+  
+  // Cegah email mengandung karakter password hash
+  if (email.includes('$2a$') || email.includes('$2b$')) {
+    return 'Email tidak valid';
+  }
+  
+  // Validasi password untuk create
+  if (isCreate) {
+    if (!password || password.length < 6) {
+      return 'Password minimal 6 karakter';
+    }
+  } else {
+    // Untuk update, password optional tapi jika diisi harus valid
+    if (password && password.length > 0 && password.length < 6) {
+      return 'Password minimal 6 karakter';
+    }
+  }
+  
+  // Validasi roles array
+  if (!Array.isArray(roles)) {
+    return 'Roles harus berupa array';
+  }
+  
+  return null; // No error
+};
+
+const sanitizeForAudit = (data) => {
+  if (!data) return data;
+  
+  const { password_hash, password, ...safeData } = data;
+  return safeData;
+};
+
+async function updateUserRoles(connection, user_code, newRoles, decoded) {
+  // Get current roles
+  const [currentRoles] = await connection.query(
+    'SELECT role_code FROM user_roles WHERE user_code = ? AND is_deleted = 0',
+    [user_code]
+  );
+  
+  const currentRoleCodes = currentRoles.map(r => r.role_code);
+  
+  // Roles to remove
+  const rolesToRemove = currentRoleCodes.filter(
+    role => !newRoles.includes(role)
+  );
+  
+  if (rolesToRemove.length > 0) {
+    // Build IN clause manually untuk menghindari SQL injection
+    const placeholders = rolesToRemove.map(() => '?').join(',');
+    await connection.query(
+      `UPDATE user_roles 
+       SET is_deleted = 1, deleted_at = NOW(), updated_by = ?, deleted_by = ?
+       WHERE user_code = ? AND role_code IN (${placeholders})`,
+      [decoded.user_code, decoded.user_code, user_code, ...rolesToRemove]
+    );
+  }
+  
+  // Roles to add
+  const rolesToAdd = newRoles.filter(
+    role => !currentRoleCodes.includes(role)
+  );
+  
+  for (const role_code of rolesToAdd) {
+    // Check if already exists (soft deleted)
+    const [existing] = await connection.query(
+      'SELECT id FROM user_roles WHERE user_code = ? AND role_code = ?',
+      [user_code, role_code]
+    );
+    
+    const userRoleCode = `UR-${Date.now()}-${process.pid}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    if (existing.length > 0) {
+      // Reactivate existing
+      await connection.query(
+        `UPDATE user_roles 
+         SET is_deleted = 0, deleted_at = NULL, updated_at = NOW(),
+             user_role_code = ?, updated_by = ?
+         WHERE user_code = ? AND role_code = ?`,
+        [userRoleCode, decoded.user_code, user_code, role_code]
+      );
+    } else {
+      // Insert new
+      await connection.query(
+        `INSERT INTO user_roles 
+         (user_role_code, user_code, role_code, created_by)
+         VALUES (?, ?, ?, ?)`,
+        [userRoleCode, user_code, role_code, decoded.user_code]
+      );
+    }
+  }
+}
+
+async function updateRolePermissions(connection, role_code, newPermissions, decoded) {
+  // Get current permissions
+  const [currentPermissions] = await connection.query(
+    'SELECT permission_code FROM role_permissions WHERE role_code = ? AND is_deleted = 0',
+    [role_code]
+  );
+  
+  const currentPermCodes = currentPermissions.map(p => p.permission_code);
+  
+  // Permissions to remove
+  const permsToRemove = currentPermCodes.filter(
+    perm => !newPermissions.includes(perm)
+  );
+  
+  if (permsToRemove.length > 0) {
+    const placeholders = permsToRemove.map(() => '?').join(',');
+    await connection.query(
+      `UPDATE role_permissions 
+       SET is_deleted = 1, deleted_at = NOW(), updated_by = ?, deleted_by = ?
+       WHERE role_code = ? AND permission_code IN (${placeholders})`,
+      [decoded.user_code, decoded.user_code, role_code, ...permsToRemove]
+    );
+  }
+  
+  // Permissions to add
+  const permsToAdd = newPermissions.filter(
+    perm => !currentPermCodes.includes(perm)
+  );
+  
+  for (const permission_code of permsToAdd) {
+    // Check if already exists (soft deleted)
+    const [existing] = await connection.query(
+      'SELECT id FROM role_permissions WHERE role_code = ? AND permission_code = ?',
+      [role_code, permission_code]
+    );
+    
+    const rolePermissionCode = `RP-${Date.now()}-${process.pid}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    if (existing.length > 0) {
+      // Reactivate existing
+      await connection.query(
+        `UPDATE role_permissions 
+         SET is_deleted = 0, deleted_at = NULL, updated_at = NOW(),
+             role_permission_code = ?, updated_by = ?
+         WHERE role_code = ? AND permission_code = ?`,
+        [rolePermissionCode, decoded.user_code, role_code, permission_code]
+      );
+    } else {
+      // Insert new
+      await connection.query(
+        `INSERT INTO role_permissions 
+         (role_permission_code, role_code, permission_code, created_by)
+         VALUES (?, ?, ?, ?)`,
+        [rolePermissionCode, role_code, permission_code, decoded.user_code]
+      );
+    }
+  }
+}
+
+async function createAuditLog(connection, user_code, user_name, action, resource_type, resource_id, resource_name, old_values, new_values, notes) {
+  const audit_code = `AUDIT-${Date.now()}-${process.pid}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  await connection.query(
+    `INSERT INTO user_logs 
+     (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, old_values, new_values, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      audit_code,
+      user_code,
+      user_name,
+      action,
+      resource_type,
+      resource_id,
+      resource_name,
+      old_values ? JSON.stringify(old_values) : null,
+      new_values ? JSON.stringify(new_values) : null,
+      notes
+    ]
+  );
+}
 
 // ==================== GET - Handle semua data RBAC ====================
 export async function GET(request) {
@@ -41,75 +263,157 @@ export async function GET(request) {
 
 // Get semua data RBAC sekaligus
 async function handleGetAllRBACData() {
-  // Get users dengan roles
-  const users = await query(`
-    SELECT 
-      u.id, u.user_code, u.name, u.email, u.department, u.position, u.status, 
-      u.last_login, u.created_at,
-      GROUP_CONCAT(DISTINCT ur.role_code) as role_codes
-    FROM users u
-    LEFT JOIN user_roles ur ON u.user_code = ur.user_code AND ur.is_deleted = 0
-    WHERE u.is_deleted = 0
-    GROUP BY u.id
-    ORDER BY u.created_at DESC
-  `);
+  try {
+    // Get users dengan roles
+    const users = await query(`
+      SELECT 
+        u.id, u.user_code, u.name, u.email, u.department, u.position, u.status, 
+        u.last_login, u.created_at,
+        GROUP_CONCAT(DISTINCT ur.role_code) as role_codes
+      FROM users u
+      LEFT JOIN user_roles ur ON u.user_code = ur.user_code AND ur.is_deleted = 0
+      WHERE u.is_deleted = 0
+      GROUP BY u.id
+      ORDER BY u.created_at DESC
+    `);
 
-  // Get roles dengan permissions - FIXED: ADDED DISTINCT
-  const roles = await query(`
-    SELECT 
-      r.id, r.role_code, r.name, r.description, r.is_system_role, r.created_at,
-      GROUP_CONCAT(DISTINCT rp.permission_code) as permission_codes,
-      COUNT(DISTINCT ur.user_code) as user_count
-    FROM roles r
-    LEFT JOIN role_permissions rp ON r.role_code = rp.role_code AND rp.is_deleted = 0
-    LEFT JOIN user_roles ur ON r.role_code = ur.role_code AND ur.is_deleted = 0
-    WHERE r.is_deleted = 0
-    GROUP BY r.id
-    ORDER BY r.created_at DESC
-  `);
+    // Get roles dengan permissions
+    const roles = await query(`
+      SELECT 
+        r.id, r.role_code, r.name, r.description, r.is_system_role, r.created_at,
+        GROUP_CONCAT(DISTINCT rp.permission_code) as permission_codes,
+        COUNT(DISTINCT ur.user_code) as user_count
+      FROM roles r
+      LEFT JOIN role_permissions rp ON r.role_code = rp.role_code AND rp.is_deleted = 0
+      LEFT JOIN user_roles ur ON r.role_code = ur.role_code AND ur.is_deleted = 0
+      WHERE r.is_deleted = 0
+      GROUP BY r.id
+      ORDER BY r.created_at DESC
+    `);
 
-  // Get permissions
-  const permissions = await query(`
-    SELECT 
-      id,
-      permission_code as code,
-      name,
-      description,
-      category,
-      module,
-      action,
-      created_at
-    FROM permissions 
-    WHERE is_deleted = 0 
-    ORDER BY category, module, action
-  `);
+    // Get permissions
+    const permissions = await query(`
+      SELECT 
+        id,
+        permission_code as code,
+        name,
+        description,
+        category,
+        module,
+        action,
+        created_at
+      FROM permissions 
+      WHERE is_deleted = 0 
+      ORDER BY category, module, action
+    `);
 
-  // Get audit logs untuk RBAC saja
-  const auditLogs = await query(`
-    SELECT 
-      id,
-      audit_code as code,
-      user_code,
-      user_name,
-      action,
-      resource_type,
-      resource_code,
-      resource_name,
-      old_values,
-      new_values,
-      timestamp,
-      notes
-    FROM user_logs 
-    WHERE is_deleted = 0 
-    AND resource_type IN ('user', 'role', 'permission', 'user_role', 'role_permission')
-    ORDER BY timestamp DESC 
-    LIMIT 100
-  `);
+    // Get audit logs untuk RBAC saja
+    const auditLogs = await query(`
+      SELECT 
+        id,
+        audit_code as code,
+        user_code,
+        user_name,
+        action,
+        resource_type,
+        resource_code,
+        resource_name,
+        old_values,
+        new_values,
+        timestamp,
+        notes
+      FROM user_logs 
+      WHERE is_deleted = 0 
+      AND resource_type IN ('user', 'role', 'permission', 'user_role', 'role_permission')
+      ORDER BY timestamp DESC 
+      LIMIT 100
+    `);
 
-  return Response.json({
-    success: true,
-    data: {
-      users: users.map(user => ({
+    return Response.json({
+      success: true,
+      data: {
+        users: users.map(user => ({
+          id: user.id,
+          user_code: user.user_code,
+          name: user.name,
+          email: user.email,
+          department: user.department,
+          position: user.position,
+          status: user.status,
+          lastLogin: user.last_login,
+          createdAt: user.created_at,
+          roles: user.role_codes ? user.role_codes.split(',').filter(r => r) : []
+        })),
+        roles: roles.map(role => ({
+          id: role.id,
+          role_code: role.role_code,
+          name: role.name,
+          description: role.description,
+          isSystemRole: Boolean(role.is_system_role),
+          createdAt: role.created_at,
+          permissions: role.permission_codes ? role.permission_codes.split(',').filter(p => p) : [],
+          userCount: parseInt(role.user_count) || 0
+        })),
+        permissions: permissions.map(perm => ({
+          id: perm.id,
+          code: perm.code,
+          name: perm.name,
+          description: perm.description,
+          category: perm.category,
+          module: perm.module,
+          action: perm.action,
+          createdAt: perm.created_at
+        })),
+        auditLogs: auditLogs.map(log => ({
+          id: log.id,
+          code: log.code,
+          userId: log.user_code,
+          userName: log.user_name,
+          action: log.action,
+          resourceType: log.resource_type,
+          resourceId: log.resource_code,
+          resourceName: log.resource_name,
+          oldValues: safeJsonParse(log.old_values),
+          newValues: safeJsonParse(log.new_values),
+          timestamp: log.timestamp,
+          notes: log.notes
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Get all RBAC error:', error);
+    return Response.json({ error: 'Gagal memuat data' }, { status: 500 });
+  }
+}
+
+// Get users dengan filter search
+async function handleGetUsers(search) {
+  try {
+    let sql = `
+      SELECT 
+        u.id, u.user_code, u.name, u.email, u.department, u.position, u.status, 
+        u.last_login, u.created_at,
+        GROUP_CONCAT(DISTINCT ur.role_code) as role_codes
+      FROM users u
+      LEFT JOIN user_roles ur ON u.user_code = ur.user_code AND ur.is_deleted = 0
+      WHERE u.is_deleted = 0
+    `;
+    
+    const params = [];
+
+    if (search) {
+      sql += ` AND (u.name LIKE ? OR u.email LIKE ? OR u.department LIKE ?)`;
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm, searchTerm);
+    }
+
+    sql += ` GROUP BY u.id ORDER BY u.created_at DESC`;
+
+    const users = await query(sql, params);
+
+    return Response.json({
+      success: true,
+      data: users.map(user => ({
         id: user.id,
         user_code: user.user_code,
         name: user.name,
@@ -119,19 +423,111 @@ async function handleGetAllRBACData() {
         status: user.status,
         lastLogin: user.last_login,
         createdAt: user.created_at,
-        roles: user.role_codes ? user.role_codes.split(',') : []
-      })),
-      roles: roles.map(role => ({
+        roles: user.role_codes ? user.role_codes.split(',').filter(r => r) : []
+      }))
+    });
+  } catch (error) {
+    console.error('Get users error:', error);
+    return Response.json({ error: 'Gagal memuat data users' }, { status: 500 });
+  }
+}
+
+// Get roles dengan filter search
+async function handleGetRoles(search) {
+  try {
+    let sql = `
+      SELECT 
+        r.id, r.role_code, r.name, r.description, r.is_system_role, r.created_at,
+        GROUP_CONCAT(DISTINCT rp.permission_code) as permission_codes,
+        COUNT(DISTINCT ur.user_code) as user_count
+      FROM roles r
+      LEFT JOIN role_permissions rp ON r.role_code = rp.role_code AND rp.is_deleted = 0
+      LEFT JOIN user_roles ur ON r.role_code = ur.role_code AND ur.is_deleted = 0
+      WHERE r.is_deleted = 0
+    `;
+    
+    const params = [];
+
+    if (search) {
+      sql += ` AND (r.name LIKE ? OR r.description LIKE ?)`;
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm);
+    }
+
+    sql += ` GROUP BY r.id ORDER BY r.created_at DESC`;
+
+    const roles = await query(sql, params);
+
+    return Response.json({
+      success: true,
+      data: roles.map(role => ({
         id: role.id,
         role_code: role.role_code,
         name: role.name,
         description: role.description,
         isSystemRole: Boolean(role.is_system_role),
         createdAt: role.created_at,
-        permissions: role.permission_codes ? role.permission_codes.split(',') : [],
+        permissions: role.permission_codes ? role.permission_codes.split(',').filter(p => p) : [],
         userCount: parseInt(role.user_count) || 0
-      })),
-      permissions: permissions.map(perm => ({
+      }))
+    });
+  } catch (error) {
+    console.error('Get roles error:', error);
+    return Response.json({ error: 'Gagal memuat data roles' }, { status: 500 });
+  }
+}
+
+// Get permissions dengan filter search
+async function handleGetPermissions(search) {
+  try {
+    let sql = `
+      SELECT 
+        id,
+        permission_code as code,
+        name,
+        description,
+        category,
+        module,
+        action,
+        created_at
+      FROM permissions 
+      WHERE is_deleted = 0
+    `;
+    
+    const params = [];
+
+    if (search) {
+      sql += ` AND (name LIKE ? OR description LIKE ? OR category LIKE ?)`;
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm, searchTerm);
+    }
+
+    sql += ` ORDER BY category, module, action`;
+
+    const permissions = await query(sql, params);
+
+    // Group by category untuk frontend
+    const permissionsByCategory = permissions.reduce((acc, permission) => {
+      if (!acc[permission.category]) {
+        acc[permission.category] = [];
+      }
+      acc[permission.category].push({
+        id: permission.id,
+        code: permission.code,
+        name: permission.name,
+        description: permission.description,
+        category: permission.category,
+        module: permission.module,
+        action: permission.action,
+        createdAt: permission.created_at
+      });
+      return acc;
+    }, {});
+
+    return Response.json({
+      success: true,
+      data: permissionsByCategory,
+      allPermissions: permissions.map(perm => ({
         id: perm.id,
         code: perm.code,
         name: perm.name,
@@ -140,8 +536,78 @@ async function handleGetAllRBACData() {
         module: perm.module,
         action: perm.action,
         createdAt: perm.created_at
-      })),
-      auditLogs: auditLogs.map(log => ({
+      }))
+    });
+  } catch (error) {
+    console.error('Get permissions error:', error);
+    return Response.json({ error: 'Gagal memuat data permissions' }, { status: 500 });
+  }
+}
+
+// Get audit logs dengan filter
+async function handleGetAuditLogs(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const action = searchParams.get('action');
+    const resourceType = searchParams.get('resourceType');
+    const dateFrom = searchParams.get('dateFrom');
+    const dateTo = searchParams.get('dateTo');
+    const search = searchParams.get('search') || '';
+
+    let sql = `
+      SELECT 
+        id,
+        audit_code as code,
+        user_code,
+        user_name,
+        action,
+        resource_type,
+        resource_code,
+        resource_name,
+        old_values,
+        new_values,
+        timestamp,
+        notes
+      FROM user_logs 
+      WHERE is_deleted = 0
+      AND resource_type IN ('user', 'role', 'permission', 'user_role', 'role_permission')
+    `;
+    
+    const params = [];
+
+    if (search) {
+      sql += ` AND (user_name LIKE ? OR resource_name LIKE ?)`;
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm);
+    }
+
+    if (action && action !== 'all') {
+      sql += ` AND action = ?`;
+      params.push(action);
+    }
+
+    if (resourceType && resourceType !== 'all') {
+      sql += ` AND resource_type = ?`;
+      params.push(resourceType);
+    }
+
+    if (dateFrom) {
+      sql += ` AND DATE(timestamp) >= ?`;
+      params.push(dateFrom);
+    }
+
+    if (dateTo) {
+      sql += ` AND DATE(timestamp) <= ?`;
+      params.push(dateTo);
+    }
+
+    sql += ` ORDER BY timestamp DESC LIMIT 100`;
+
+    const auditLogs = await query(sql, params);
+
+    return Response.json({
+      success: true,
+      data: auditLogs.map(log => ({
         id: log.id,
         code: log.code,
         userId: log.user_code,
@@ -150,239 +616,22 @@ async function handleGetAllRBACData() {
         resourceType: log.resource_type,
         resourceId: log.resource_code,
         resourceName: log.resource_name,
-        oldValues: log.old_values,
-        newValues: log.new_values,
+        oldValues: safeJsonParse(log.old_values),
+        newValues: safeJsonParse(log.new_values),
         timestamp: log.timestamp,
         notes: log.notes
       }))
-    }
-  });
-}
-
-// Get users dengan filter search
-async function handleGetUsers(search) {
-  let sql = `
-    SELECT 
-      u.id, u.user_code, u.name, u.email, u.department, u.position, u.status, 
-      u.last_login, u.created_at,
-      GROUP_CONCAT(DISTINCT ur.role_code) as role_codes
-    FROM users u
-    LEFT JOIN user_roles ur ON u.user_code = ur.user_code AND ur.is_deleted = 0
-    WHERE u.is_deleted = 0
-  `;
-  
-  const params = [];
-
-  if (search) {
-    sql += ` AND (u.name LIKE ? OR u.email LIKE ? OR u.department LIKE ?)`;
-    const searchTerm = `%${search}%`;
-    params.push(searchTerm, searchTerm, searchTerm);
-  }
-
-  sql += ` GROUP BY u.id ORDER BY u.created_at DESC`;
-
-  const users = await query(sql, params);
-
-  return Response.json({
-    success: true,
-    data: users.map(user => ({
-      id: user.id,
-      user_code: user.user_code,
-      name: user.name,
-      email: user.email,
-      department: user.department,
-      position: user.position,
-      status: user.status,
-      lastLogin: user.last_login,
-      createdAt: user.created_at,
-      roles: user.role_codes ? user.role_codes.split(',') : []
-    }))
-  });
-}
-
-// Get roles dengan filter search - FIXED: ADDED DISTINCT
-async function handleGetRoles(search) {
-  let sql = `
-    SELECT 
-      r.id, r.role_code, r.name, r.description, r.is_system_role, r.created_at,
-      GROUP_CONCAT(DISTINCT rp.permission_code) as permission_codes,
-      COUNT(DISTINCT ur.user_code) as user_count
-    FROM roles r
-    LEFT JOIN role_permissions rp ON r.role_code = rp.role_code AND rp.is_deleted = 0
-    LEFT JOIN user_roles ur ON r.role_code = ur.role_code AND ur.is_deleted = 0
-    WHERE r.is_deleted = 0
-  `;
-  
-  const params = [];
-
-  if (search) {
-    sql += ` AND (r.name LIKE ? OR r.description LIKE ?)`;
-    const searchTerm = `%${search}%`;
-    params.push(searchTerm, searchTerm);
-  }
-
-  sql += ` GROUP BY r.id ORDER BY r.created_at DESC`;
-
-  const roles = await query(sql, params);
-
-  return Response.json({
-    success: true,
-    data: roles.map(role => ({
-      id: role.id,
-      role_code: role.role_code,
-      name: role.name,
-      description: role.description,
-      isSystemRole: Boolean(role.is_system_role),
-      createdAt: role.created_at,
-      permissions: role.permission_codes ? role.permission_codes.split(',') : [],
-      userCount: parseInt(role.user_count) || 0
-    }))
-  });
-}
-
-// Get permissions dengan filter search
-async function handleGetPermissions(search) {
-  let sql = `
-    SELECT 
-      id,
-      permission_code as code,
-      name,
-      description,
-      category,
-      module,
-      action,
-      created_at
-    FROM permissions 
-    WHERE is_deleted = 0
-  `;
-  
-  const params = [];
-
-  if (search) {
-    sql += ` AND (name LIKE ? OR description LIKE ? OR category LIKE ?)`;
-    const searchTerm = `%${search}%`;
-    params.push(searchTerm, searchTerm, searchTerm);
-  }
-
-  sql += ` ORDER BY category, module, action`;
-
-  const permissions = await query(sql, params);
-
-  // Group by category untuk frontend
-  const permissionsByCategory = permissions.reduce((acc, permission) => {
-    if (!acc[permission.category]) {
-      acc[permission.category] = [];
-    }
-    acc[permission.category].push({
-      id: permission.id,
-      code: permission.code,
-      name: permission.name,
-      description: permission.description,
-      category: permission.category,
-      module: permission.module,
-      action: permission.action,
-      createdAt: permission.created_at
     });
-    return acc;
-  }, {});
-
-  return Response.json({
-    success: true,
-    data: permissionsByCategory,
-    allPermissions: permissions.map(perm => ({
-      id: perm.id,
-      code: perm.code,
-      name: perm.name,
-      description: perm.description,
-      category: perm.category,
-      module: perm.module,
-      action: perm.action,
-      createdAt: perm.created_at
-    }))
-  });
-}
-
-// Get audit logs dengan filter
-async function handleGetAuditLogs(request) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get('action');
-  const resourceType = searchParams.get('resourceType');
-  const dateFrom = searchParams.get('dateFrom');
-  const dateTo = searchParams.get('dateTo');
-  const search = searchParams.get('search') || '';
-
-  let sql = `
-    SELECT 
-      id,
-      audit_code as code,
-      user_code,
-      user_name,
-      action,
-      resource_type,
-      resource_code,
-      resource_name,
-      old_values,
-      new_values,
-      timestamp,
-      notes
-    FROM user_logs 
-    WHERE is_deleted = 0
-    AND resource_type IN ('user', 'role', 'permission', 'user_role', 'role_permission')
-  `;
-  
-  const params = [];
-
-  if (search) {
-    sql += ` AND (user_name LIKE ? OR resource_name LIKE ?)`;
-    const searchTerm = `%${search}%`;
-    params.push(searchTerm, searchTerm);
+  } catch (error) {
+    console.error('Get audit logs error:', error);
+    return Response.json({ error: 'Gagal memuat audit logs' }, { status: 500 });
   }
-
-  if (action && action !== 'all') {
-    sql += ` AND action = ?`;
-    params.push(action);
-  }
-
-  if (resourceType && resourceType !== 'all') {
-    sql += ` AND resource_type = ?`;
-    params.push(resourceType);
-  }
-
-  if (dateFrom) {
-    sql += ` AND DATE(timestamp) >= ?`;
-    params.push(dateFrom);
-  }
-
-  if (dateTo) {
-    sql += ` AND DATE(timestamp) <= ?`;
-    params.push(dateTo);
-  }
-
-  sql += ` ORDER BY timestamp DESC LIMIT 100`;
-
-  const auditLogs = await query(sql, params);
-
-  return Response.json({
-    success: true,
-    data: auditLogs.map(log => ({
-      id: log.id,
-      code: log.code,
-      userId: log.user_code,
-      userName: log.user_name,
-      action: log.action,
-      resourceType: log.resource_type,
-      resourceId: log.resource_code,
-      resourceName: log.resource_name,
-      oldValues: log.old_values,
-      newValues: log.new_values,
-      timestamp: log.timestamp,
-      notes: log.notes
-    }))
-  });
 }
 
 // ==================== POST - Create user/role ====================
 export async function POST(request) {
+  const connection = await pool.getConnection();
+  
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
@@ -397,54 +646,64 @@ export async function POST(request) {
       return Response.json({ error: 'Type dan data harus diisi' }, { status: 400 });
     }
 
+    await connection.beginTransaction();
+
+    let result;
     if (type === 'user') {
-      return await handleCreateUser(data, decoded);
+      result = await handleCreateUser(data, decoded, connection);
     } else if (type === 'role') {
-      return await handleCreateRole(data, decoded);
+      result = await handleCreateRole(data, decoded, connection);
+    } else {
+      throw new Error('Type tidak valid');
     }
 
-    return Response.json({ error: 'Type tidak valid' }, { status: 400 });
+    await connection.commit();
+    return result;
 
   } catch (error) {
+    await connection.rollback();
     console.error('POST RBAC error:', error);
-    return Response.json({ error: 'Gagal membuat data' }, { status: 500 });
+    return Response.json({ 
+      error: error.message || 'Gagal membuat data' 
+    }, { status: 500 });
+  } finally {
+    connection.release();
   }
 }
 
-// Create new user - FIXED with password validation
-async function handleCreateUser(userData, decoded) {
+// Create new user
+async function handleCreateUser(userData, decoded, connection) {
   const { name, email, password, roles, department, position, status = 'active' } = userData;
 
-  // ✅ VALIDASI HARUS ADA
-  if (!name || !email || !password) {
-    return Response.json({ 
-      error: 'Nama, email, dan password harus diisi' 
-    }, { status: 400 });
+  // VALIDASI
+  const validationError = validateUserData(userData, true);
+  if (validationError) {
+    throw new Error(validationError);
   }
 
   // Check if email already exists
-  const existingUser = await query(
+  const [existingUser] = await connection.query(
     'SELECT user_code FROM users WHERE email = ? AND is_deleted = 0',
     [email]
   );
 
   if (existingUser.length > 0) {
-    return Response.json({ error: 'Email sudah terdaftar' }, { status: 400 });
+    throw new Error('Email sudah terdaftar');
   }
 
   // Generate user code
-  const userCount = await query(
+  const [userCount] = await connection.query(
     'SELECT COUNT(*) as count FROM users WHERE YEAR(created_at) = YEAR(CURDATE())'
   );
   const user_code = `USER-${new Date().getFullYear()}-${String(userCount[0].count + 1).padStart(4, '0')}`;
 
-  // Hash password (gunakan bcrypt di production)
+  // Hash password
   const bcrypt = await import('bcrypt');
   const saltRounds = 12;
   const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-  // Create user dengan password
-  await query(
+  // Create user dengan parameter yang BENAR
+  await connection.query(
     `INSERT INTO users 
      (user_code, name, email, password_hash, department, position, status, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -454,18 +713,19 @@ async function handleCreateUser(userData, decoded) {
   // Assign roles
   if (roles && roles.length > 0) {
     for (const role_code of roles) {
-      const rolePermissionCode = `UR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      await query(
+      const userRoleCode = `UR-${Date.now()}-${process.pid}-${Math.random().toString(36).substr(2, 9)}`;
+      await connection.query(
         `INSERT INTO user_roles 
          (user_role_code, user_code, role_code, created_by)
          VALUES (?, ?, ?, ?)`,
-        [rolePermissionCode, user_code, role_code, decoded.user_code]
+        [userRoleCode, user_code, role_code, decoded.user_code]
       );
     }
   }
 
   // Log audit
   await createAuditLog(
+    connection,
     decoded.user_code,
     decoded.name,
     'create',
@@ -473,7 +733,7 @@ async function handleCreateUser(userData, decoded) {
     user_code,
     name,
     null,
-    { name, email, department, position, status, roles },
+    sanitizeForAudit({ name, email, department, position, status, roles }),
     'Created new user account'
   );
 
@@ -484,23 +744,23 @@ async function handleCreateUser(userData, decoded) {
   });
 }
 
-// Create new role - FIXED
-async function handleCreateRole(roleData, decoded) {
+// Create new role
+async function handleCreateRole(roleData, decoded, connection) {
   const { name, description, permissions } = roleData;
 
-  // ✅ VALIDASI
-  if (!name) {
-    return Response.json({ error: 'Nama role harus diisi' }, { status: 400 });
+  // VALIDASI
+  if (!name || name.trim() === '') {
+    throw new Error('Nama role harus diisi');
   }
 
   // Generate role code
-  const roleCount = await query(
+  const [roleCount] = await connection.query(
     'SELECT COUNT(*) as count FROM roles WHERE YEAR(created_at) = YEAR(CURDATE())'
   );
   const role_code = `ROLE-${new Date().getFullYear()}-${String(roleCount[0].count + 1).padStart(4, '0')}`;
 
   // Create role
-  await query(
+  await connection.query(
     `INSERT INTO roles 
      (role_code, name, description, is_system_role, created_by)
      VALUES (?, ?, ?, ?, ?)`,
@@ -510,8 +770,8 @@ async function handleCreateRole(roleData, decoded) {
   // Assign permissions
   if (permissions && permissions.length > 0) {
     for (const permission_code of permissions) {
-      const rolePermissionCode = `RP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      await query(
+      const rolePermissionCode = `RP-${Date.now()}-${process.pid}-${Math.random().toString(36).substr(2, 9)}`;
+      await connection.query(
         `INSERT INTO role_permissions 
          (role_permission_code, role_code, permission_code, created_by)
          VALUES (?, ?, ?, ?)`,
@@ -522,6 +782,7 @@ async function handleCreateRole(roleData, decoded) {
 
   // Log audit
   await createAuditLog(
+    connection,
     decoded.user_code,
     decoded.name,
     'create',
@@ -529,7 +790,7 @@ async function handleCreateRole(roleData, decoded) {
     role_code,
     name,
     null,
-    { name, description, permissions },
+    sanitizeForAudit({ name, description, permissions }),
     'Created new role'
   );
 
@@ -542,6 +803,8 @@ async function handleCreateRole(roleData, decoded) {
 
 // ==================== PATCH - Update user/role ====================
 export async function PATCH(request) {
+  const connection = await pool.getConnection();
+  
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
@@ -556,312 +819,187 @@ export async function PATCH(request) {
       return Response.json({ error: 'Type, id, dan data harus diisi' }, { status: 400 });
     }
 
+    await connection.beginTransaction();
+
+    let result;
     if (type === 'user') {
-      return await handleUpdateUser(id, data, decoded);
+      result = await handleUpdateUser(id, data, decoded, connection);
     } else if (type === 'role') {
-      return await handleUpdateRole(id, data, decoded);
+      result = await handleUpdateRole(id, data, decoded, connection);
+    } else {
+      throw new Error('Type tidak valid');
     }
 
-    return Response.json({ error: 'Type tidak valid' }, { status: 400 });
+    await connection.commit();
+    return result;
 
   } catch (error) {
+    await connection.rollback();
     console.error('PATCH RBAC error:', error);
-    return Response.json({ error: 'Gagal mengupdate data' }, { status: 500 });
+    return Response.json({ 
+      error: error.message || 'Gagal mengupdate data' 
+    }, { status: 500 });
+  } finally {
+    connection.release();
   }
 }
 
-// Update user - FIXED dengan handle duplicate
-async function handleUpdateUser(user_code, userData, decoded) {
-  try {
-    const { name, email, password, roles = [], department, position, status } = userData;
+// Update user
+async function handleUpdateUser(user_code, userData, decoded, connection) {
+  const { name, email, password, roles = [], department, position, status } = userData;
 
-    // ✅ VALIDASI
-    if (!name || !email) {
-      return Response.json({ error: 'Nama dan email harus diisi' }, { status: 400 });
-    }
-
-    // Get old user data untuk audit
-    const oldUser = await query(
-      'SELECT name, email, department, position, status FROM users WHERE user_code = ?',
-      [user_code]
-    );
-
-    if (oldUser.length === 0) {
-      return Response.json({ error: 'User tidak ditemukan' }, { status: 404 });
-    }
-
-    // Prepare update query
-    let updateSql = `UPDATE users 
-       SET name = ?, email = ?, department = ?, position = ?, status = ?,
-           updated_at = NOW(), updated_by = ?`;
-    let params = [name, email, department, position, status, decoded.user_code];
-
-    // Jika ada password baru, update password
-    if (password && password.trim() !== '') {
-      const bcrypt = await import('bcrypt');
-      const saltRounds = 12;
-      const hashedPassword = await bcrypt.hash(password, saltRounds);
-      updateSql = updateSql.replace('SET', 'SET password_hash = ?,');
-      params.splice(2, 0, hashedPassword);
-    }
-
-    updateSql += ` WHERE user_code = ?`;
-    params.push(user_code);
-
-    await query(updateSql, params);
-
-    // Get current roles untuk audit
-    const currentRoles = await query(
-      'SELECT role_code FROM user_roles WHERE user_code = ? AND is_deleted = 0',
-      [user_code]
-    );
-    const oldRoles = currentRoles.map(r => r.role_code);
-
-    // ============================================
-    // FIXED LOGIC: UPDATE ROLES TANPA DUPLICATE ERROR
-    // ============================================
-    
-    // 1. Soft delete roles yang TIDAK ADA di array roles baru
-    if (roles.length > 0) {
-      const placeholders = roles.map(() => '?').join(',');
-      await query(
-        `UPDATE user_roles 
-         SET is_deleted = 1, deleted_at = NOW(), updated_by = ?
-         WHERE user_code = ? 
-         AND is_deleted = 0 
-         AND role_code NOT IN (${placeholders})`,
-        [decoded.user_code, user_code, ...roles]
-      );
-    } else {
-      // Jika roles array kosong, delete semua roles user ini
-      await query(
-        `UPDATE user_roles 
-         SET is_deleted = 1, deleted_at = NOW(), updated_by = ?
-         WHERE user_code = ? AND is_deleted = 0`,
-        [decoded.user_code, user_code]
-      );
-    }
-
-    // 2. Handle roles yang ADA di array roles baru
-    if (roles.length > 0) {
-      // Get ALL roles untuk user ini (termasuk yang deleted)
-      const allExisting = await query(
-        'SELECT role_code FROM user_roles WHERE user_code = ?',
-        [user_code]
-      );
-      const existingRoleCodes = allExisting.map(r => r.role_code);
-      
-      for (const role_code of roles) {
-        const userRoleCode = `UR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        
-        if (existingRoleCodes.includes(role_code)) {
-          // Jika role sudah ada di database (baik aktif atau deleted)
-          // UPDATE untuk mengaktifkan kembali
-          await query(
-            `UPDATE user_roles 
-             SET is_deleted = 0, deleted_at = NULL, updated_at = NOW(), 
-                 updated_by = ?, user_role_code = ?
-             WHERE user_code = ? AND role_code = ?`,
-            [decoded.user_code, userRoleCode, user_code, role_code]
-          );
-        } else {
-          // Jika role benar-benar baru
-          // INSERT baru
-          await query(
-            `INSERT INTO user_roles 
-             (user_role_code, user_code, role_code, created_by)
-             VALUES (?, ?, ?, ?)`,
-            [userRoleCode, user_code, role_code, decoded.user_code]
-          );
-        }
-      }
-    }
-
-    // Log audit
-    await createAuditLog(
-      decoded.user_code,
-      decoded.name,
-      'update',
-      'user',
-      user_code,
-      name,
-      { 
-        ...oldUser[0], 
-        roles: oldRoles 
-      },
-      { 
-        name, 
-        email, 
-        department, 
-        position, 
-        status, 
-        roles 
-      },
-      'Updated user account'
-    );
-
-    return Response.json({
-      success: true,
-      message: 'User berhasil diupdate'
-    });
-
-  } catch (error) {
-    console.error('❌ Update user error:', error);
-    
-    if (error.code === 'ER_DUP_ENTRY') {
-      return Response.json({ 
-        error: 'Kombinasi user dan role sudah ada. Silakan refresh dan coba lagi.' 
-      }, { status: 400 });
-    }
-    
-    return Response.json({ 
-      error: 'Gagal mengupdate user. ' + error.message 
-    }, { status: 500 });
+  // VALIDASI
+  const validationError = validateUserData(userData, false);
+  if (validationError) {
+    throw new Error(validationError);
   }
+
+  // Check if user exists
+  const [oldUser] = await connection.query(
+    `SELECT name, email, department, position, status 
+     FROM users WHERE user_code = ? AND is_deleted = 0`,
+    [user_code]
+  );
+
+  if (oldUser.length === 0) {
+    throw new Error('User tidak ditemukan');
+  }
+
+  // Check email uniqueness (exclude current user)
+  const [existingEmail] = await connection.query(
+    `SELECT user_code FROM users 
+     WHERE email = ? AND user_code != ? AND is_deleted = 0`,
+    [email, user_code]
+  );
+
+  if (existingEmail.length > 0) {
+    throw new Error('Email sudah digunakan oleh user lain');
+  }
+
+  // Get current roles for audit
+  const [currentRoles] = await connection.query(
+    'SELECT role_code FROM user_roles WHERE user_code = ? AND is_deleted = 0',
+    [user_code]
+  );
+  const oldRoles = currentRoles.map(r => r.role_code);
+
+  // Update user - DENGAN PARAMETER YANG BENAR
+  if (password && password.trim() !== '') {
+    // Validate password
+    if (password.length < 6) {
+      throw new Error('Password minimal 6 karakter');
+    }
+    
+    const bcrypt = await import('bcrypt');
+    const saltRounds = 12;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    
+    await connection.query(
+      `UPDATE users 
+       SET name = ?, email = ?, password_hash = ?, department = ?, 
+           position = ?, status = ?, updated_at = NOW(), updated_by = ?
+       WHERE user_code = ?`,
+      [name, email, hashedPassword, department, position, status, decoded.user_code, user_code]
+    );
+  } else {
+    await connection.query(
+      `UPDATE users 
+       SET name = ?, email = ?, department = ?, position = ?, 
+           status = ?, updated_at = NOW(), updated_by = ?
+       WHERE user_code = ?`,
+      [name, email, department, position, status, decoded.user_code, user_code]
+    );
+  }
+
+  // Update roles menggunakan helper function
+  await updateUserRoles(connection, user_code, roles, decoded);
+
+  // Log audit
+  await createAuditLog(
+    connection,
+    decoded.user_code,
+    decoded.name,
+    'update',
+    'user',
+    user_code,
+    name,
+    sanitizeForAudit({ ...oldUser[0], roles: oldRoles }),
+    sanitizeForAudit({ name, email, department, position, status, roles }),
+    'Updated user account'
+  );
+
+  return Response.json({
+    success: true,
+    message: 'User berhasil diupdate'
+  });
 }
 
-// Update role - FIXED VERSION dengan handle duplicate entry
-async function handleUpdateRole(role_code, roleData, decoded) {
-  try {
-    const { name, description, permissions = [] } = roleData;
+// Update role
+async function handleUpdateRole(role_code, roleData, decoded, connection) {
+  const { name, description, permissions = [] } = roleData;
 
-    // ✅ VALIDASI
-    if (!name) {
-      return Response.json({ error: 'Nama role harus diisi' }, { status: 400 });
-    }
-
-    // Get old role data untuk audit
-    const oldRole = await query(
-      'SELECT name, description FROM roles WHERE role_code = ?',
-      [role_code]
-    );
-
-    if (oldRole.length === 0) {
-      return Response.json({ error: 'Role tidak ditemukan' }, { status: 404 });
-    }
-
-    // Update role
-    await query(
-      `UPDATE roles 
-       SET name = ?, description = ?, updated_at = NOW(), updated_by = ?
-       WHERE role_code = ?`,
-      [name, description, decoded.user_code, role_code]
-    );
-
-    // Get current permissions untuk audit
-    const currentPermissions = await query(
-      'SELECT permission_code FROM role_permissions WHERE role_code = ? AND is_deleted = 0',
-      [role_code]
-    );
-    const oldPermissions = currentPermissions.map(p => p.permission_code);
-
-    // ====================================================
-    // FIXED LOGIC: UPDATE PERMISSIONS TANPA DUPLICATE ERROR
-    // ====================================================
-    
-    // 1. Soft delete permissions yang TIDAK ADA di array permissions baru
-    if (permissions.length > 0) {
-      // Buat placeholders untuk query IN clause
-      const placeholders = permissions.map(() => '?').join(',');
-      
-      await query(
-        `UPDATE role_permissions 
-         SET is_deleted = 1, deleted_at = NOW(), updated_by = ?
-         WHERE role_code = ? 
-         AND is_deleted = 0 
-         AND permission_code NOT IN (${placeholders})`,
-        [decoded.user_code, role_code, ...permissions]
-      );
-    } else {
-      // Jika permissions array kosong, delete semua permissions role ini
-      await query(
-        `UPDATE role_permissions 
-         SET is_deleted = 1, deleted_at = NOW(), updated_by = ?
-         WHERE role_code = ? AND is_deleted = 0`,
-        [decoded.user_code, role_code]
-      );
-    }
-
-    // 2. Handle permissions yang ADA di array permissions baru
-    if (permissions.length > 0) {
-      // Get ALL permissions untuk role ini (termasuk yang deleted)
-      const allExisting = await query(
-        'SELECT permission_code FROM role_permissions WHERE role_code = ?',
-        [role_code]
-      );
-      const existingPermCodes = allExisting.map(p => p.permission_code);
-      
-      for (const permission_code of permissions) {
-        // Generate unique role_permission_code
-        const rolePermissionCode = `RP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        
-        if (existingPermCodes.includes(permission_code)) {
-          // Jika permission sudah ada di database (baik aktif atau deleted)
-          // UPDATE untuk mengaktifkan kembali
-          await query(
-            `UPDATE role_permissions 
-             SET is_deleted = 0, deleted_at = NULL, updated_at = NOW(), 
-                 updated_by = ?, role_permission_code = ?
-             WHERE role_code = ? AND permission_code = ?`,
-            [decoded.user_code, rolePermissionCode, role_code, permission_code]
-          );
-        } else {
-          // Jika permission benar-benar baru
-          // INSERT baru
-          await query(
-            `INSERT INTO role_permissions 
-             (role_permission_code, role_code, permission_code, created_by)
-             VALUES (?, ?, ?, ?)`,
-            [rolePermissionCode, role_code, permission_code, decoded.user_code]
-          );
-        }
-      }
-    }
-
-    // 3. Log audit
-    await createAuditLog(
-      decoded.user_code,
-      decoded.name,
-      'update',
-      'role',
-      role_code,
-      name,
-      { 
-        name: oldRole[0].name, 
-        description: oldRole[0].description, 
-        permissions: oldPermissions 
-      },
-      { 
-        name, 
-        description, 
-        permissions 
-      },
-      'Updated role and permissions'
-    );
-
-    return Response.json({
-      success: true,
-      message: 'Role berhasil diupdate'
-    });
-
-  } catch (error) {
-    console.error('❌ Update role error:', error);
-    
-    // Return error message yang lebih spesifik
-    if (error.code === 'ER_DUP_ENTRY') {
-      return Response.json({ 
-        error: 'Terjadi duplikasi data. Silakan coba lagi atau hubungi administrator.' 
-      }, { status: 400 });
-    }
-    
-    return Response.json({ 
-      error: 'Gagal mengupdate role. ' + error.message 
-    }, { status: 500 });
+  // VALIDASI
+  if (!name || name.trim() === '') {
+    throw new Error('Nama role harus diisi');
   }
+
+  // Check if role exists
+  const [oldRole] = await connection.query(
+    `SELECT name, description, is_system_role 
+     FROM roles WHERE role_code = ? AND is_deleted = 0`,
+    [role_code]
+  );
+
+  if (oldRole.length === 0) {
+    throw new Error('Role tidak ditemukan');
+  }
+
+  if (oldRole[0].is_system_role) {
+    throw new Error('System role tidak dapat diupdate');
+  }
+
+  // Get current permissions for audit
+  const [currentPermissions] = await connection.query(
+    'SELECT permission_code FROM role_permissions WHERE role_code = ? AND is_deleted = 0',
+    [role_code]
+  );
+  const oldPermissions = currentPermissions.map(p => p.permission_code);
+
+  // Update role
+  await connection.query(
+    `UPDATE roles 
+     SET name = ?, description = ?, updated_at = NOW(), updated_by = ?
+     WHERE role_code = ?`,
+    [name, description, decoded.user_code, role_code]
+  );
+
+  // Update permissions menggunakan helper function
+  await updateRolePermissions(connection, role_code, permissions, decoded);
+
+  // Log audit
+  await createAuditLog(
+    connection,
+    decoded.user_code,
+    decoded.name,
+    'update',
+    'role',
+    role_code,
+    name,
+    sanitizeForAudit({ ...oldRole[0], permissions: oldPermissions }),
+    sanitizeForAudit({ name, description, permissions }),
+    'Updated role and permissions'
+  );
+
+  return Response.json({
+    success: true,
+    message: 'Role berhasil diupdate'
+  });
 }
 
 // ==================== DELETE - Soft delete user/role ====================
 export async function DELETE(request) {
+  const connection = await pool.getConnection();
+  
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
@@ -876,53 +1014,86 @@ export async function DELETE(request) {
       return Response.json({ error: 'Type dan id harus diisi' }, { status: 400 });
     }
 
+    await connection.beginTransaction();
+
+    let result;
     if (type === 'user') {
-      return await handleDeleteUser(id, decoded);
+      result = await handleDeleteUser(id, decoded, connection);
     } else if (type === 'role') {
-      return await handleDeleteRole(id, decoded);
+      result = await handleDeleteRole(id, decoded, connection);
+    } else {
+      throw new Error('Type tidak valid');
     }
 
-    return Response.json({ error: 'Type tidak valid' }, { status: 400 });
+    await connection.commit();
+    return result;
 
   } catch (error) {
+    await connection.rollback();
     console.error('DELETE RBAC error:', error);
-    return Response.json({ error: 'Gagal menghapus data' }, { status: 500 });
+    return Response.json({ 
+      error: error.message || 'Gagal menghapus data' 
+    }, { status: 500 });
+  } finally {
+    connection.release();
   }
 }
 
-// Soft delete user - FIXED
-async function handleDeleteUser(user_code, decoded) {
+// Soft delete user
+async function handleDeleteUser(user_code, decoded, connection) {
   // Check if user exists
-  const user = await query(
-    'SELECT name, is_system_role FROM users WHERE user_code = ? AND is_deleted = 0',
+  const [user] = await connection.query(
+    `SELECT name, email 
+     FROM users WHERE user_code = ? AND is_deleted = 0`,
     [user_code]
   );
 
   if (user.length === 0) {
-    return Response.json({ error: 'User tidak ditemukan' }, { status: 404 });
+    throw new Error('User tidak ditemukan');
   }
 
-  // Soft delete user
-  await query(
-    'UPDATE users SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? WHERE user_code = ?',
-    [decoded.user_code, user_code]
+  // Check if user has system roles
+  const [systemRoles] = await connection.query(`
+    SELECT r.name 
+    FROM user_roles ur
+    JOIN roles r ON ur.role_code = r.role_code
+    WHERE ur.user_code = ? 
+      AND ur.is_deleted = 0
+      AND r.is_system_role = 1
+  `, [user_code]);
+
+  if (systemRoles.length > 0) {
+    const roleNames = systemRoles.map(r => r.name).join(', ');
+    throw new Error(`User memiliki system role (${roleNames}) dan tidak dapat dihapus`);
+  }
+
+  // Soft delete user dengan updated_by dan deleted_by
+  await connection.query(
+    `UPDATE users 
+     SET is_deleted = 1, deleted_at = NOW(), 
+         updated_at = NOW(), updated_by = ?, deleted_by = ?
+     WHERE user_code = ?`,
+    [decoded.user_code, decoded.user_code, user_code]
   );
 
-  // Soft delete user roles
-  await query(
-    'UPDATE user_roles SET is_deleted = 1, deleted_at = NOW() WHERE user_code = ?',
-    [user_code]
+  // Soft delete user roles dengan deleted_by
+  await connection.query(
+    `UPDATE user_roles 
+     SET is_deleted = 1, deleted_at = NOW(), deleted_by = ?
+     WHERE user_code = ?`,
+    [decoded.user_code, user_code]
   );
 
   // Log audit
   await createAuditLog(
+    connection,
     decoded.user_code,
     decoded.name,
     'delete',
     'user',
     user_code,
     user[0].name,
-    null,
+    sanitizeForAudit({ email: user[0].email }),
     null,
     'Deleted user account'
   );
@@ -933,42 +1104,51 @@ async function handleDeleteUser(user_code, decoded) {
   });
 }
 
-// Soft delete role - FIXED
-async function handleDeleteRole(role_code, decoded) {
-  // Check if role exists and is not system role
-  const role = await query(
-    'SELECT name, is_system_role FROM roles WHERE role_code = ? AND is_deleted = 0',
+// Soft delete role
+async function handleDeleteRole(role_code, decoded, connection) {
+  // Check if role exists
+  const [role] = await connection.query(
+    `SELECT name, is_system_role 
+     FROM roles WHERE role_code = ? AND is_deleted = 0`,
     [role_code]
   );
 
   if (role.length === 0) {
-    return Response.json({ error: 'Role tidak ditemukan' }, { status: 404 });
+    throw new Error('Role tidak ditemukan');
   }
 
   if (role[0].is_system_role) {
-    return Response.json({ error: 'System role tidak dapat dihapus' }, { status: 400 });
+    throw new Error('System role tidak dapat dihapus');
   }
 
   // Soft delete role
-  await query(
-    'UPDATE roles SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? WHERE role_code = ?',
-    [decoded.user_code, role_code]
+  await connection.query(
+    `UPDATE roles 
+     SET is_deleted = 1, deleted_at = NOW(), 
+         updated_at = NOW(), updated_by = ?, deleted_by = ?
+     WHERE role_code = ?`,
+    [decoded.user_code, decoded.user_code, role_code]
   );
 
   // Soft delete role permissions
-  await query(
-    'UPDATE role_permissions SET is_deleted = 1, deleted_at = NOW() WHERE role_code = ?',
-    [role_code]
+  await connection.query(
+    `UPDATE role_permissions 
+     SET is_deleted = 1, deleted_at = NOW(), deleted_by = ?
+     WHERE role_code = ?`,
+    [decoded.user_code, role_code]
   );
 
   // Soft delete user roles
-  await query(
-    'UPDATE user_roles SET is_deleted = 1, deleted_at = NOW() WHERE role_code = ?',
-    [role_code]
+  await connection.query(
+    `UPDATE user_roles 
+     SET is_deleted = 1, deleted_at = NOW(), deleted_by = ?
+     WHERE role_code = ?`,
+    [decoded.user_code, role_code]
   );
 
   // Log audit
   await createAuditLog(
+    connection,
     decoded.user_code,
     decoded.name,
     'delete',
@@ -984,27 +1164,4 @@ async function handleDeleteRole(role_code, decoded) {
     success: true,
     message: 'Role berhasil dihapus'
   });
-}
-
-// ==================== HELPER FUNCTIONS ====================
-async function createAuditLog(user_code, user_name, action, resource_type, resource_id, resource_name, old_values, new_values, notes) {
-  const audit_code = `AUDIT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  
-  await query(
-    `INSERT INTO user_logs 
-     (audit_code, user_code, user_name, action, resource_type, resource_code, resource_name, old_values, new_values, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      audit_code,
-      user_code,
-      user_name,
-      action,
-      resource_type,
-      resource_id,
-      resource_name,
-      old_values ? JSON.stringify(old_values) : null,
-      new_values ? JSON.stringify(new_values) : null,
-      notes
-    ]
-  );
 }
